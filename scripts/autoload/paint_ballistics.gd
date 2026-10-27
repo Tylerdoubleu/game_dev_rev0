@@ -1,7 +1,9 @@
 extends Node
 
-## Pooled 3D paintball simulation with gravity, drag, bounce-vs-break angle checks, and splat markers.
-## TODO(PB-02 / Issue #2): Add Magnus backspin lift, crosswind vector drift, and projected Decal splat normal maps.
+## Pooled 3D paintball simulation with gravity, drag, bounce-vs-break angle checks,
+## glossy oily paint splat decals (roughness ~ 0.12 + clearcoat), and airborne paint mist bursts.
+
+const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 
 const GRAVITY: float = 9.81
 const AIR_DRAG: float = 0.24
@@ -12,24 +14,19 @@ const BOUNCE_ANGLE_COS_THRESHOLD: float = 0.42
 
 var projectiles: Array[Dictionary] = []
 var splat_nodes: Array[Node3D] = []
+var mist_burst_count: int = 0
 var _ball_mesh: SphereMesh
 var _ball_material: StandardMaterial3D
-var _splat_mesh: CylinderMesh
+var _splat_mesh: QuadMesh
 
 func _ready() -> void:
 	_ball_mesh = SphereMesh.new()
 	_ball_mesh.radius = 0.04
 	_ball_mesh.height = 0.08
-	_ball_material = StandardMaterial3D.new()
-	_ball_material.albedo_color = Color(1.0, 0.45, 0.05)
-	_ball_material.emission_enabled = true
-	_ball_material.emission = Color(1.0, 0.35, 0.0)
-	_ball_material.emission_energy_multiplier = 0.8
+	_ball_material = GrittyArtThemeScript.create_oily_paint_material(GrittyArtThemeScript.NEON_YELLOW_PAINT, false)
 
-	_splat_mesh = CylinderMesh.new()
-	_splat_mesh.top_radius = 0.16
-	_splat_mesh.bottom_radius = 0.16
-	_splat_mesh.height = 0.008
+	_splat_mesh = QuadMesh.new()
+	_splat_mesh.size = Vector2(0.42, 0.42)
 
 func clear_all() -> void:
 	for p in projectiles:
@@ -40,8 +37,9 @@ func clear_all() -> void:
 		if is_instance_valid(s):
 			s.queue_free()
 	splat_nodes.clear()
+	mist_burst_count = 0
 
-func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shooter: Node, color: Color = Color(1.0, 0.45, 0.05)) -> void:
+func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shooter: Node, color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT) -> void:
 	var scene_root: Node = get_tree().current_scene
 	if scene_root == null:
 		return
@@ -53,9 +51,7 @@ func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shoo
 
 	var mesh_inst := MeshInstance3D.new()
 	mesh_inst.mesh = _ball_mesh
-	var mat := _ball_material.duplicate() as StandardMaterial3D
-	mat.albedo_color = color
-	mat.emission = color
+	var mat := GrittyArtThemeScript.create_oily_paint_material(color, false)
 	mesh_inst.material_override = mat
 	scene_root.add_child(mesh_inst)
 	mesh_inst.global_position = origin
@@ -138,18 +134,19 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color) -> void:
 			old_splat.queue_free()
 
 	var splat := MeshInstance3D.new()
+	splat.name = "OilyPaintSplatDecal"
 	splat.mesh = _splat_mesh
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.3
-	splat.material_override = mat
+	splat.material_override = GrittyArtThemeScript.create_oily_paint_material(color, true)
 	scene_root.add_child(splat)
-	splat.global_position = pos + normal * 0.01
+	splat.global_position = pos + normal * 0.015
 
 	var up := Vector3.UP
 	if abs(normal.dot(up)) > 0.98:
 		up = Vector3.RIGHT
-	var basis_z := normal.cross(up).normalized()
-	var basis_x := basis_z.cross(normal).normalized()
-	splat.global_transform.basis = Basis(basis_x, normal, basis_z)
+	var basis_x := up.cross(normal).normalized()
+	var basis_y := normal.cross(basis_x).normalized()
+	splat.global_transform.basis = Basis(basis_x, basis_y, normal)
 	splat_nodes.append(splat)
+
+	GrittyArtThemeScript.spawn_paint_mist_burst(scene_root, pos, normal, color)
+	mist_burst_count += 1

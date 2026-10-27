@@ -1,8 +1,11 @@
 extends Node3D
 
-## Full-scale 3x Speedball Arena (108m x 132m) for v0.1.1-playtest.
-## Features dense symmetrical bunkers (Home/Back, Cakes, Cans, Temples, Dorito Highway, Center 50 W-Wall,
-## and an authentic multi-knuckle Snake with cross-blockers on the far-left 50s) plus 5 OpFor bots.
+## Full-scale 3x Speedball Arena (108m x 132m) for v0.2 Gritty 2000s Tournament Art Overhaul.
+## Features overcast stadium lighting, floodlight towers, perimeter black safety netting,
+## tournament scoreboard backdrop, muddy turf with slick puddles, scuffed vinyl inflatable bunkers,
+## stacked wooden cable spools, and 5 OpFor bots.
+
+const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -23,22 +26,19 @@ func _ready() -> void:
 
 func _build_environment_and_turf() -> void:
 	var env_node := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(0.52, 0.73, 0.92)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.75, 0.82, 0.9)
-	env.ambient_light_energy = 0.65
-	env_node.environment = env
+	env_node.name = "WorldEnvironment"
+	env_node.environment = GrittyArtThemeScript.create_overcast_stadium_environment()
 	add_child(env_node)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52.0, -35.0, 0.0)
+	sun.name = "OvercastStadiumSun"
+	sun.rotation_degrees = Vector3(-54.0, -32.0, 0.0)
 	sun.shadow_enabled = true
-	sun.light_energy = 1.25
+	sun.light_color = Color(0.84, 0.87, 0.92)
+	sun.light_energy = 0.92
 	add_child(sun)
 
-	# 3x Turf Floor (108m wide x 132m long)
+	# 3x Turf Floor (108m wide x 132m long) with worn muddy turf & normal/roughness maps
 	var floor_body := StaticBody3D.new()
 	floor_body.name = "TurfFloor"
 	var fcol := CollisionShape3D.new()
@@ -49,33 +49,36 @@ func _build_environment_and_turf() -> void:
 	floor_body.add_child(fcol)
 
 	var fmesh := MeshInstance3D.new()
+	fmesh.name = "TurfFloorMesh"
 	var fbm := BoxMesh.new()
 	fbm.size = Vector3(108.0, 0.4, 132.0)
 	fmesh.mesh = fbm
 	fmesh.position = Vector3(0, -0.2, 0)
-	var turf_mat := StandardMaterial3D.new()
-	turf_mat.albedo_color = Color(0.14, 0.46, 0.22)
-	turf_mat.roughness = 0.85
-	fmesh.material_override = turf_mat
+	fmesh.material_override = GrittyArtThemeScript.create_muddy_turf_material()
 	floor_body.add_child(fmesh)
 	add_child(floor_body)
 
-	# 50-yard center line stripe on turf
+	# Mud-stained 50-yard center line stripe on turf
 	var line_mesh := MeshInstance3D.new()
+	line_mesh.name = "Center50Line"
 	var lbm := BoxMesh.new()
-	lbm.size = Vector3(106.0, 0.02, 0.35)
+	lbm.size = Vector3(88.0, 0.015, 0.32)
 	line_mesh.mesh = lbm
-	line_mesh.position = Vector3(0, 0.01, 0)
+	line_mesh.position = Vector3(0, 0.006, 0)
 	var line_mat := StandardMaterial3D.new()
-	line_mat.albedo_color = Color(0.95, 0.95, 0.95)
+	line_mat.albedo_color = Color(0.62, 0.60, 0.54)
+	line_mat.roughness = 0.88
 	line_mesh.material_override = line_mat
 	add_child(line_mesh)
 
+	# Stadium floodlight towers, perimeter safety netting, scoreboards, puddles, and wooden cable spools
+	GrittyArtThemeScript.build_stadium_props(self)
+
 func _build_speedball_bunkers() -> void:
-	var blue_vinyl := Color(0.12, 0.38, 0.82)
-	var yellow_vinyl := Color(0.92, 0.76, 0.12)
-	var red_vinyl := Color(0.86, 0.22, 0.18)
-	var dark_vinyl := Color(0.18, 0.2, 0.25)
+	var blue_vinyl := Color(0.22, 0.36, 0.64)
+	var yellow_vinyl := Color(0.84, 0.70, 0.16)
+	var red_vinyl := Color(0.72, 0.22, 0.20)
+	var dark_vinyl := Color(0.42, 0.43, 0.45)
 
 	# --- 1. CENTER 50-YARD LINE CLUSTER ---
 	_spawn_bunker("Bunker_Center50_W", Vector3(0.0, 0.0, 0.0), Vector3(4.5, 2.4, 1.8), yellow_vinyl)
@@ -86,12 +89,17 @@ func _build_speedball_bunkers() -> void:
 
 	# --- 2. SYMMETRICAL HALF-FIELD BUNKERS (Mirrored for Player +Z and OpFor -Z) ---
 	for side in [-1.0, 1.0]:
-		var team_color: Color = blue_vinyl if side > 0.0 else dark_vinyl
+		var team_color: Color = dark_vinyl if side > 0.0 else blue_vinyl
 		var prefix: String = "Home_" if side > 0.0 else "OpFor_"
 
 		# Breakout Start Gate & Back Center (Home Stone)
 		_spawn_bunker(prefix + "BreakoutGate", Vector3(0.0, 0.0, 48.0 * side), Vector3(3.6, 2.3, 1.2), team_color)
 		_spawn_bunker(prefix + "BackCenter", Vector3(0.0, 0.0, 38.0 * side), Vector3(3.2, 2.2, 1.4), team_color)
+
+		# Near-Breakout Tournament Cans & Horizontal Bolster (gives classic 2000s tournament density)
+		_spawn_bunker(prefix + "BreakoutCan_L", Vector3(-2.6, 0.0, 41.8 * side), Vector3(1.5, 2.2, 1.5), dark_vinyl)
+		_spawn_bunker(prefix + "BreakoutCan_R", Vector3(-1.8, 0.0, 36.2 * side), Vector3(1.5, 2.1, 1.5), dark_vinyl)
+		_spawn_bunker(prefix + "BreakoutBolster", Vector3(-0.3, 0.0, 35.0 * side), Vector3(1.0, 1.0, 3.4), dark_vinyl)
 
 		# Mid-Back Bricks & Cakes (Z = 28m)
 		_spawn_bunker(prefix + "BackBrick_L", Vector3(-11.0, 0.0, 29.0 * side), Vector3(2.6, 2.0, 1.6), team_color)
@@ -125,7 +133,6 @@ func _build_speedball_bunkers() -> void:
 	_spawn_bunker("Bunker_50_GiantDorito", Vector3(38.0, 0.0, 0.0), Vector3(3.0, 2.4, 3.0), yellow_vinyl)
 
 	# --- 5. ACTUAL MULTI-KNUCKLE SNAKE ON THE FAR LEFT EDGE 50s (X = -34m to -39m, Z = -20m to +20m) ---
-	# Low 0.90m crawl beams + upright knuckle blockers at S1, S2, S50, OpFor S2, OpFor S1 for prone/dive/crouch play!
 	_spawn_bunker("Snake_Beam_Home1", Vector3(-35.0, 0.0, 15.0), Vector3(1.1, 0.92, 9.5), red_vinyl)
 	_spawn_bunker("Snake_Beam_Home2", Vector3(-37.2, 0.0, 5.5), Vector3(1.1, 0.92, 9.5), yellow_vinyl)
 	_spawn_bunker("Snake_Beam_OpFor2", Vector3(-37.2, 0.0, -5.5), Vector3(1.1, 0.92, 9.5), yellow_vinyl)
@@ -150,13 +157,11 @@ func _spawn_bunker(bunker_name: String, pos: Vector3, size: Vector3, color: Colo
 	body.add_child(col)
 
 	var mesh := MeshInstance3D.new()
+	mesh.name = "BunkerMesh"
 	var bm := BoxMesh.new()
 	bm.size = size
 	mesh.mesh = bm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.35
-	mesh.material_override = mat
+	GrittyArtThemeScript.decorate_bunker_mesh(body, mesh, size, color)
 	body.add_child(mesh)
 	add_child(body)
 
