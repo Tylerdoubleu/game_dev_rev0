@@ -21,6 +21,36 @@ var match_ended: bool = false
 
 func _ready() -> void:
 	_setup_input_map()
+	_setup_browser_close_and_hotkey_guard()
+
+func _setup_browser_close_and_hotkey_guard() -> void:
+	# Prevent accidental window/tab closure or OS/browser hotkey interruptions during Ctrl/Alt + WASD diving/sliding
+	get_tree().set_auto_accept_quit(false)
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("""
+		(function() {
+			if (window.__pb_hotkey_guard_installed) return;
+			window.__pb_hotkey_guard_installed = true;
+			window.addEventListener('beforeunload', function(e) {
+				e.preventDefault();
+				e.returnValue = '';
+				return '';
+			});
+			window.addEventListener('keydown', function(e) {
+				var k = (e.key || '').toLowerCase();
+				if ((e.ctrlKey || e.altKey || e.metaKey) && (k === 'w' || k === 'q' || k === 'r' || k === 's' || k === 'a' || k === 'd' || k === 'c' || k === 'f4')) {
+					e.preventDefault();
+				}
+			}, { capture: true, passive: false });
+		})();
+		""")
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		# Ignore accidental Alt+F4 / Ctrl+W close requests while actively holding movement/dive keys in-match
+		if Input.is_action_pressed("move_forward") or Input.is_action_pressed("prone_dive") or Input.is_action_pressed("crouch_slide") or Input.is_action_pressed("sprint"):
+			return
+		get_tree().quit()
 
 func _process(delta: float) -> void:
 	if round_active and not match_ended:
@@ -99,6 +129,8 @@ func _setup_input_map() -> void:
 	_bind_key("sprint", KEY_SHIFT)
 	_bind_key("crouch_slide", KEY_C)
 	_bind_key("prone_dive", KEY_CTRL)
+	_bind_key("prone_dive", KEY_ALT)
+	_bind_key("prone_dive", KEY_Z)
 	_bind_key("lean_left", KEY_Q)
 	_bind_key("lean_right", KEY_E)
 	_bind_key("swap_shoulder", KEY_X)
