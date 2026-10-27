@@ -1,6 +1,6 @@
 extends Node
 
-## Enforces map-locked horizontal gear brackets (Speedball, Woodsball, Pump) with scarce paint counts.
+## Enforces map-locked horizontal gear brackets (Speedball, Woodsball, Pump) with scarce paint counts (PB-07).
 ## TODO(PB-06 / Issue #6): Load bracket definitions from .tres files in res://data/brackets/ and validate custom player loadouts.
 
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
@@ -20,9 +20,9 @@ func _init_default_brackets() -> void:
 	speedball.display_name = "Tournament Speedball (Dual-Trigger Walk, 10.5 BPS Cap)"
 	speedball.trigger_mode = GearBracketDataScript.TriggerMode.RAMP_10_5
 	speedball.max_bps = 10.5
-	speedball.hopper_capacity = 40
-	speedball.pod_count = 3
-	speedball.pod_capacity = 30
+	speedball.hopper_capacity = 50
+	speedball.pod_count = 2
+	speedball.pod_capacity = 50
 	speedball.muzzle_fps = 290.0
 	brackets["speedball"] = speedball
 
@@ -31,9 +31,9 @@ func _init_default_brackets() -> void:
 	woodsball.display_name = "Tactical Woodsball (1-Pull: Hold LMB+RMB Together)"
 	woodsball.trigger_mode = GearBracketDataScript.TriggerMode.SEMI_ONE_PULL
 	woodsball.max_bps = 6.5
-	woodsball.hopper_capacity = 25
-	woodsball.pod_count = 3
-	woodsball.pod_capacity = 20
+	woodsball.hopper_capacity = 30
+	woodsball.pod_count = 2
+	woodsball.pod_capacity = 30
 	woodsball.muzzle_fps = 285.0
 	brackets["woodsball"] = woodsball
 
@@ -43,7 +43,7 @@ func _init_default_brackets() -> void:
 	pump.trigger_mode = GearBracketDataScript.TriggerMode.PUMP_MANUAL
 	pump.max_bps = 2.5
 	pump.hopper_capacity = 10
-	pump.pod_count = 4
+	pump.pod_count = 3
 	pump.pod_capacity = 10
 	pump.muzzle_fps = 280.0
 	brackets["pump"] = pump

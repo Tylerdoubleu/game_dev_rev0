@@ -481,6 +481,7 @@ func _update_pod_reload(delta: float) -> void:
 		var overfill_spilled: int = max(0, int(bracket.pod_capacity) - added)
 		hopper_paint += added
 		if overfill_spilled > 0:
+			_spawn_spilled_paint_burst(overfill_spilled)
 			status_banner_sent.emit("Pod loaded (+%d paint, %d spilled from overfilling early!)" % [added, overfill_spilled], Color(1.0, 0.78, 0.25))
 		else:
 			status_banner_sent.emit("Clean pod reload! (+%d paint)" % added, Color(0.35, 1.0, 0.45))
@@ -489,8 +490,18 @@ func _update_pod_reload(delta: float) -> void:
 func _spill_active_pod(reason: String) -> void:
 	is_reloading_pod = false
 	reload_timer = 0.0
+	_spawn_spilled_paint_burst(16)
 	status_banner_sent.emit(reason, Color(1.0, 0.28, 0.28))
 	_emit_hud()
+
+func _spawn_spilled_paint_burst(count: int) -> void:
+	var forward_dir := -camera.global_transform.basis.z.normalized()
+	var origin := marker_rig.global_position + Vector3(0, 0.1, 0)
+	for i in range(min(count, 18)):
+		var scatter := Vector3(randf_range(-0.65, 0.65), randf_range(-0.2, 0.35), randf_range(-0.65, 0.65))
+		var dir := (forward_dir * 0.4 + scatter).normalized()
+		PaintBallistics.spawn_paintball(origin, dir, 32.0, self, Color(1.0, 0.72, 0.1))
+
 
 func _ping_crosshair_target() -> void:
 	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
