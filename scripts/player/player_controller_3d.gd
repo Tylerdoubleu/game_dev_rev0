@@ -1,6 +1,6 @@
 extends CharacterBody3D
 
-## First-person paintball player controller for v0.1.
+## First-person paintball player controller for v0.2 (Gritty 2000s Tournament Art Overhaul).
 ## Features:
 ## - Speedball: Separate LMB & RMB triggers (walk the trigger!) capped at 10.5 BPS total
 ## - Woodsball (1-Pull): Enforce holding BOTH LMB + RMB together to pull the heavy mechanical trigger
@@ -8,8 +8,10 @@ extends CharacterBody3D
 ## - Stances (Hold-only): Hold C for Crouch, Shift+C for Knee-Slide (stays crouched after slide only if C is held);
 ##   Hold Ctrl for Prone, Shift+Ctrl for Superman Dive (stays prone after dive only if Ctrl is held).
 ## - Head/marker bobbing when moving + 3D Pod pour animation on reload (R)
+## - Weathered 2000s tournament marker viewmodel with air pressure gauge, tactical glove & paint smears
 
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
+const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
@@ -70,6 +72,7 @@ var reload_duration: float = 2.1
 var pump_racked: bool = true
 var woodsball_trigger_latched: bool = false
 var time_since_last_shot: float = 99.0
+var _shot_counter: int = 0
 
 func _ready() -> void:
 	_build_player_nodes()
@@ -104,38 +107,32 @@ func _build_player_nodes() -> void:
 	camera.add_child(marker_rig)
 
 	var body_mesh := MeshInstance3D.new()
+	body_mesh.name = "MarkerBodyMesh"
 	var box := BoxMesh.new()
 	box.size = Vector3(0.06, 0.11, 0.50)
 	body_mesh.mesh = box
-	var marker_mat := StandardMaterial3D.new()
-	marker_mat.albedo_color = Color(0.15, 0.55, 0.95)
-	marker_mat.metallic = 0.65
-	marker_mat.roughness = 0.25
-	body_mesh.material_override = marker_mat
 	marker_rig.add_child(body_mesh)
 
 	hopper_mesh = MeshInstance3D.new()
+	hopper_mesh.name = "HopperMesh"
 	var h_sphere := SphereMesh.new()
 	h_sphere.radius = 0.085
 	h_sphere.height = 0.14
 	hopper_mesh.mesh = h_sphere
 	hopper_mesh.position = Vector3(0.0, 0.11, 0.04)
-	var hopper_mat := StandardMaterial3D.new()
-	hopper_mat.albedo_color = Color(0.12, 0.12, 0.14)
-	hopper_mesh.material_override = hopper_mat
 	marker_rig.add_child(hopper_mesh)
 
 	hopper_lid_mesh = MeshInstance3D.new()
+	hopper_lid_mesh.name = "HopperLidMesh"
 	var lid_cyl := CylinderMesh.new()
 	lid_cyl.top_radius = 0.045
 	lid_cyl.bottom_radius = 0.045
 	lid_cyl.height = 0.012
 	hopper_lid_mesh.mesh = lid_cyl
 	hopper_lid_mesh.position = Vector3(0.0, 0.175, 0.04)
-	var lid_mat := StandardMaterial3D.new()
-	lid_mat.albedo_color = Color(0.2, 0.8, 1.0, 0.85)
-	hopper_lid_mesh.material_override = lid_mat
 	marker_rig.add_child(hopper_lid_mesh)
+
+	GrittyArtThemeScript.upgrade_first_person_marker(marker_rig, body_mesh, hopper_mesh, hopper_lid_mesh)
 
 	pod_rig = Node3D.new()
 	pod_rig.name = "PodReloadRig"
@@ -150,8 +147,8 @@ func _build_player_nodes() -> void:
 	pod_cyl.height = 0.24
 	pod_body.mesh = pod_cyl
 	var pod_mat := StandardMaterial3D.new()
-	pod_mat.albedo_color = Color(0.92, 0.95, 0.98)
-	pod_mat.roughness = 0.25
+	pod_mat.albedo_color = Color(0.82, 0.85, 0.88, 0.88)
+	pod_mat.roughness = 0.22
 	pod_body.material_override = pod_mat
 	pod_rig.add_child(pod_body)
 
@@ -162,12 +159,7 @@ func _build_player_nodes() -> void:
 	stream_cyl.height = 0.16
 	pod_stream_mesh.mesh = stream_cyl
 	pod_stream_mesh.position = Vector3(0.0, -0.16, 0.0)
-	var stream_mat := StandardMaterial3D.new()
-	stream_mat.albedo_color = Color(1.0, 0.5, 0.05)
-	stream_mat.emission_enabled = true
-	stream_mat.emission = Color(1.0, 0.4, 0.0)
-	stream_mat.emission_energy_multiplier = 0.9
-	pod_stream_mesh.material_override = stream_mat
+	pod_stream_mesh.material_override = GrittyArtThemeScript.create_oily_paint_material(GrittyArtThemeScript.NEON_YELLOW_PAINT, false)
 	pod_rig.add_child(pod_stream_mesh)
 
 func _on_bracket_changed(bracket: Resource) -> void:
@@ -432,6 +424,7 @@ func _fire_single_paintball(bracket: Resource) -> void:
 
 	hopper_paint -= 1
 	time_since_last_shot = 0.0
+	_shot_counter += 1
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
 		pump_racked = false
 
@@ -445,8 +438,9 @@ func _fire_single_paintball(bracket: Resource) -> void:
 	var rand_y := randf_range(-spread_rad, spread_rad)
 	var shot_dir := (forward_dir + right_dir * rand_x + up_dir * rand_y).normalized()
 
-	var muzzle_pos := marker_rig.global_position + forward_dir * 0.35
-	PaintBallistics.spawn_paintball(muzzle_pos, shot_dir, bracket.muzzle_fps, self, Color(1.0, 0.48, 0.05))
+	var muzzle_pos := marker_rig.global_position + forward_dir * 0.42
+	var paint_col := GrittyArtThemeScript.HOT_PINK_PAINT if (_shot_counter % 2 == 0) else GrittyArtThemeScript.NEON_YELLOW_PAINT
+	PaintBallistics.spawn_paintball(muzzle_pos, shot_dir, bracket.muzzle_fps, self, paint_col)
 	_emit_hud()
 
 func _start_pod_reload() -> void:
@@ -499,7 +493,8 @@ func _spawn_spilled_paint_burst(count: int) -> void:
 	for i in range(min(count, 18)):
 		var scatter := Vector3(randf_range(-0.65, 0.65), randf_range(-0.2, 0.35), randf_range(-0.65, 0.65))
 		var dir := (forward_dir * 0.4 + scatter).normalized()
-		PaintBallistics.spawn_paintball(origin, dir, 32.0, self, Color(1.0, 0.72, 0.1))
+		var spill_col := GrittyArtThemeScript.NEON_YELLOW_PAINT if (i % 2 == 0) else GrittyArtThemeScript.HOT_PINK_PAINT
+		PaintBallistics.spawn_paintball(origin, dir, 32.0, self, spill_col)
 
 func _ping_crosshair_target() -> void:
 	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
