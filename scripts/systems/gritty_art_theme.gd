@@ -17,19 +17,26 @@ static var _texture_cache: Dictionary = {}
 static func load_texture_safe(res_path: String) -> Texture2D:
 	if _texture_cache.has(res_path):
 		return _texture_cache[res_path]
-	var abs_path := ProjectSettings.globalize_path(res_path)
-	if FileAccess.file_exists(abs_path):
-		var img := Image.load_from_file(abs_path)
-		if img != null and not img.is_empty():
-			img.generate_mipmaps()
-			var tex := ImageTexture.create_from_image(img)
-			_texture_cache[res_path] = tex
-			return tex
+	if DisplayServer.get_name() == "headless" and (OS.get_environment("DEDICATED_SERVER") == "1" or "--server" in OS.get_cmdline_args() or "--server" in OS.get_cmdline_user_args()):
+		_texture_cache[res_path] = null
+		return null
 	if ResourceLoader.exists(res_path):
 		var loaded := ResourceLoader.load(res_path) as Texture2D
 		if loaded != null:
 			_texture_cache[res_path] = loaded
 			return loaded
+	var abs_path := ProjectSettings.globalize_path(res_path)
+	if FileAccess.file_exists(abs_path):
+		var f := FileAccess.open(abs_path, FileAccess.READ)
+		if f != null and f.get_length() > 256:
+			f.close()
+			var img := Image.load_from_file(abs_path)
+			if img != null and not img.is_empty():
+				img.generate_mipmaps()
+				var tex := ImageTexture.create_from_image(img)
+				_texture_cache[res_path] = tex
+				return tex
+	_texture_cache[res_path] = null
 	return null
 
 static func create_overcast_stadium_environment() -> Environment:

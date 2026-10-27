@@ -15,9 +15,9 @@ import urllib.error
 API_BASE = "https://api.edgegap.com"
 APP_NAME = os.environ.get("EDGEGAP_APP_NAME", "game-dev-rev0")
 VERSION_NAME = os.environ.get("EDGEGAP_VERSION_NAME", "v0.2.2")
-IMAGE_REPO = os.environ.get("EDGEGAP_IMAGE_REPO", "ghcr.io")
-IMAGE_NAME = os.environ.get("EDGEGAP_IMAGE_NAME", "tylerdoubleu/game_dev_rev0")
-IMAGE_TAG = os.environ.get("EDGEGAP_IMAGE_TAG", "latest")
+IMAGE_REPO = os.environ.get("EDGEGAP_IMAGE_REPO", "docker.io")
+IMAGE_NAME = os.environ.get("EDGEGAP_IMAGE_NAME", "library/node")
+IMAGE_TAG = os.environ.get("EDGEGAP_IMAGE_TAG", "20-bookworm")
 
 
 def get_auth_header() -> str:
