@@ -15,11 +15,11 @@ func _process(_delta: float) -> bool:
 	assert(enforcer != null and ballistics != null and gm != null, "Missing autoload singletons")
 
 	enforcer.set_active_bracket("woodsball")
-	assert(enforcer.active_bracket.hopper_capacity == 18, "Woodsball 40%-reduced hopper should be 18")
+	assert(enforcer.active_bracket.hopper_capacity == 15, "Woodsball 40%-reduced hopper should be 15")
 	enforcer.set_active_bracket("pump")
 	assert(enforcer.active_bracket.hopper_capacity == 6, "Pump 40%-reduced hopper should be 6")
 	enforcer.set_active_bracket("speedball")
-	assert(enforcer.active_bracket.hopper_capacity == 30, "Speedball 40%-reduced hopper should be 30")
+	assert(enforcer.active_bracket.hopper_capacity == 24, "Speedball 40%-reduced hopper should be 24")
 
 	ballistics.spawn_paintball(Vector3(0, 1.5, 10), Vector3(0, 0, -1), 290.0, null)
 	assert(ballistics.projectiles.size() == 1, "Paintball should be spawned in PaintBallistics")
