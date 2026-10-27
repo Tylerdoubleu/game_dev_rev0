@@ -36,7 +36,6 @@ var scoreboard_body_label: Label
 func _ready() -> void:
 	_build_environment_and_turf()
 	_build_speedball_bunkers()
-	_spawn_opfor_bots()
 	_set_opfor_bots_enabled(NetworkLobby.fill_bots_enabled)
 	if not NetworkLobby.is_dedicated_server:
 		_spawn_player()
@@ -207,6 +206,8 @@ func _spawn_opfor_bots() -> void:
 	]
 
 	for p in placements:
+		if get_node_or_null(p["name"]) != null:
+			continue
 		var b := StaticBody3D.new()
 		b.set_script(bot_script)
 		b.name = p["name"]
@@ -623,7 +624,7 @@ func _on_lobby_state_changed(state: Dictionary) -> void:
 		String(state.get("room", "alpha")).to_upper(),
 		p_dict.size(),
 		"" if p_dict.size() == 1 else "s",
-		"5 OpFor Bots" if bool(state.get("fill_bots", true)) else "No Bots"
+		"5 OpFor Bots" if bool(state.get("fill_bots", false)) else "No Bots"
 	])
 	for pid in p_dict.keys():
 		var info: Dictionary = p_dict[pid]
@@ -641,18 +642,27 @@ func _on_network_match_started(_room_id: String, bracket_id: String, fill_bots: 
 	_on_status_banner("MATCH LIVE — Room [%s] | Bracket: %s | Press [TAB] for Lobby" % [NetworkLobby.active_room.to_upper(), bracket_id.to_upper()], Color(0.35, 1.0, 0.55))
 
 func _set_opfor_bots_enabled(enabled: bool) -> void:
-	for bname in ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]:
-		var b := get_node_or_null(bname) as Node3D
-		if b != null:
-			if b.has_method("set_bot_enabled"):
-				b.call("set_bot_enabled", enabled)
-			else:
-				b.visible = enabled
-				b.set_process(enabled)
-				b.process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
-				for child in b.get_children():
-					if child is CollisionShape3D:
-						child.disabled = not enabled
+	var bot_names := ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]
+	if enabled:
+		var any_missing := false
+		for bname in bot_names:
+			if get_node_or_null(bname) == null:
+				any_missing = true
+				break
+		if any_missing:
+			_spawn_opfor_bots()
+		for bname in bot_names:
+			var b := get_node_or_null(bname) as Node3D
+			if b != null and b.has_method("set_bot_enabled"):
+				b.call("set_bot_enabled", true)
+	else:
+		for bname in bot_names:
+			var b := get_node_or_null(bname) as Node3D
+			if b != null:
+				if b.has_method("set_bot_enabled"):
+					b.call("set_bot_enabled", false)
+				remove_child(b)
+				b.queue_free()
 
 func _select_npc_presence(enabled: bool) -> void:
 	NetworkLobby.fill_bots_enabled = enabled

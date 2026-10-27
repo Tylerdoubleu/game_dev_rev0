@@ -32,7 +32,7 @@ var local_callsign: String = "NPPL_Pro"
 var local_team: String = "ALPHA"
 var local_bracket: String = "speedball"
 var local_ready: bool = true
-var fill_bots_enabled: bool = true
+var fill_bots_enabled: bool = false
 var match_active: bool = true
 
 ## Connected human players: peer_id (int) -> Dictionary { name, team, bracket, ready, room }
@@ -152,8 +152,12 @@ func _parse_query_string(query: String) -> void:
 			elif key == "bracket" and val.to_lower() in ["speedball", "woodsball", "pump"]:
 				local_bracket = val.to_lower()
 				GearRuleEnforcer.set_active_bracket(local_bracket)
+			elif key in ["bots", "npc", "npcs"] and not val.is_empty():
+				fill_bots_enabled = val.to_lower() in ["1", "true", "on", "yes"]
 			elif key in ["server", "ws", "edgegap"] and not val.is_empty():
 				current_ws_url = normalize_ws_url(val)
+			elif key in ["bots", "npcs", "npc"] and not val.is_empty():
+				fill_bots_enabled = val.to_lower() in ["1", "true", "on", "yes"]
 
 func _sanitize_token(raw: String, fallback: String) -> String:
 	var cleaned := raw.strip_edges().substr(0, 20)
@@ -287,7 +291,7 @@ func _broadcast_lobby_state_from_server() -> void:
 	var snapshot := get_lobby_state_snapshot()
 	sync_lobby_state.rpc(snapshot)
 
-func update_local_player_choices(callsign: String, team: String, bracket_id: String, fill_bots: bool = true) -> void:
+func update_local_player_choices(callsign: String, team: String, bracket_id: String, fill_bots: bool = false) -> void:
 	local_callsign = _sanitize_token(callsign, local_callsign)
 	local_team = team.to_upper() if team.to_upper() in ["ALPHA", "BRAVO"] else "ALPHA"
 	if bracket_id in ["speedball", "woodsball", "pump"]:
@@ -301,7 +305,7 @@ func update_local_player_choices(callsign: String, team: String, bracket_id: Str
 		_refresh_offline_local_roster()
 
 @rpc("any_peer", "call_local", "reliable")
-func register_player_info(callsign: String, team: String, bracket_id: String, is_ready: bool, room_id: String = "alpha", fill_bots: bool = true) -> void:
+func register_player_info(callsign: String, team: String, bracket_id: String, is_ready: bool, room_id: String = "alpha", fill_bots: bool = false) -> void:
 	var sender_id := multiplayer.get_remote_sender_id()
 	if sender_id == 0:
 		sender_id = multiplayer.get_unique_id() if peer != null else 1

@@ -56,14 +56,14 @@ func _process(_delta: float) -> bool:
 	assert(InputMap.has_action("toggle_scoreboard"), "InputMap must bind [M] to toggle_scoreboard")
 
 	var player := arena.get_node_or_null("Player3D") as CharacterBody3D
-	var bot := arena.get_node_or_null("OpFor_Snake50") as StaticBody3D
-	assert(player != null and bot != null, "Player3D and OpFor_Snake50 must exist")
+	assert(player != null, "Player3D must exist")
+	assert( not lobby.fill_bots_enabled, "NPC Presence must default to OFF (false)")
+	assert(arena.get_node_or_null("OpFor_Snake50") == null, "No OpFor bots should exist when NPC Presence is OFF")
 
-	# Test NPC Presence OFF hides and moves bots out of play and stays OFF after lobby sync
-	arena.call("_select_npc_presence", false)
-	assert(not bot.visible and bot.position.y < -10.0, "NPC Presence OFF must hide and move OpFor bots out of play")
+	# Enable NPC Presence from the menu and verify bots spawn
 	arena.call("_select_npc_presence", true)
-	assert(bot.visible and bot.position.y >= -0.1, "NPC Presence ON must restore OpFor bots")
+	var bot := arena.get_node_or_null("OpFor_Snake50") as StaticBody3D
+	assert(bot != null and bot.visible, "Selecting NPC Presence ON must spawn OpFor bots")
 
 	# Test +1 Pod reward on kill
 	var start_pods: int = int(player.get("pods_remaining"))
