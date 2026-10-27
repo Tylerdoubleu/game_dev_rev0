@@ -61,7 +61,7 @@ func _build_environment_and_turf() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.name = "OvercastStadiumSun"
 	sun.rotation_degrees = Vector3(-54.0, -32.0, 0.0)
-	sun.shadow_enabled = true
+	sun.shadow_enabled = not OS.has_feature("web")
 	sun.light_color = Color(0.84, 0.87, 0.92)
 	sun.light_energy = 0.92
 	add_child(sun)
@@ -609,6 +609,11 @@ func _on_lobby_connection_status(status_text: String, is_online: bool) -> void:
 		lobby_status_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.55) if is_online else Color(1.0, 0.82, 0.35))
 
 func _on_lobby_state_changed(state: Dictionary) -> void:
+	var fill_bots_val := bool(state.get("fill_bots", NetworkLobby.fill_bots_enabled))
+	if fill_bots_check != null:
+		fill_bots_check.button_pressed = fill_bots_val
+	_set_opfor_bots_enabled(fill_bots_val)
+	_refresh_lobby_button_highlights()
 	if lobby_roster_label == null:
 		return
 	var p_dict: Dictionary = state.get("players", {})
@@ -638,12 +643,15 @@ func _set_opfor_bots_enabled(enabled: bool) -> void:
 	for bname in ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]:
 		var b := get_node_or_null(bname) as Node3D
 		if b != null:
-			b.visible = enabled
-			b.set_process(enabled)
-			b.process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
-			for child in b.get_children():
-				if child is CollisionShape3D:
-					child.disabled = not enabled
+			if b.has_method("set_bot_enabled"):
+				b.call("set_bot_enabled", enabled)
+			else:
+				b.visible = enabled
+				b.set_process(enabled)
+				b.process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+				for child in b.get_children():
+					if child is CollisionShape3D:
+						child.disabled = not enabled
 
 func _select_npc_presence(enabled: bool) -> void:
 	NetworkLobby.fill_bots_enabled = enabled

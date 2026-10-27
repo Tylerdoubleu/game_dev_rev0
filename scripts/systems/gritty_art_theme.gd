@@ -63,25 +63,26 @@ static func create_overcast_stadium_environment() -> Environment:
 	env.tonemap_exposure = 1.06
 	env.tonemap_white = 6.2
 
-	# Realism upgrades: Screen-Space Ambient Occlusion (SSAO) & Screen-Space Reflections (SSR)
-	env.ssao_enabled = true
+	var is_web := OS.has_feature("web")
+	# Realism upgrades: Screen-Space Ambient Occlusion (SSAO) & Screen-Space Reflections (SSR) on desktop Forward+
+	env.ssao_enabled = not is_web
 	env.ssao_radius = 1.15
 	env.ssao_intensity = 1.85
 	env.ssao_power = 1.35
 	env.ssao_detail = 0.55
 
-	env.ssr_enabled = true
+	env.ssr_enabled = not is_web
 	env.ssr_max_steps = 32
 	env.ssr_fade_in = 0.15
 	env.ssr_fade_out = 2.0
 
-	env.fog_enabled = true
+	env.fog_enabled = not is_web
 	env.fog_light_color = Color(0.50, 0.52, 0.55)
 	env.fog_light_energy = 0.85
 	env.fog_density = 0.0034
 	env.fog_aerial_perspective = 0.42
 
-	env.glow_enabled = true
+	env.glow_enabled = not is_web
 	env.glow_intensity = 0.42
 	env.glow_bloom = 0.06
 	return env
@@ -245,7 +246,7 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 			lamp.material_override = bulb_mat
 			tower.add_child(lamp)
 
-		if i < 6:
+		if i < 6 and not OS.has_feature("web"):
 			var light := OmniLight3D.new()
 			light.position = Vector3(0.0, pole_h - 0.5, 0.0)
 			light.light_color = Color(0.92, 0.95, 1.0)

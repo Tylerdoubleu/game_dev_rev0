@@ -253,12 +253,13 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color, collider: Object 
 	var bz := n.cross(bx).normalized()
 	decal.global_transform.basis = Basis(bx, n, bz).rotated(n, _rng.randf_range(0.0, TAU))
 
-	# Also attach our surface-wrapped glossy clearcoat mesh so curvature gets wet specular highlights
-	var space_state: PhysicsDirectSpaceState3D = scene_root.get_world_3d().direct_space_state if scene_root.get_world_3d() else null
+	# Also attach our surface-wrapped glossy clearcoat mesh (use fast 2x2 grid on WebGL2 to avoid 72 raycasts per shot)
+	var space_state: PhysicsDirectSpaceState3D = scene_root.get_world_3d().direct_space_state if (not OS.has_feature("web") and scene_root.get_world_3d()) else null
+	var grid_res: int = 2 if OS.has_feature("web") else 5
 	var wrapped_mesh := MeshInstance3D.new()
 	wrapped_mesh.name = "WrappedGlossyOverlay"
 	wrapped_mesh.top_level = true
-	wrapped_mesh.mesh = _build_wrapped_splat_mesh(space_state, pos, n, 0.21, 5)
+	wrapped_mesh.mesh = _build_wrapped_splat_mesh(space_state, pos, n, 0.21, grid_res)
 	wrapped_mesh.material_override = GrittyArtThemeScript.create_oily_paint_material(color, true)
 	decal.add_child(wrapped_mesh)
 	wrapped_mesh.global_position = pos

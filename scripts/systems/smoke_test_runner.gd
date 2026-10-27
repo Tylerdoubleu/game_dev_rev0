@@ -59,6 +59,12 @@ func _process(_delta: float) -> bool:
 	var bot := arena.get_node_or_null("OpFor_Snake50") as StaticBody3D
 	assert(player != null and bot != null, "Player3D and OpFor_Snake50 must exist")
 
+	# Test NPC Presence OFF hides and moves bots out of play and stays OFF after lobby sync
+	arena.call("_select_npc_presence", false)
+	assert(not bot.visible and bot.position.y < -10.0, "NPC Presence OFF must hide and move OpFor bots out of play")
+	arena.call("_select_npc_presence", true)
+	assert(bot.visible and bot.position.y >= -0.1, "NPC Presence ON must restore OpFor bots")
+
 	# Test +1 Pod reward on kill
 	var start_pods: int = int(player.get("pods_remaining"))
 	bot.call("on_paintball_break", bot.global_position, player)

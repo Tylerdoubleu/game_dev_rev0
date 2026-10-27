@@ -108,8 +108,17 @@ func _build_visual_and_collider() -> void:
 	loader_mesh.material_override = mask_mat
 	add_child(loader_mesh)
 
+func set_bot_enabled(enabled: bool) -> void:
+	visible = enabled
+	set_process(enabled)
+	process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+	position = base_pos if enabled else Vector3(base_pos.x, -50.0, base_pos.z)
+	for child in get_children():
+		if child is CollisionShape3D:
+			child.disabled = not enabled
+
 func _process(delta: float) -> void:
-	if GameManager.match_ended:
+	if GameManager.match_ended or not visible or not NetworkLobby.fill_bots_enabled:
 		return
 	if is_eliminated:
 		respawn_timer -= delta

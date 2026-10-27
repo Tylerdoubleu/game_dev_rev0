@@ -29,6 +29,7 @@ const APP_DIR = "/tmp/paintball_app";
 const WEB_ROOT = path.join(APP_DIR, "build", "web");
 
 let setupStatus = "bootstrapping";
+let currentGodotProc = null;
 const setupLog = [];
 function log(msg) {
   const line = `[${new Date().toISOString()}] ${msg}`;
@@ -63,6 +64,19 @@ const server = http.createServer((req, res) => {
 
   const parsedUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   let pathname = decodeURIComponent(parsedUrl.pathname);
+
+  if (pathname === "/pull" || pathname === "/reload") {
+    const upd = spawn("/bin/sh", ["-c", `cd ${APP_DIR} && git fetch origin main && git reset --hard origin/main`]);
+    upd.on("exit", (c) => {
+      log(`Pulled latest origin/main (exit=${c}), restarting Godot server...`);
+      if (currentGodotProc) {
+        try { currentGodotProc.kill("SIGTERM"); } catch (_) {}
+      }
+      res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ status: "reloaded", exit_code: c }));
+    });
+    return;
+  }
 
   if (pathname === "/healthz" || pathname === "/health") {
     res.writeHead(200, { "Content-Type": "application/json; charset=utf-8" });
@@ -150,7 +164,7 @@ server.listen(HTTP_PORT, "0.0.0.0", () => {
 function startGodotLoop() {
   setupStatus = "ready";
   log("Spawning headless Godot 4.7.2 dedicated server...");
-  const p = spawn(
+  const p = currentGodotProc = spawn(
     "/tmp/Godot_v4.7.2-stable_linux.x86_64",
     ["--headless", "--path", APP_DIR, "--", "--server", `--port=${GODOT_WS_PORT}`],
     {
