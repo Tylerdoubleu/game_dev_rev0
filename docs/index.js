@@ -142,7 +142,7 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 			loaded: 0,
 			done: false,
 		};
-		const _u = file.endsWith('.pck') ? (file + '?v=022_nobots_v3') : file;
+		const _u = file.endsWith('.pck') ? (file + '?v=022_nobots_v4') : file;
 		return fetch(_u, { cache: 'no-store' }).then(function (response) {
 			if (!response.ok) {
 				return Promise.reject(new Error(`Failed loading file '${file}'`));

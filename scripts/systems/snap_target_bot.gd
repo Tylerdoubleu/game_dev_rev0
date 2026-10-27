@@ -20,6 +20,10 @@ var base_mat: StandardMaterial3D
 
 func _ready() -> void:
 	base_pos = position
+	if not NetworkLobby.fill_bots_enabled:
+		visible = false
+		queue_free()
+		return
 	timer = randf_range(0.0, peek_interval)
 	_build_visual_and_collider()
 	IntelBus.enemy_spotted.connect(_on_enemy_spotted)
@@ -118,7 +122,11 @@ func set_bot_enabled(enabled: bool) -> void:
 			child.disabled = not enabled
 
 func _process(delta: float) -> void:
-	if GameManager.match_ended or not visible or not NetworkLobby.fill_bots_enabled:
+	if not NetworkLobby.fill_bots_enabled:
+		set_bot_enabled(false)
+		queue_free()
+		return
+	if GameManager.match_ended or not visible:
 		return
 	if is_eliminated:
 		respawn_timer -= delta
