@@ -42,7 +42,7 @@ func _process(_delta: float) -> bool:
 	var dorito_col := arena.get_node_or_null("Home_Dorito_1/CollisionShape3D") as CollisionShape3D
 	assert(dorito_col != null and dorito_col.shape is ConvexPolygonShape3D, "Dorito bunker must use form-fitting ConvexPolygonShape3D")
 	var can_col := arena.get_node_or_null("Home_MidCan_L/CollisionShape3D") as CollisionShape3D
-	assert(can_col != null and can_col.shape is CylinderShape3D, "Can bunker must use form-fitting CylinderShape3D")
+	assert(can_col != null and (can_col.shape is CapsuleShape3D or can_col.shape is CylinderShape3D), "Can bunker must use form-fitting CylinderShape3D")
 	var snake_col := arena.get_node_or_null("Snake_Beam_Home1/CollisionShape3D") as CollisionShape3D
 	assert(snake_col != null and snake_col.shape is CapsuleShape3D, "Snake beam must use form-fitting CapsuleShape3D")
 

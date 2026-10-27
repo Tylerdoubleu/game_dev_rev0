@@ -373,27 +373,8 @@ static func _build_wooden_cable_spools(parent: Node3D) -> void:
 		body.position = sp["pos"]
 		parent.add_child(body)
 
-		# Tightly shaped per-tier colliders matching the actual spool geometry
-		var col_bottom := CollisionShape3D.new()
-		col_bottom.name = "BottomSpoolCollider"
-		var cshape_b := CylinderShape3D.new()
-		cshape_b.radius = 0.80
-		cshape_b.height = 0.78
-		col_bottom.shape = cshape_b
-		col_bottom.position = Vector3(0.0, 0.39, 0.0)
-		body.add_child(col_bottom)
-
 		_add_single_wood_spool_meshes(body, Vector3(0.0, 0.0, 0.0), 0.80, 0.78, wood_mat)
 		if sp["stacked"]:
-			var col_top := CollisionShape3D.new()
-			col_top.name = "TopSpoolCollider"
-			var cshape_t := CylinderShape3D.new()
-			cshape_t.radius = 0.74
-			cshape_t.height = 0.74
-			col_top.shape = cshape_t
-			col_top.position = Vector3(0.0, 0.78 + 0.37, 0.0)
-			body.add_child(col_top)
-
 			_add_single_wood_spool_meshes(body, Vector3(0.0, 0.78, 0.0), 0.74, 0.74, wood_mat)
 			# Extra upright flange wheel leaning beside the stacked spool + matching tight collider
 			var wheel := MeshInstance3D.new()
@@ -412,6 +393,7 @@ static func _build_wooden_cable_spools(parent: Node3D) -> void:
 			var wshape := CylinderShape3D.new()
 			wshape.radius = 0.70
 			wshape.height = 0.12
+			wshape.margin = 0.001
 			wheel_col.shape = wshape
 			wheel_col.position = wheel.position
 			wheel_col.rotation_degrees = wheel.rotation_degrees
@@ -428,6 +410,16 @@ static func _add_single_wood_spool_meshes(parent: Node3D, base_offset: Vector3, 
 	core.material_override = mat
 	parent.add_child(core)
 
+	# Exact core cylinder collider (recessed inner drum so shots pass cleanly between flanges!)
+	var core_col := CollisionShape3D.new()
+	var core_shape := CylinderShape3D.new()
+	core_shape.radius = radius * 0.56
+	core_shape.height = height
+	core_shape.margin = 0.001
+	core_col.shape = core_shape
+	core_col.position = core.position
+	parent.add_child(core_col)
+
 	for flange_y in [0.05, height * 0.5, height - 0.05]:
 		var flange := MeshInstance3D.new()
 		var fcyl := CylinderMesh.new()
@@ -438,6 +430,15 @@ static func _add_single_wood_spool_meshes(parent: Node3D, base_offset: Vector3, 
 		flange.position = base_offset + Vector3(0.0, flange_y, 0.0)
 		flange.material_override = mat
 		parent.add_child(flange)
+
+		var flange_col := CollisionShape3D.new()
+		var fshape := CylinderShape3D.new()
+		fshape.radius = radius
+		fshape.height = 0.08
+		fshape.margin = 0.001
+		flange_col.shape = fshape
+		flange_col.position = flange.position
+		parent.add_child(flange_col)
 
 static func _create_tapered_bunker_mesh(size: Vector3, top_x_ratio: float, top_z_ratio: float) -> ArrayMesh:
 	var hx := size.x * 0.5
@@ -466,18 +467,18 @@ static func _create_tapered_bunker_mesh(size: Vector3, top_x_ratio: float, top_z
 	_add_quad_to_st(st, t3, t2, t1, t0) # Top face
 	_add_quad_to_st(st, b0, b1, b2, b3) # Bottom face
 
-	st.generate_normals()
 	st.generate_tangents()
 	return st.commit()
 
 static func _add_quad_to_st(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3) -> void:
+	# Godot 4 uses clockwise (CW) winding for front-facing triangles: (v0 -> v3 -> v2) and (v0 -> v2 -> v1)
 	var n := (v1 - v0).cross(v3 - v0).normalized()
 	st.set_normal(n)
 	st.set_uv(Vector2(0.0, 1.0))
 	st.add_vertex(v0)
 	st.set_normal(n)
-	st.set_uv(Vector2(1.0, 1.0))
-	st.add_vertex(v1)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(v3)
 	st.set_normal(n)
 	st.set_uv(Vector2(1.0, 0.0))
 	st.add_vertex(v2)
@@ -489,8 +490,8 @@ static func _add_quad_to_st(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vecto
 	st.set_uv(Vector2(1.0, 0.0))
 	st.add_vertex(v2)
 	st.set_normal(n)
-	st.set_uv(Vector2(0.0, 0.0))
-	st.add_vertex(v3)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(v1)
 
 static func _create_curved_bunker_splat_mesh(radius_x: float, radius_z: float, arc_center_angle: float, arc_span: float, height_span: float) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -564,23 +565,27 @@ static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInsta
 		# Slightly tapered inflatable cake / brick / knuckle so edges aren't razor-sharp boxes
 		mesh_inst.mesh = _create_tapered_bunker_mesh(size, 0.86, 0.82)
 
-	# Tighten and shape the bunker's CollisionShape3D to match the exact 3D mesh geometry!
+	# Tighten and shape the bunker's CollisionShape3D to match the exact 3D mesh geometry (zero invisible corner walls!)
 	for child in bunker_body.get_children():
 		if child is CollisionShape3D:
 			var cshape_node := child as CollisionShape3D
 			cshape_node.transform = mesh_inst.transform
 			if is_cylinder_can:
-				var cyl_shape := CylinderShape3D.new()
-				cyl_shape.radius = min(size.x, size.z) * 0.48
-				cyl_shape.height = size.y
-				cshape_node.shape = cyl_shape
+				var cap_shape_can := CapsuleShape3D.new()
+				cap_shape_can.radius = min(size.x, size.z) * 0.48
+				cap_shape_can.height = max(size.y, cap_shape_can.radius * 2.05)
+				cap_shape_can.margin = 0.001
+				cshape_node.shape = cap_shape_can
 			elif is_horizontal_tube:
 				var cap_shape := CapsuleShape3D.new()
 				cap_shape.radius = min(size.x, size.y) * 0.48
 				cap_shape.height = size.z
+				cap_shape.margin = 0.001
 				cshape_node.shape = cap_shape
 			else:
-				cshape_node.shape = mesh_inst.mesh.create_convex_shape(true, false)
+				var conv := mesh_inst.mesh.create_convex_shape(true, false)
+				conv.margin = 0.001
+				cshape_node.shape = conv
 			break
 
 	# Wrap weathered neon yellow & hot pink paint splat decals conformally onto the bunker surface

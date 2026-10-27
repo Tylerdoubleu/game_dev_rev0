@@ -84,7 +84,7 @@ func _ready() -> void:
 func _build_player_nodes() -> void:
 	var col := CollisionShape3D.new()
 	var capsule := CapsuleShape3D.new()
-	capsule.radius = 0.38
+	capsule.radius = 0.27
 	capsule.height = 1.75
 	col.shape = capsule
 	col.position = Vector3(0, 0.875, 0)
@@ -359,7 +359,7 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG + slide_roll_deg)
 
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
-	var target_hand_x: float = 0.24 * hand_sign + bob_x * 0.35
+	var target_hand_x: float = 0.17 * hand_sign + bob_x * 0.35
 	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 + bob_y * 0.45)
 	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
 	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
@@ -436,13 +436,33 @@ func _fire_single_paintball(bracket: Resource) -> void:
 	var up_dir := camera.global_transform.basis.y.normalized()
 	var rand_x := randf_range(-spread_rad, spread_rad)
 	var rand_y := randf_range(-spread_rad, spread_rad)
-	var shot_dir := (forward_dir + right_dir * rand_x + up_dir * rand_y).normalized()
+
+	# Sightline-convergent snap-peeking: if the eye/crosshair line of sight clears the near bunker,
+	# ensure the off-center barrel doesn't clip an invisible near-bunker edge when peeking!
+	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
+	var cam_origin := camera.global_position
+	var aim_target := cam_origin + forward_dir * 45.0
+	var cam_q := PhysicsRayQueryParameters3D.create(cam_origin, aim_target)
+	cam_q.exclude = [get_rid()]
+	var cam_hit: Dictionary = space_state.intersect_ray(cam_q)
+	if not cam_hit.is_empty():
+		aim_target = cam_hit["position"]
+
+	var muzzle_pos := marker_rig.global_position + forward_dir * 0.46
+	var near_check_q := PhysicsRayQueryParameters3D.create(muzzle_pos, muzzle_pos + (aim_target - muzzle_pos).normalized() * 2.4)
+	near_check_q.exclude = [get_rid()]
+	var near_hit: Dictionary = space_state.intersect_ray(near_check_q)
+	if not near_hit.is_empty() and (cam_hit.is_empty() or cam_origin.distance_to(cam_hit["position"]) > 2.8):
+		# Tuck barrel origin slightly toward the peeking eye line so tight snap-shots clear the bunker edge cleanly
+		muzzle_pos = cam_origin.lerp(muzzle_pos, 0.28) + forward_dir * 0.22
+
+	var base_dir := (aim_target - muzzle_pos).normalized()
+	var shot_dir := (base_dir + right_dir * rand_x + up_dir * rand_y).normalized()
 
 	# Pneumatic bolt kick + subtle camera micro-recoil + HPA muzzle vapor puff
 	pitch = clamp(pitch + deg_to_rad(randf_range(0.18, 0.36)), deg_to_rad(-80.0), deg_to_rad(80.0))
 	yaw += deg_to_rad(randf_range(-0.16, 0.16))
 	rotation.y = yaw
-	var muzzle_pos := marker_rig.global_position + forward_dir * 0.46
 	GrittyArtThemeScript.spawn_muzzle_gas_puff(get_tree().current_scene, muzzle_pos, forward_dir)
 	var paint_col := GrittyArtThemeScript.HOT_PINK_PAINT if (_shot_counter % 2 == 0) else GrittyArtThemeScript.NEON_YELLOW_PAINT
 	PaintBallistics.spawn_paintball(muzzle_pos, shot_dir, bracket.muzzle_fps, self, paint_col)
