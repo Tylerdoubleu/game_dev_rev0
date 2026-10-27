@@ -1,11 +1,12 @@
 extends CharacterBody3D
 
-## First-person paintball player controller for v0.1.1-playtest.
+## First-person paintball player controller for v0.1.
 ## Features:
 ## - Speedball: Separate LMB & RMB triggers (walk the trigger!) capped at 10.5 BPS total
 ## - Woodsball (1-Pull): Enforce holding BOTH LMB + RMB together to pull the heavy mechanical trigger
 ## - Pump: LMB fires, RMB racks the pump handle
-## - Stances: Standing, Crouch (C), Knee-Slide (Shift+C), Prone (Ctrl), Superman Dive (Shift+Ctrl)
+## - Stances (Hold-only): Hold C for Crouch, Shift+C for Knee-Slide (stays crouched after slide only if C is held);
+##   Hold Ctrl for Prone, Shift+Ctrl for Superman Dive (stays prone after dive only if Ctrl is held).
 ## - Head/marker bobbing when moving + 3D Pod pour animation on reload (R)
 
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
@@ -61,8 +62,8 @@ var dive_timer: float = 0.0
 var slide_dir: Vector3 = Vector3.ZERO
 var bob_time: float = 0.0
 
-var hopper_paint: int = 40
-var pods_remaining: int = 3
+var hopper_paint: int = 30
+var pods_remaining: int = 2
 var is_reloading_pod: bool = false
 var reload_timer: float = 0.0
 var reload_duration: float = 2.1
@@ -124,7 +125,6 @@ func _build_player_nodes() -> void:
 	hopper_mesh.material_override = hopper_mat
 	marker_rig.add_child(hopper_mesh)
 
-	# Hopper flip lid (opens during pod reload)
 	hopper_lid_mesh = MeshInstance3D.new()
 	var lid_cyl := CylinderMesh.new()
 	lid_cyl.top_radius = 0.045
@@ -137,7 +137,6 @@ func _build_player_nodes() -> void:
 	hopper_lid_mesh.material_override = lid_mat
 	marker_rig.add_child(hopper_lid_mesh)
 
-	# 3D Pod Viewmodel for reload animation
 	pod_rig = Node3D.new()
 	pod_rig.name = "PodReloadRig"
 	pod_rig.position = Vector3(-0.22, -0.35, -0.1)
@@ -156,7 +155,6 @@ func _build_player_nodes() -> void:
 	pod_body.material_override = pod_mat
 	pod_rig.add_child(pod_body)
 
-	# Paintball stream pouring out of pod into hopper
 	pod_stream_mesh = MeshInstance3D.new()
 	var stream_cyl := CylinderMesh.new()
 	stream_cyl.top_radius = 0.022
@@ -216,7 +214,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("reset_round"):
 		GameManager.reset_round()
 
-	# Firing triggers (Speedball dual-trigger walk, Woodsball LMB+RMB simultaneous pull, Pump LMB->RMB)
 	if event.is_action_pressed("fire_primary"):
 		_handle_trigger_press(false)
 	elif event.is_action_pressed("fire_secondary_walk"):
@@ -225,7 +222,6 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	time_since_last_shot += delta
 
-	# Reset Woodsball 1-pull latch once either mouse button is released
 	if woodsball_trigger_latched:
 		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
 			woodsball_trigger_latched = false
@@ -233,6 +229,13 @@ func _physics_process(delta: float) -> void:
 	_update_movement_and_stance(delta)
 	_update_lean_bob_and_viewmodel(delta)
 	_update_pod_reload(delta)
+
+func _resolve_held_stance() -> Stance:
+	if Input.is_action_pressed("prone_dive"):
+		return Stance.PRONE
+	elif Input.is_action_pressed("crouch_slide"):
+		return Stance.CROUCHING
+	return Stance.STANDING
 
 func _update_movement_and_stance(delta: float) -> void:
 	var input_vec := Vector2(
@@ -242,55 +245,59 @@ func _update_movement_and_stance(delta: float) -> void:
 
 	var move_dir := (transform.basis * Vector3(input_vec.x, 0.0, input_vec.y)).normalized()
 	var shift_held := Input.is_action_pressed("sprint")
-	var wants_sprint := shift_held and input_vec.y < -0.1 and slide_timer <= 0.0 and dive_timer <= 0.0
+	var crouch_held := Input.is_action_pressed("crouch_slide")
+	var prone_held := Input.is_action_pressed("prone_dive")
 
-	# C: Sprint + C -> Knee-Slide, otherwise toggle Crouch
-	if Input.is_action_just_pressed("crouch_slide"):
-		if shift_held and slide_timer <= 0.0 and dive_timer <= 0.0:
-			slide_timer = SLIDE_DURATION
-			slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
-			stance = Stance.CROUCHING
-			status_banner_sent.emit("KNEE-SLIDE!", Color(0.35, 0.95, 1.0))
-			if is_reloading_pod:
-				_spill_active_pod("Knee-slide interrupted reload — pod spilled!")
-		else:
-			if stance == Stance.CROUCHING:
-				stance = Stance.STANDING
-			else:
-				stance = Stance.CROUCHING
+	# Trigger Knee-Slide on Shift + C press
+	if Input.is_action_just_pressed("crouch_slide") and shift_held and slide_timer <= 0.0 and dive_timer <= 0.0:
+		slide_timer = SLIDE_DURATION
+		slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
+		stance = Stance.CROUCHING
+		status_banner_sent.emit("KNEE-SLIDE! (Hold [C] to stay crouched)", Color(0.35, 0.95, 1.0))
+		if is_reloading_pod:
+			_spill_active_pod("Knee-slide interrupted reload — pod spilled!")
 		_emit_hud()
 
-	# Ctrl: Shift + Ctrl -> Superman Dive into Prone, otherwise toggle Prone
-	if Input.is_action_just_pressed("prone_dive"):
-		if shift_held and dive_timer <= 0.0 and slide_timer <= 0.0:
-			dive_timer = DIVE_DURATION
-			slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
-			stance = Stance.PRONE
-			status_banner_sent.emit("SUPERMAN DIVE INTO PRONE!", Color(1.0, 0.82, 0.25))
-			if is_reloading_pod:
-				_spill_active_pod("Superman dive interrupted reload — pod spilled!")
-		else:
-			if stance == Stance.PRONE:
-				stance = Stance.STANDING
-			else:
-				stance = Stance.PRONE
+	# Trigger Superman Dive on Shift + Ctrl press
+	if Input.is_action_just_pressed("prone_dive") and shift_held and dive_timer <= 0.0 and slide_timer <= 0.0:
+		dive_timer = DIVE_DURATION
+		slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
+		stance = Stance.PRONE
+		status_banner_sent.emit("SUPERMAN DIVE! (Hold [Ctrl] to stay prone)", Color(1.0, 0.82, 0.25))
+		if is_reloading_pod:
+			_spill_active_pod("Superman dive interrupted reload — pod spilled!")
 		_emit_hud()
 
-	# Pressing Sprint while Crouched or Prone stands the player up to sprint
-	if wants_sprint and stance != Stance.STANDING:
-		stance = Stance.STANDING
-		_emit_hud()
+	# Update active slide / dive timers, and check held keys when complete
+	if dive_timer > 0.0:
+		dive_timer -= delta
+		if dive_timer <= 0.0:
+			dive_timer = 0.0
+			stance = _resolve_held_stance()
+			_emit_hud()
+	elif slide_timer > 0.0:
+		slide_timer -= delta
+		if slide_timer <= 0.0:
+			slide_timer = 0.0
+			stance = _resolve_held_stance()
+			_emit_hud()
+	else:
+		# Pure hold-to-crouch (C) and hold-to-prone (Ctrl) when not sliding/diving
+		var prev_stance := stance
+		stance = _resolve_held_stance()
+		if stance != prev_stance:
+			_emit_hud()
+
+	var wants_sprint := shift_held and input_vec.y < -0.1 and slide_timer <= 0.0 and dive_timer <= 0.0 and not crouch_held and not prone_held
 
 	if wants_sprint and is_reloading_pod:
 		_spill_active_pod("Sprint interrupted reload — pod spilled!")
 
 	if dive_timer > 0.0:
-		dive_timer -= delta
 		var dive_factor: float = clamp(dive_timer / DIVE_DURATION, 0.15, 1.0)
 		velocity.x = slide_dir.x * DIVE_INITIAL_SPEED * dive_factor
 		velocity.z = slide_dir.z * DIVE_INITIAL_SPEED * dive_factor
 	elif slide_timer > 0.0:
-		slide_timer -= delta
 		var slide_factor: float = clamp(slide_timer / SLIDE_DURATION, 0.2, 1.0)
 		velocity.x = slide_dir.x * SLIDE_INITIAL_SPEED * slide_factor
 		velocity.z = slide_dir.z * SLIDE_INITIAL_SPEED * slide_factor
@@ -323,7 +330,6 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 
 	current_lean = lerp(current_lean, target_lean, min(1.0, delta * 12.0))
 
-	# Base camera height per stance / slide / dive
 	var base_height: float = HEIGHT_STANDING
 	var target_fov: float = BASE_FOV
 	var slide_roll_deg: float = 0.0
@@ -342,7 +348,6 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	elif stance == Stance.PRONE:
 		base_height = HEIGHT_PRONE
 
-	# Up-and-down view & marker bobbing when moving on ground
 	var horiz_speed: float = Vector2(velocity.x, velocity.z).length()
 	var bob_y: float = 0.0
 	var bob_x: float = 0.0
@@ -361,7 +366,6 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	camera.rotation.x = clamp(pitch + dive_pitch_offset, deg_to_rad(-85.0), deg_to_rad(85.0))
 	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG + slide_roll_deg)
 
-	# Marker viewmodel + Pod reload animation
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
 	var target_hand_x: float = 0.24 * hand_sign + bob_x * 0.35
 	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 + bob_y * 0.45)
@@ -375,7 +379,6 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 		pod_rig.visible = true
 		hopper_lid_mesh.rotation.z = deg_to_rad(110.0 * hand_sign)
 		hopper_lid_mesh.position.x = -0.05 * hand_sign
-		# Animate pod rising from pack (0..0.25), pouring with shake (0.25..0.85), and dropping away (0.85..1.0)
 		var shake_y: float = sin(pct * 45.0) * 0.015 if (pct > 0.2 and pct < 0.88) else 0.0
 		pod_rig.position = Vector3(-0.04 * hand_sign, 0.34 + shake_y, 0.04)
 		pod_rig.rotation = Vector3(deg_to_rad(15.0), 0.0, deg_to_rad(-148.0 * hand_sign))
@@ -393,12 +396,10 @@ func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 	if bracket == null:
 		return
 
-	# 1. Speedball Mode: LMB and RMB are two separate triggers (walk the trigger!) capped at 10.5 BPS
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.RAMP_10_5:
 		_fire_single_paintball(bracket)
 		return
 
-	# 2. Woodsball Mode (1-Pull): Enforce holding/pressing BOTH LMB and RMB together
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
 		var both_held := Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")
 		if not both_held:
@@ -410,7 +411,6 @@ func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 		_fire_single_paintball(bracket)
 		return
 
-	# 3. Pump Mode: LMB shoots, RMB racks the pump handle
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
 		if is_secondary_trigger:
 			pump_racked = true
@@ -435,7 +435,6 @@ func _fire_single_paintball(bracket: Resource) -> void:
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
 		pump_racked = false
 
-	# Slight recoil kick on marker viewmodel
 	marker_rig.position.z = -0.39
 
 	var spread_rad := deg_to_rad(0.75 + (1.3 if velocity.length() > 3.0 else 0.0))
@@ -502,7 +501,6 @@ func _spawn_spilled_paint_burst(count: int) -> void:
 		var dir := (forward_dir * 0.4 + scatter).normalized()
 		PaintBallistics.spawn_paintball(origin, dir, 32.0, self, Color(1.0, 0.72, 0.1))
 
-
 func _ping_crosshair_target() -> void:
 	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
 	var from_pos := camera.global_position
@@ -523,9 +521,9 @@ func _get_stance_label() -> String:
 		return "KNEE-SLIDE"
 	match stance:
 		Stance.CROUCHING:
-			return "CROUCH [C]"
+			return "CROUCH (Holding [C])"
 		Stance.PRONE:
-			return "PRONE [Ctrl]"
+			return "PRONE (Holding [Ctrl])"
 		_:
 			return "STANDING"
 
@@ -534,7 +532,7 @@ func _emit_hud() -> void:
 	hud_state_changed.emit({
 		"bracket_name": bracket.display_name if bracket else "",
 		"hopper": hopper_paint,
-		"hopper_max": bracket.hopper_capacity if bracket else 40,
+		"hopper_max": bracket.hopper_capacity if bracket else 30,
 		"pods": pods_remaining,
 		"pod_cap": bracket.pod_capacity if bracket else 30,
 		"hand": "LEFT HAND" if is_left_handed else "RIGHT HAND",
