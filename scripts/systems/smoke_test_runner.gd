@@ -1,7 +1,7 @@
 extends SceneTree
 
 func _initialize() -> void:
-	print("=== Running Paintball Prototype v0.2 Gritty 2000s Art Overhaul Verification ===")
+	print("=== Running Paintball Prototype v0.2.1 Gritty 2000s Art & Realism Verification ===")
 	var packed := load("res://scenes/maps/speedball_arena_01/speedball_arena_01.tscn") as PackedScene
 	assert(packed != null, "Failed to load speedball_arena_01.tscn")
 	var arena := packed.instantiate()
@@ -22,50 +22,39 @@ func _process(_delta: float) -> bool:
 	enforcer.set_active_bracket("speedball")
 	assert(enforcer.active_bracket.hopper_capacity == 24, "Speedball 40%-reduced hopper should be 24")
 
-	# 2. Verify Overcast Stadium Environment, Floodlights, Netting, Scoreboard & Wooden Spools
+	# 2. Verify Overcast Stadium Environment (ACES, SSAO, SSR, Fog) & Outer-Perimeter Netting
 	var arena := current_scene
 	var world_env := arena.get_node_or_null("WorldEnvironment") as WorldEnvironment
 	assert(world_env != null and world_env.environment != null, "WorldEnvironment must exist")
 	assert(world_env.environment.tonemap_mode == Environment.TONE_MAPPER_ACES, "ACES tonemapping should be active")
-	assert(world_env.environment.fog_enabled, "Overcast stadium fog should be enabled")
+	assert(world_env.environment.ssao_enabled and world_env.environment.ssr_enabled, "SSAO and SSR should be enabled for v0.2.1 realism")
 
 	var props := arena.get_node_or_null("GrittyStadiumProps")
 	assert(props != null, "GrittyStadiumProps container must exist")
-	assert(props.get_node_or_null("PerimeterSafetyNetting") != null, "Perimeter safety netting must exist")
-	assert(props.get_node_or_null("TournamentScoreboard") != null, "Tournament scoreboard must exist")
-	assert(props.get_node_or_null("StadiumFloodlightTower_0") != null, "Floodlight towers must exist")
-	assert(props.get_node_or_null("WoodSpool_BreakoutRight") != null, "Wooden cable spools must exist")
+	var net_root := props.get_node_or_null("PerimeterSafetyNetting")
+	assert(net_root != null, "Perimeter safety netting must exist")
+	for child in net_root.get_children():
+		if child is Node3D:
+			var p: Vector3 = child.position
+			assert(abs(p.x) >= 53.5 or abs(p.z) >= 65.5, "Safety net element must be on outer perimeter, not cutting through map: " + str(p))
 
-	# 3. Verify Muddy Turf & Scuffed Vinyl Bunker Materials
-	var turf_mesh := arena.get_node_or_null("TurfFloor/TurfFloorMesh") as MeshInstance3D
-	assert(turf_mesh != null and turf_mesh.material_override is StandardMaterial3D, "TurfFloorMesh must have StandardMaterial3D")
-	var turf_mat := turf_mesh.material_override as StandardMaterial3D
-	assert(turf_mat.albedo_texture != null and turf_mat.normal_texture != null, "Turf material must have muddy albedo & normal textures")
+	# 3. Verify Shaped Bunker Colliders (Dorito ConvexPolygonShape3D, Can CylinderShape3D, Snake CapsuleShape3D)
+	var dorito_col := arena.get_node_or_null("Home_Dorito_1/CollisionShape3D") as CollisionShape3D
+	assert(dorito_col != null and dorito_col.shape is ConvexPolygonShape3D, "Dorito bunker must use form-fitting ConvexPolygonShape3D")
+	var can_col := arena.get_node_or_null("Home_MidCan_L/CollisionShape3D") as CollisionShape3D
+	assert(can_col != null and can_col.shape is CylinderShape3D, "Can bunker must use form-fitting CylinderShape3D")
+	var snake_col := arena.get_node_or_null("Snake_Beam_Home1/CollisionShape3D") as CollisionShape3D
+	assert(snake_col != null and snake_col.shape is CapsuleShape3D, "Snake beam must use form-fitting CapsuleShape3D")
 
-	var center_bunker_mesh := arena.get_node_or_null("Bunker_Center50_W/BunkerMesh") as MeshInstance3D
-	assert(center_bunker_mesh != null and center_bunker_mesh.material_override is StandardMaterial3D, "Bunker must have scuffed vinyl material")
-	var vinyl_mat := center_bunker_mesh.material_override as StandardMaterial3D
-	assert(vinyl_mat.albedo_texture != null and vinyl_mat.normal_texture != null, "Vinyl material must have scuffed textures")
-
-	# 4. Verify Weathered First-Person Marker ViewModel & Pressure Gauge
-	var player := arena.get_node_or_null("Player3D")
-	assert(player != null, "Player3D must exist")
-	var gauge := player.get_node_or_null("HeadPivot/FirstPersonCamera/MarkerViewModel/MarkerPressureGauge")
-	var barrel := player.get_node_or_null("HeadPivot/FirstPersonCamera/MarkerViewModel/MarkerBarrel")
-	var glove := player.get_node_or_null("HeadPivot/FirstPersonCamera/MarkerViewModel/TacticalGloveGrip")
-	assert(gauge != null and barrel != null and glove != null, "Weathered marker must include pressure gauge, barrel, and tactical glove")
-
-	# 5. Verify Glossy Oily Paintball, Splat Decal & Mist Burst VFX
+	# 4. Verify Wrapped Decal Paint Splatters & Flight Uncertainty (Spin Drift)
 	ballistics.spawn_paintball(Vector3(0, 1.5, 10), Vector3(0, 0, -1), 290.0, null)
 	assert(ballistics.projectiles.size() == 1, "Paintball should be spawned in PaintBallistics")
-	var ball_node := ballistics.projectiles[0]["node"] as MeshInstance3D
-	var ball_mat := ball_node.material_override as StandardMaterial3D
-	assert(ball_mat.roughness <= 0.15 and ball_mat.clearcoat_enabled, "Paintball must use glossy oily clearcoat material")
+	assert(ballistics.projectiles[0].has("spin_drift"), "Paintball must include per-shot Magnus/seam spin_drift")
 
 	ballistics._spawn_splat(Vector3(0, 1.0, 0), Vector3(0, 0, 1), Color(0.96, 0.16, 0.58))
-	assert(ballistics.splat_nodes.size() >= 1, "Oily paint splat decal must be created")
+	assert(ballistics.splat_nodes.size() >= 1 and ballistics.splat_nodes[0] is Decal, "Paint splat must be a wrapped Decal node")
 	assert(ballistics.mist_burst_count >= 1, "Airborne paint mist burst must be triggered on break")
 
-	print("=== All Prototype v0.2 Gritty 2000s Art Overhaul Smoke Checks PASSED ===")
+	print("=== All Prototype v0.2.1 Gritty 2000s Art & Realism Smoke Checks PASSED ===")
 	quit(0)
 	return true

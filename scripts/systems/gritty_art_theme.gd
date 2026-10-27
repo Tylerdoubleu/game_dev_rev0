@@ -1,11 +1,13 @@
 class_name GrittyArtTheme
 extends RefCounted
 
-## v0.2 Gritty 2000s Tournament Paintball Art Overhaul (PB-09 / Issue #10).
-## Centralizes procedural texture loading, overcast stadium environment, floodlight towers,
-## perimeter safety netting, tournament scoreboard, muddy turf with slick puddles,
-## scuffed vinyl bunkers, stacked wooden cable spools, weathered first-person marker with
-## pressure gauge & tactical glove, and oily low-roughness paint splat decals + mist VFX.
+## v0.2.1 Gritty 2000s Tournament Paintball Art & Realism Overhaul.
+## Centralizes procedural texture loading, overcast stadium environment (with SSAO + SSR),
+## outer-perimeter floodlight towers, outer-perimeter safety netting (no interior field obstructions),
+## tournament scoreboards, muddy turf with slick puddles, shaped 3D inflatable bunkers (Doritos,
+## Cans, Aztecs, Wedges, Snake beams) with tight physics colliders and surface-hugging paint smears,
+## stacked wooden cable spools, weathered first-person marker with regulator/macroline/gauge/glove,
+## HPA muzzle gas puff, and oily low-roughness paint splat decals + mist VFX.
 
 const NEON_YELLOW_PAINT := Color(0.98, 0.84, 0.10, 1.0)
 const HOT_PINK_PAINT := Color(0.96, 0.16, 0.58, 1.0)
@@ -15,81 +17,93 @@ static var _texture_cache: Dictionary = {}
 static func load_texture_safe(res_path: String) -> Texture2D:
 	if _texture_cache.has(res_path):
 		return _texture_cache[res_path]
+	var abs_path := ProjectSettings.globalize_path(res_path)
+	if FileAccess.file_exists(abs_path):
+		var img := Image.load_from_file(abs_path)
+		if img != null and not img.is_empty():
+			img.generate_mipmaps()
+			var tex := ImageTexture.create_from_image(img)
+			_texture_cache[res_path] = tex
+			return tex
 	if ResourceLoader.exists(res_path):
 		var loaded := ResourceLoader.load(res_path) as Texture2D
 		if loaded != null:
 			_texture_cache[res_path] = loaded
 			return loaded
-	var abs_path := ProjectSettings.globalize_path(res_path)
-	if FileAccess.file_exists(abs_path):
-		var img := Image.load_from_file(abs_path)
-		if img != null and not img.is_empty():
-			var tex := ImageTexture.create_from_image(img)
-			_texture_cache[res_path] = tex
-			return tex
 	return null
 
 static func create_overcast_stadium_environment() -> Environment:
 	var env := Environment.new()
 	var sky := Sky.new()
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.38, 0.40, 0.43)
-	sky_mat.sky_horizon_color = Color(0.54, 0.56, 0.58)
-	sky_mat.ground_horizon_color = Color(0.32, 0.31, 0.29)
-	sky_mat.ground_bottom_color = Color(0.14, 0.12, 0.10)
-	sky_mat.sky_curve = 0.18
-	sky_mat.sun_angle_max = 45.0
-	sky_mat.sun_curve = 0.25
+	sky_mat.sky_top_color = Color(0.36, 0.39, 0.43)
+	sky_mat.sky_horizon_color = Color(0.55, 0.57, 0.60)
+	sky_mat.ground_horizon_color = Color(0.30, 0.29, 0.27)
+	sky_mat.ground_bottom_color = Color(0.13, 0.11, 0.09)
+	sky_mat.sky_curve = 0.16
+	sky_mat.sun_angle_max = 38.0
+	sky_mat.sun_curve = 0.22
 	sky.sky_material = sky_mat
 
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_color = Color(0.56, 0.58, 0.62)
-	env.ambient_light_sky_contribution = 0.75
-	env.ambient_light_energy = 0.85
+	env.ambient_light_sky_contribution = 0.78
+	env.ambient_light_energy = 0.88
 
 	env.tonemap_mode = Environment.TONE_MAPPER_ACES
-	env.tonemap_exposure = 1.05
-	env.tonemap_white = 6.0
+	env.tonemap_exposure = 1.06
+	env.tonemap_white = 6.2
+
+	# Realism upgrades: Screen-Space Ambient Occlusion (SSAO) & Screen-Space Reflections (SSR)
+	env.ssao_enabled = true
+	env.ssao_radius = 1.15
+	env.ssao_intensity = 1.85
+	env.ssao_power = 1.35
+	env.ssao_detail = 0.55
+
+	env.ssr_enabled = true
+	env.ssr_max_steps = 32
+	env.ssr_fade_in = 0.15
+	env.ssr_fade_out = 2.0
 
 	env.fog_enabled = true
 	env.fog_light_color = Color(0.50, 0.52, 0.55)
 	env.fog_light_energy = 0.85
-	env.fog_density = 0.0042
-	env.fog_aerial_perspective = 0.35
+	env.fog_density = 0.0034
+	env.fog_aerial_perspective = 0.42
 
 	env.glow_enabled = true
-	env.glow_intensity = 0.45
-	env.glow_bloom = 0.08
+	env.glow_intensity = 0.42
+	env.glow_bloom = 0.06
 	return env
 
 static func create_muddy_turf_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.86, 0.84, 0.78)
+	mat.albedo_color = Color(0.84, 0.82, 0.76)
 	mat.albedo_texture = load_texture_safe("res://assets/textures/turf_muddy_albedo.png")
-	mat.roughness = 0.92
+	mat.roughness = 0.90
 	mat.roughness_texture = load_texture_safe("res://assets/textures/turf_muddy_roughness.png")
 	mat.normal_enabled = true
-	mat.normal_scale = 1.45
+	mat.normal_scale = 1.55
 	mat.normal_texture = load_texture_safe("res://assets/textures/turf_muddy_normal.png")
-	mat.uv1_scale = Vector3(28.0, 34.0, 1.0)
+	mat.uv1_scale = Vector3(30.0, 36.0, 1.0)
 	return mat
 
 static func create_scuffed_vinyl_material(base_color: Color) -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	# Desaturate and weather the tournament vinyl color slightly for gritty 2000s realism
-	var weathered := base_color.lerp(Color(0.32, 0.31, 0.29), 0.28)
+	var weathered := base_color.lerp(Color(0.30, 0.29, 0.27), 0.26)
 	mat.albedo_color = weathered
 	mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
-	mat.roughness = 0.48
+	mat.roughness = 0.44
 	mat.roughness_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_roughness.png")
 	mat.normal_enabled = true
-	mat.normal_scale = 1.25
+	mat.normal_scale = 1.30
 	mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png")
 	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.32
-	mat.clearcoat_roughness = 0.28
+	mat.clearcoat = 0.38
+	mat.clearcoat_roughness = 0.24
 	mat.uv1_scale = Vector3(1.8, 1.6, 1.8)
 	return mat
 
@@ -99,7 +113,7 @@ static func create_wood_spool_material() -> StandardMaterial3D:
 	mat.albedo_texture = load_texture_safe("res://assets/textures/wood_spool_albedo.png")
 	mat.roughness = 0.84
 	mat.normal_enabled = true
-	mat.normal_scale = 0.85
+	mat.normal_scale = 0.95
 	mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png")
 	mat.uv1_scale = Vector3(2.0, 2.0, 2.0)
 	return mat
@@ -108,13 +122,13 @@ static func create_oily_paint_material(color: Color, use_splat_mask: bool = fals
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.metallic = 0.08
-	mat.roughness = 0.12
+	mat.roughness = 0.10
 	mat.clearcoat_enabled = true
-	mat.clearcoat = 0.88
-	mat.clearcoat_roughness = 0.08
+	mat.clearcoat = 0.92
+	mat.clearcoat_roughness = 0.06
 	mat.emission_enabled = true
-	mat.emission = color * 0.65
-	mat.emission_energy_multiplier = 0.32
+	mat.emission = color * 0.55
+	mat.emission_energy_multiplier = 0.26
 	if use_splat_mask:
 		var mask_tex := load_texture_safe("res://assets/textures/paint_splat_mask.png")
 		if mask_tex != null:
@@ -138,12 +152,12 @@ static func build_stadium_props(arena_root: Node3D) -> Node3D:
 
 static func _build_mud_puddles_and_tracks(parent: Node3D) -> void:
 	var puddle_mat := StandardMaterial3D.new()
-	puddle_mat.albedo_color = Color(0.11, 0.10, 0.09, 0.92)
-	puddle_mat.metallic = 0.35
-	puddle_mat.roughness = 0.06
+	puddle_mat.albedo_color = Color(0.10, 0.09, 0.08, 0.94)
+	puddle_mat.metallic = 0.42
+	puddle_mat.roughness = 0.04
 	puddle_mat.clearcoat_enabled = true
-	puddle_mat.clearcoat = 0.95
-	puddle_mat.clearcoat_roughness = 0.04
+	puddle_mat.clearcoat = 0.98
+	puddle_mat.clearcoat_roughness = 0.03
 
 	var puddle_specs := [
 		{"pos": Vector3(-1.1, 0.008, 41.8), "size": Vector3(1.8, 0.01, 4.6), "rot_y": -14.0},
@@ -177,21 +191,21 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 	bulb_mat.emission = Color(0.96, 0.94, 0.84)
 	bulb_mat.emission_energy_multiplier = 6.5
 
+	# Placed strictly outside the 108m x 132m playing field perimeter (|X| >= 55m, |Z| >= 67m)
 	var tower_positions := [
-		Vector3(-44.0, 0.0, -44.0),
-		Vector3(44.0, 0.0, -44.0),
-		Vector3(-44.0, 0.0, 0.0),
-		Vector3(44.0, 0.0, 0.0),
-		Vector3(-44.0, 0.0, 44.0),
-		Vector3(44.0, 0.0, 44.0),
-		Vector3(-6.0, 0.0, 16.0),
-		Vector3(14.0, 0.0, 8.0)
+		Vector3(-55.5, 0.0, -64.0),
+		Vector3(55.5, 0.0, -64.0),
+		Vector3(-55.5, 0.0, 0.0),
+		Vector3(55.5, 0.0, 0.0),
+		Vector3(-55.5, 0.0, 64.0),
+		Vector3(55.5, 0.0, 64.0),
+		Vector3(-26.0, 0.0, -67.5),
+		Vector3(26.0, 0.0, -67.5)
 	]
 
 	for i in range(tower_positions.size()):
 		var pos: Vector3 = tower_positions[i]
-		var is_field_backdrop := i >= 6
-		var pole_h := 16.5 if is_field_backdrop else 21.0
+		var pole_h := 22.0
 		var tower := Node3D.new()
 		tower.name = "StadiumFloodlightTower_%d" % i
 		tower.position = pos
@@ -199,8 +213,8 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 
 		var pole := MeshInstance3D.new()
 		var cyl := CylinderMesh.new()
-		cyl.top_radius = 0.16
-		cyl.bottom_radius = 0.24
+		cyl.top_radius = 0.18
+		cyl.bottom_radius = 0.28
 		cyl.height = pole_h
 		pole.mesh = cyl
 		pole.position = Vector3(0.0, pole_h * 0.5, 0.0)
@@ -209,7 +223,7 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 
 		var crossbar := MeshInstance3D.new()
 		var cb_box := BoxMesh.new()
-		cb_box.size = Vector3(2.8, 0.22, 0.28)
+		cb_box.size = Vector3(3.2, 0.24, 0.30)
 		crossbar.mesh = cb_box
 		crossbar.position = Vector3(0.0, pole_h, 0.0)
 		crossbar.material_override = pole_mat
@@ -218,9 +232,9 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 		for b in range(4):
 			var lamp := MeshInstance3D.new()
 			var lbox := BoxMesh.new()
-			lbox.size = Vector3(0.48, 0.36, 0.24)
+			lbox.size = Vector3(0.52, 0.38, 0.24)
 			lamp.mesh = lbox
-			lamp.position = Vector3(-0.96 + b * 0.64, pole_h + 0.24, 0.08)
+			lamp.position = Vector3(-1.05 + b * 0.70, pole_h + 0.26, 0.08)
 			lamp.material_override = bulb_mat
 			tower.add_child(lamp)
 
@@ -228,8 +242,8 @@ static func _build_floodlight_towers(parent: Node3D) -> void:
 			var light := OmniLight3D.new()
 			light.position = Vector3(0.0, pole_h - 0.5, 0.0)
 			light.light_color = Color(0.92, 0.95, 1.0)
-			light.light_energy = 2.4
-			light.omni_range = 62.0
+			light.light_energy = 2.6
+			light.omni_range = 75.0
 			tower.add_child(light)
 
 static func _build_perimeter_safety_netting(parent: Node3D) -> void:
@@ -238,7 +252,7 @@ static func _build_perimeter_safety_netting(parent: Node3D) -> void:
 	parent.add_child(net_root)
 
 	var net_mat := StandardMaterial3D.new()
-	net_mat.albedo_color = Color(0.08, 0.09, 0.10, 0.42)
+	net_mat.albedo_color = Color(0.08, 0.09, 0.10, 0.36)
 	net_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	net_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	net_mat.roughness = 0.9
@@ -248,13 +262,12 @@ static func _build_perimeter_safety_netting(parent: Node3D) -> void:
 	post_mat.metallic = 0.6
 	post_mat.roughness = 0.5
 
+	# Strictly outer boundary walls around the 108m x 132m field (no net cutting through the map!)
 	var wall_specs := [
-		{"pos": Vector3(0.0, 4.2, -52.0), "size": Vector3(88.0, 8.4, 0.08)},
-		{"pos": Vector3(0.0, 4.2, 52.0), "size": Vector3(88.0, 8.4, 0.08)},
-		{"pos": Vector3(-44.0, 4.2, 0.0), "size": Vector3(0.08, 8.4, 104.0)},
-		{"pos": Vector3(44.0, 4.2, 0.0), "size": Vector3(0.08, 8.4, 104.0)},
-		# Inner tournament backdrop netting visible behind midfield
-		{"pos": Vector3(0.0, 3.4, 24.0), "size": Vector3(76.0, 6.8, 0.05)}
+		{"pos": Vector3(0.0, 4.6, -65.6), "size": Vector3(107.2, 9.2, 0.06)},
+		{"pos": Vector3(0.0, 4.6, 65.6), "size": Vector3(107.2, 9.2, 0.06)},
+		{"pos": Vector3(-53.6, 4.6, 0.0), "size": Vector3(0.06, 9.2, 131.2)},
+		{"pos": Vector3(53.6, 4.6, 0.0), "size": Vector3(0.06, 9.2, 131.2)}
 	]
 	for idx in range(wall_specs.size()):
 		var spec: Dictionary = wall_specs[idx]
@@ -267,16 +280,18 @@ static func _build_perimeter_safety_netting(parent: Node3D) -> void:
 		panel.material_override = net_mat
 		net_root.add_child(panel)
 
-	for x_pos in [-36.0, -24.0, -12.0, 0.0, 12.0, 24.0, 36.0]:
-		var post := MeshInstance3D.new()
-		var pcyl := CylinderMesh.new()
-		pcyl.top_radius = 0.07
-		pcyl.bottom_radius = 0.09
-		pcyl.height = 7.2
-		post.mesh = pcyl
-		post.position = Vector3(x_pos, 3.6, 24.0)
-		post.material_override = post_mat
-		net_root.add_child(post)
+	# Outer perimeter support poles along sidelines and backlines only
+	for z_sign in [-1.0, 1.0]:
+		for x_pos in [-48.0, -32.0, -16.0, 0.0, 16.0, 32.0, 48.0]:
+			var post := MeshInstance3D.new()
+			var pcyl := CylinderMesh.new()
+			pcyl.top_radius = 0.08
+			pcyl.bottom_radius = 0.10
+			pcyl.height = 9.4
+			post.mesh = pcyl
+			post.position = Vector3(x_pos, 4.7, 65.6 * z_sign)
+			post.material_override = post_mat
+			net_root.add_child(post)
 
 static func _build_tournament_scoreboards(parent: Node3D) -> void:
 	var board_mat := StandardMaterial3D.new()
@@ -294,9 +309,10 @@ static func _build_tournament_scoreboards(parent: Node3D) -> void:
 	led_mat.emission = Color(0.95, 0.82, 0.45)
 	led_mat.emission_energy_multiplier = 2.6
 
+	# Placed outside the playing turf behind the North/South backlines so they never block lanes
 	var placements := [
-		{"name": "TournamentScoreboard", "pos": Vector3(6.8, 0.0, 23.5), "scale": 1.0},
-		{"name": "TournamentScoreboard_North", "pos": Vector3(0.0, 0.0, -50.0), "scale": 1.6}
+		{"name": "TournamentScoreboard", "pos": Vector3(0.0, 0.0, -64.2), "scale": 1.65},
+		{"name": "TournamentScoreboard_South", "pos": Vector3(0.0, 0.0, 64.2), "scale": 1.65}
 	]
 
 	for p in placements:
@@ -357,29 +373,49 @@ static func _build_wooden_cable_spools(parent: Node3D) -> void:
 		body.position = sp["pos"]
 		parent.add_child(body)
 
-		var total_h := 1.55 if sp["stacked"] else 0.85
-		var col := CollisionShape3D.new()
-		var cshape := CylinderShape3D.new()
-		cshape.radius = 0.82
-		cshape.height = total_h
-		col.shape = cshape
-		col.position = Vector3(0.0, total_h * 0.5, 0.0)
-		body.add_child(col)
+		# Tightly shaped per-tier colliders matching the actual spool geometry
+		var col_bottom := CollisionShape3D.new()
+		col_bottom.name = "BottomSpoolCollider"
+		var cshape_b := CylinderShape3D.new()
+		cshape_b.radius = 0.80
+		cshape_b.height = 0.78
+		col_bottom.shape = cshape_b
+		col_bottom.position = Vector3(0.0, 0.39, 0.0)
+		body.add_child(col_bottom)
 
-		_add_single_wood_spool_meshes(body, Vector3(0.0, 0.0, 0.0), 0.82, 0.78, wood_mat)
+		_add_single_wood_spool_meshes(body, Vector3(0.0, 0.0, 0.0), 0.80, 0.78, wood_mat)
 		if sp["stacked"]:
-			_add_single_wood_spool_meshes(body, Vector3(0.0, 0.78, 0.0), 0.76, 0.74, wood_mat)
-			# Extra upright flange wheel leaning beside the stacked spool (just like concept art!)
+			var col_top := CollisionShape3D.new()
+			col_top.name = "TopSpoolCollider"
+			var cshape_t := CylinderShape3D.new()
+			cshape_t.radius = 0.74
+			cshape_t.height = 0.74
+			col_top.shape = cshape_t
+			col_top.position = Vector3(0.0, 0.78 + 0.37, 0.0)
+			body.add_child(col_top)
+
+			_add_single_wood_spool_meshes(body, Vector3(0.0, 0.78, 0.0), 0.74, 0.74, wood_mat)
+			# Extra upright flange wheel leaning beside the stacked spool + matching tight collider
 			var wheel := MeshInstance3D.new()
 			var wcyl := CylinderMesh.new()
-			wcyl.top_radius = 0.72
-			wcyl.bottom_radius = 0.72
-			wcyl.height = 0.14
+			wcyl.top_radius = 0.70
+			wcyl.bottom_radius = 0.70
+			wcyl.height = 0.12
 			wheel.mesh = wcyl
-			wheel.position = Vector3(0.76, 0.68, 0.32)
+			wheel.position = Vector3(0.74, 0.66, 0.30)
 			wheel.rotation_degrees = Vector3(90.0, -24.0, 8.0)
 			wheel.material_override = wood_mat
 			body.add_child(wheel)
+
+			var wheel_col := CollisionShape3D.new()
+			wheel_col.name = "WheelCollider"
+			var wshape := CylinderShape3D.new()
+			wshape.radius = 0.70
+			wshape.height = 0.12
+			wheel_col.shape = wshape
+			wheel_col.position = wheel.position
+			wheel_col.rotation_degrees = wheel.rotation_degrees
+			body.add_child(wheel_col)
 
 static func _add_single_wood_spool_meshes(parent: Node3D, base_offset: Vector3, radius: float, height: float, mat: Material) -> void:
 	var core := MeshInstance3D.new()
@@ -403,82 +439,260 @@ static func _add_single_wood_spool_meshes(parent: Node3D, base_offset: Vector3, 
 		flange.material_override = mat
 		parent.add_child(flange)
 
+static func _create_tapered_bunker_mesh(size: Vector3, top_x_ratio: float, top_z_ratio: float) -> ArrayMesh:
+	var hx := size.x * 0.5
+	var hy := size.y * 0.5
+	var hz := size.z * 0.5
+	var thx := hx * top_x_ratio
+	var thz := hz * top_z_ratio
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var b0 := Vector3(-hx, -hy, -hz)
+	var b1 := Vector3(hx, -hy, -hz)
+	var b2 := Vector3(hx, -hy, hz)
+	var b3 := Vector3(-hx, -hy, hz)
+
+	var t0 := Vector3(-thx, hy, -thz)
+	var t1 := Vector3(thx, hy, -thz)
+	var t2 := Vector3(thx, hy, thz)
+	var t3 := Vector3(-thx, hy, thz)
+
+	_add_quad_to_st(st, b3, b2, t2, t3) # +Z face
+	_add_quad_to_st(st, b1, b0, t0, t1) # -Z face
+	_add_quad_to_st(st, b2, b1, t1, t2) # +X face
+	_add_quad_to_st(st, b0, b3, t3, t0) # -X face
+	_add_quad_to_st(st, t3, t2, t1, t0) # Top face
+	_add_quad_to_st(st, b0, b1, b2, b3) # Bottom face
+
+	st.generate_normals()
+	st.generate_tangents()
+	return st.commit()
+
+static func _add_quad_to_st(st: SurfaceTool, v0: Vector3, v1: Vector3, v2: Vector3, v3: Vector3) -> void:
+	var n := (v1 - v0).cross(v3 - v0).normalized()
+	st.set_normal(n)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(v0)
+	st.set_normal(n)
+	st.set_uv(Vector2(1.0, 1.0))
+	st.add_vertex(v1)
+	st.set_normal(n)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(v2)
+
+	st.set_normal(n)
+	st.set_uv(Vector2(0.0, 1.0))
+	st.add_vertex(v0)
+	st.set_normal(n)
+	st.set_uv(Vector2(1.0, 0.0))
+	st.add_vertex(v2)
+	st.set_normal(n)
+	st.set_uv(Vector2(0.0, 0.0))
+	st.add_vertex(v3)
+
+static func _create_curved_bunker_splat_mesh(radius_x: float, radius_z: float, arc_center_angle: float, arc_span: float, height_span: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var steps_u := 8
+	var steps_v := 4
+	for iu in range(steps_u):
+		var u0 := float(iu) / float(steps_u)
+		var u1 := float(iu + 1) / float(steps_u)
+		var a0 := arc_center_angle + (u0 - 0.5) * arc_span
+		var a1 := arc_center_angle + (u1 - 0.5) * arc_span
+		for iv in range(steps_v):
+			var v0 := float(iv) / float(steps_v)
+			var v1 := float(iv + 1) / float(steps_v)
+			var y0 := (v0 - 0.5) * height_span
+			var y1 := (v1 - 0.5) * height_span
+
+			var p00 := Vector3(sin(a0) * radius_x, y0, cos(a0) * radius_z)
+			var p10 := Vector3(sin(a1) * radius_x, y0, cos(a1) * radius_z)
+			var p11 := Vector3(sin(a1) * radius_x, y1, cos(a1) * radius_z)
+			var p01 := Vector3(sin(a0) * radius_x, y1, cos(a0) * radius_z)
+
+			var n0 := Vector3(sin(a0), 0.0, cos(a0)).normalized()
+			var n1 := Vector3(sin(a1), 0.0, cos(a1)).normalized()
+
+			st.set_normal(n0); st.set_uv(Vector2(u0, v0)); st.add_vertex(p00)
+			st.set_normal(n1); st.set_uv(Vector2(u1, v0)); st.add_vertex(p10)
+			st.set_normal(n1); st.set_uv(Vector2(u1, v1)); st.add_vertex(p11)
+
+			st.set_normal(n0); st.set_uv(Vector2(u0, v0)); st.add_vertex(p00)
+			st.set_normal(n1); st.set_uv(Vector2(u1, v1)); st.add_vertex(p11)
+			st.set_normal(n0); st.set_uv(Vector2(u0, v1)); st.add_vertex(p01)
+	return st.commit()
+
 static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInstance3D, size: Vector3, base_color: Color) -> void:
 	mesh_inst.material_override = create_scuffed_vinyl_material(base_color)
+	var bname := bunker_body.name
 
-	# Give tall narrow bunkers a dome-topped inflatable silhouette (like real speedball tombstone/temple cans)
-	if size.y >= 1.8 and abs(size.x - size.z) < 0.75:
+	var is_cylinder_can := false
+	var is_horizontal_tube := false
+
+	if "Dorito" in bname:
+		# Authentic tapered 3D pyramid Dorito inflatable
+		mesh_inst.mesh = _create_tapered_bunker_mesh(size, 0.14, 0.14)
+	elif "Wedge" in bname:
+		# Low profile tapered attacking wedge
+		mesh_inst.mesh = _create_tapered_bunker_mesh(size, 0.55, 0.22)
+	elif "Aztec" in bname or "Temple" in bname or "Gate" in bname or "Win" in bname or "Center50_W" in bname or "BackCenter" in bname:
+		# Tapered tournament temple / Aztec / gate prism
+		mesh_inst.mesh = _create_tapered_bunker_mesh(size, 0.72, 0.58)
+	elif "Can" in bname or "Tower" in bname or "Pin" in bname or (size.y >= 1.8 and abs(size.x - size.z) < 0.75):
+		# Cylindrical / dome-topped inflatable Can
+		is_cylinder_can = true
 		var cap := CapsuleMesh.new()
-		cap.radius = max(size.x, size.z) * 0.5
-		cap.height = max(size.y, cap.radius * 2.1)
+		cap.radius = min(size.x, size.z) * 0.48
+		cap.height = max(size.y, cap.radius * 2.05)
+		cap.radial_segments = 24
+		cap.rings = 6
 		mesh_inst.mesh = cap
 	elif size.y < 1.3 and size.z > 3.0:
 		# Horizontal cylindrical bolster / snake beam
+		is_horizontal_tube = true
 		var cyl := CapsuleMesh.new()
-		cyl.radius = size.y * 0.5
+		cyl.radius = min(size.x, size.y) * 0.48
 		cyl.height = size.z
+		cyl.radial_segments = 20
+		cyl.rings = 6
 		mesh_inst.mesh = cyl
 		mesh_inst.rotation_degrees.x = 90.0
+	else:
+		# Slightly tapered inflatable cake / brick / knuckle so edges aren't razor-sharp boxes
+		mesh_inst.mesh = _create_tapered_bunker_mesh(size, 0.86, 0.82)
 
-	# Add glossy neon yellow & hot pink paint splat patches on bunker faces
+	# Tighten and shape the bunker's CollisionShape3D to match the exact 3D mesh geometry!
+	for child in bunker_body.get_children():
+		if child is CollisionShape3D:
+			var cshape_node := child as CollisionShape3D
+			cshape_node.transform = mesh_inst.transform
+			if is_cylinder_can:
+				var cyl_shape := CylinderShape3D.new()
+				cyl_shape.radius = min(size.x, size.z) * 0.48
+				cyl_shape.height = size.y
+				cshape_node.shape = cyl_shape
+			elif is_horizontal_tube:
+				var cap_shape := CapsuleShape3D.new()
+				cap_shape.radius = min(size.x, size.y) * 0.48
+				cap_shape.height = size.z
+				cshape_node.shape = cap_shape
+			else:
+				cshape_node.shape = mesh_inst.mesh.create_convex_shape(true, false)
+			break
+
+	# Wrap weathered neon yellow & hot pink paint splat decals conformally onto the bunker surface
 	var yellow_mat := create_oily_paint_material(NEON_YELLOW_PAINT, true)
 	var pink_mat := create_oily_paint_material(HOT_PINK_PAINT, true)
 
-	for s_idx in range(2):
-		var splat_quad := MeshInstance3D.new()
-		var qm := QuadMesh.new()
-		qm.size = Vector2(0.65, 0.75)
-		splat_quad.mesh = qm
-		var is_pink := ((bunker_body.name.hash() + s_idx) % 2) == 0
-		splat_quad.material_override = pink_mat if is_pink else yellow_mat
-		var z_sign := 1.0 if s_idx == 0 else -1.0
-		splat_quad.position = Vector3((s_idx - 0.5) * 0.25, 0.1, (size.z * 0.5 + 0.02) * z_sign)
-		if z_sign < 0.0:
-			splat_quad.rotation_degrees.y = 180.0
-		bunker_body.add_child(splat_quad)
+	if is_cylinder_can:
+		var rad: float = min(size.x, size.z) * 0.48 + 0.008
+		for s_idx in range(2):
+			var splat_Wrap := MeshInstance3D.new()
+			splat_Wrap.name = "WrappedBunkerSplat_%d" % s_idx
+			var angle := 0.0 if s_idx == 0 else PI
+			splat_Wrap.mesh = _create_curved_bunker_splat_mesh(rad, rad, angle, 0.82, 0.58)
+			var is_pink := ((bname.hash() + s_idx) % 2) == 0
+			splat_Wrap.material_override = pink_mat if is_pink else yellow_mat
+			splat_Wrap.position = Vector3(0.0, 0.08 * (1 if s_idx == 0 else -1), 0.0)
+			bunker_body.add_child(splat_Wrap)
+	elif not is_horizontal_tube:
+		# Conform splat onto tapered front/back faces using exact slope angle
+		for s_idx in range(2):
+			var splat_quad := MeshInstance3D.new()
+			splat_quad.name = "WrappedBunkerSplat_%d" % s_idx
+			var qm := QuadMesh.new()
+			qm.size = Vector2(min(0.55, size.x * 0.42), min(0.55, size.y * 0.36))
+			splat_quad.mesh = qm
+			var is_pink := ((bname.hash() + s_idx) % 2) == 0
+			splat_quad.material_override = pink_mat if is_pink else yellow_mat
+			var z_sign := 1.0 if s_idx == 0 else -1.0
+			var top_z_r := 0.14 if "Dorito" in bname else (0.22 if "Wedge" in bname else (0.58 if ("Aztec" in bname or "Temple" in bname or "Gate" in bname or "Win" in bname or "Center50_W" in bname or "BackCenter" in bname) else 0.82))
+			var z_bottom := size.z * 0.5
+			var z_top := z_bottom * top_z_r
+			var slope_angle := atan2(z_bottom - z_top, size.y)
+			var y_off := -0.08
+			var t: float = (y_off + size.y * 0.5) / maxf(0.01, size.y)
+			var z_at_y := lerpf(z_bottom, z_top, t) + 0.008
+			splat_quad.position = Vector3(0.0, y_off, z_at_y * z_sign)
+			if z_sign > 0.0:
+				splat_quad.rotation = Vector3(-slope_angle, 0.0, 0.0)
+			else:
+				splat_quad.rotation = Vector3(slope_angle, PI, 0.0)
+			bunker_body.add_child(splat_quad)
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
 	# 1. Weathered scratched anodized gunmetal/silver marker body
 	var metal_mat := StandardMaterial3D.new()
-	metal_mat.albedo_color = Color(0.54, 0.55, 0.57)
+	metal_mat.albedo_color = Color(0.50, 0.52, 0.55)
 	metal_mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
-	metal_mat.metallic = 0.85
-	metal_mat.roughness = 0.32
+	metal_mat.metallic = 0.88
+	metal_mat.roughness = 0.28
 	metal_mat.roughness_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_roughness.png")
 	metal_mat.normal_enabled = true
-	metal_mat.normal_scale = 0.9
+	metal_mat.normal_scale = 0.95
 	metal_mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png")
 	body_mesh.material_override = metal_mat
 
-	# 2. Ported competition barrel extending forward from marker body
+	# Anodized tournament blue accent milling & clamping feedneck
+	var anno_blue_mat := StandardMaterial3D.new()
+	anno_blue_mat.albedo_color = Color(0.16, 0.34, 0.68)
+	anno_blue_mat.metallic = 0.90
+	anno_blue_mat.roughness = 0.24
+
+	var feedneck := MeshInstance3D.new()
+	feedneck.name = "ClampingFeedneck"
+	var fn_cyl := CylinderMesh.new()
+	fn_cyl.top_radius = 0.020
+	fn_cyl.bottom_radius = 0.022
+	fn_cyl.height = 0.055
+	feedneck.mesh = fn_cyl
+	feedneck.position = Vector3(0.0, 0.058, 0.04)
+	feedneck.material_override = anno_blue_mat
+	marker_rig.add_child(feedneck)
+
+	# Foregrip Hyper-style inline regulator
+	var reg := MeshInstance3D.new()
+	reg.name = "InlineRegulator"
+	var reg_cyl := CylinderMesh.new()
+	reg_cyl.top_radius = 0.018
+	reg_cyl.bottom_radius = 0.020
+	reg_cyl.height = 0.11
+	reg.mesh = reg_cyl
+	reg.position = Vector3(0.0, -0.075, -0.14)
+	reg.material_override = anno_blue_mat
+	marker_rig.add_child(reg)
+
+	# 2. Two-piece ported competition barrel (anno back + matte carbon/gunmetal front tip)
 	var barrel := MeshInstance3D.new()
 	barrel.name = "MarkerBarrel"
 	var bcyl := CylinderMesh.new()
-	bcyl.top_radius = 0.016
-	bcyl.bottom_radius = 0.020
-	bcyl.height = 0.42
+	bcyl.top_radius = 0.015
+	bcyl.bottom_radius = 0.019
+	bcyl.height = 0.44
 	barrel.mesh = bcyl
 	barrel.rotation_degrees.x = 90.0
-	barrel.position = Vector3(0.0, 0.025, -0.38)
+	barrel.position = Vector3(0.0, 0.025, -0.39)
 	barrel.material_override = metal_mat
 	marker_rig.add_child(barrel)
 
-	# 3. Scuffed dark loader/hopper with yellow & pink tournament paint residue
+	# 3. Scuffed dark loader/hopper with wrapped paint smear
 	var hopper_mat := StandardMaterial3D.new()
-	hopper_mat.albedo_color = Color(0.24, 0.24, 0.25)
+	hopper_mat.albedo_color = Color(0.20, 0.21, 0.23)
 	hopper_mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
-	hopper_mat.roughness = 0.28
+	hopper_mat.roughness = 0.26
 	hopper_mat.clearcoat_enabled = true
-	hopper_mat.clearcoat = 0.65
-	hopper_mat.clearcoat_roughness = 0.18
+	hopper_mat.clearcoat = 0.68
+	hopper_mat.clearcoat_roughness = 0.16
 	hopper_mesh.material_override = hopper_mat
 
-	# Paint smear decals on hopper & marker body
 	var yellow_smear := MeshInstance3D.new()
 	yellow_smear.name = "HopperPaintSmearYellow"
 	var ys_sphere := SphereMesh.new()
-	ys_sphere.radius = 0.087
-	ys_sphere.height = 0.142
+	ys_sphere.radius = 0.0865
+	ys_sphere.height = 0.1415
 	yellow_smear.mesh = ys_sphere
 	yellow_smear.position = hopper_mesh.position
 	yellow_smear.material_override = create_oily_paint_material(NEON_YELLOW_PAINT, true)
@@ -518,6 +732,7 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	gauge_root.add_child(dial)
 
 	var needle := MeshInstance3D.new()
+	needle.name = "GaugeNeedle"
 	var nbox := BoxMesh.new()
 	nbox.size = Vector3(0.004, 0.022, 0.016)
 	needle.mesh = nbox
@@ -543,6 +758,46 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	glove.material_override = glove_mat
 	marker_rig.add_child(glove)
 
+static func spawn_muzzle_gas_puff(scene_root: Node, muzzle_pos: Vector3, forward_dir: Vector3) -> void:
+	if scene_root == null:
+		return
+	var puff_root := Node3D.new()
+	puff_root.name = "HpaMuzzleVaporPuff"
+	scene_root.add_child(puff_root)
+	puff_root.global_position = muzzle_pos
+
+	var particles := CPUParticles3D.new()
+	particles.emitting = true
+	particles.one_shot = true
+	particles.explosiveness = 0.95
+	particles.amount = 10
+	particles.lifetime = 0.18
+
+	var puff_mesh := SphereMesh.new()
+	puff_mesh.radius = 0.022
+	puff_mesh.height = 0.044
+	var puff_mat := StandardMaterial3D.new()
+	puff_mat.albedo_color = Color(0.88, 0.92, 0.96, 0.28)
+	puff_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	puff_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	puff_mesh.material = puff_mat
+	particles.mesh = puff_mesh
+
+	particles.direction = forward_dir.normalized()
+	particles.spread = 22.0
+	particles.initial_velocity_min = 3.5
+	particles.initial_velocity_max = 8.0
+	particles.damping_min = 18.0
+	particles.damping_max = 26.0
+	particles.gravity = Vector3(0.0, 0.8, 0.0)
+	puff_root.add_child(particles)
+
+	var timer := scene_root.get_tree().create_timer(0.25)
+	timer.timeout.connect(func() -> void:
+		if is_instance_valid(puff_root):
+			puff_root.queue_free()
+	)
+
 static func spawn_paint_mist_burst(scene_root: Node, pos: Vector3, normal: Vector3, color: Color) -> Node3D:
 	var burst_root := Node3D.new()
 	burst_root.name = "PaintMistBurst"
@@ -554,12 +809,12 @@ static func spawn_paint_mist_burst(scene_root: Node, pos: Vector3, normal: Vecto
 	particles.emitting = true
 	particles.one_shot = true
 	particles.explosiveness = 0.92
-	particles.amount = 22
+	particles.amount = 24
 	particles.lifetime = 0.55
 
 	var droplet_mesh := SphereMesh.new()
-	droplet_mesh.radius = 0.028
-	droplet_mesh.height = 0.056
+	droplet_mesh.radius = 0.026
+	droplet_mesh.height = 0.052
 	droplet_mesh.material = create_oily_paint_material(color, false)
 	particles.mesh = droplet_mesh
 

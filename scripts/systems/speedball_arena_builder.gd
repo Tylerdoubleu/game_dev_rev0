@@ -151,6 +151,7 @@ func _spawn_bunker(bunker_name: String, pos: Vector3, size: Vector3, color: Colo
 	body.position = pos + Vector3(0, size.y * 0.5, 0)
 
 	var col := CollisionShape3D.new()
+	col.name = "CollisionShape3D"
 	var shape := BoxShape3D.new()
 	shape.size = size
 	col.shape = shape
@@ -161,8 +162,8 @@ func _spawn_bunker(bunker_name: String, pos: Vector3, size: Vector3, color: Colo
 	var bm := BoxMesh.new()
 	bm.size = size
 	mesh.mesh = bm
-	GrittyArtThemeScript.decorate_bunker_mesh(body, mesh, size, color)
 	body.add_child(mesh)
+	GrittyArtThemeScript.decorate_bunker_mesh(body, mesh, size, color)
 	add_child(body)
 
 func _spawn_opfor_bots() -> void:

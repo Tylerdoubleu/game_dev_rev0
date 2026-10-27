@@ -438,7 +438,12 @@ func _fire_single_paintball(bracket: Resource) -> void:
 	var rand_y := randf_range(-spread_rad, spread_rad)
 	var shot_dir := (forward_dir + right_dir * rand_x + up_dir * rand_y).normalized()
 
-	var muzzle_pos := marker_rig.global_position + forward_dir * 0.42
+	# Pneumatic bolt kick + subtle camera micro-recoil + HPA muzzle vapor puff
+	pitch = clamp(pitch + deg_to_rad(randf_range(0.18, 0.36)), deg_to_rad(-80.0), deg_to_rad(80.0))
+	yaw += deg_to_rad(randf_range(-0.16, 0.16))
+	rotation.y = yaw
+	var muzzle_pos := marker_rig.global_position + forward_dir * 0.46
+	GrittyArtThemeScript.spawn_muzzle_gas_puff(get_tree().current_scene, muzzle_pos, forward_dir)
 	var paint_col := GrittyArtThemeScript.HOT_PINK_PAINT if (_shot_counter % 2 == 0) else GrittyArtThemeScript.NEON_YELLOW_PAINT
 	PaintBallistics.spawn_paintball(muzzle_pos, shot_dir, bracket.muzzle_fps, self, paint_col)
 	_emit_hud()
