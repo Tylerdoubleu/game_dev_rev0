@@ -1,6 +1,6 @@
 extends Node
 
-## Manages 3v3 round loop, target elimination counts, and round resets.
+## Manages round loop, target elimination counts, and runtime InputMap bindings.
 ## TODO(PB-05 / Issue #5): Add Center Flag / CTF objectives, tactical bot AI, and multiplayer lobbies.
 
 signal round_updated(round_num: int, remaining_enemies: int, round_time_left: float)
@@ -8,7 +8,7 @@ signal round_won(round_num: int)
 
 var current_round: int = 1
 var remaining_enemies: int = 0
-var round_time_left: float = 180.0
+var round_time_left: float = 240.0
 var round_active: bool = false
 
 func _ready() -> void:
@@ -21,7 +21,7 @@ func _process(delta: float) -> void:
 
 func register_round_start(enemy_count: int) -> void:
 	remaining_enemies = enemy_count
-	round_time_left = 180.0
+	round_time_left = 240.0
 	round_active = true
 	round_updated.emit(current_round, remaining_enemies, round_time_left)
 
@@ -43,8 +43,8 @@ func _setup_input_map() -> void:
 	_bind_key("move_left", KEY_A)
 	_bind_key("move_right", KEY_D)
 	_bind_key("sprint", KEY_SHIFT)
-	_bind_key("crouch_slide", KEY_CTRL)
 	_bind_key("crouch_slide", KEY_C)
+	_bind_key("prone_dive", KEY_CTRL)
 	_bind_key("lean_left", KEY_Q)
 	_bind_key("lean_right", KEY_E)
 	_bind_key("swap_shoulder", KEY_X)

@@ -1,18 +1,14 @@
 ; Engine configuration file.
 ; It's best edited using the editor UI and not directly,
 ; since the parameters that go here are not all obvious.
-;
-; Format:
-;   [section] ; section goes between []
-;   param=value ; assign values to parameters
 
 config_version=5
 
 [application]
 
 config/name="First-Person Paintball (Rev0 Prototype)"
-config/description="Lightweight 3D First-Person Paintball prototype (v0.1.0-playtest)"
-config/version="0.1.0-playtest"
+config/description="Lightweight 3D First-Person Paintball prototype (v0.1.1-playtest)"
+config/version="0.1.1-playtest"
 run/main_scene="res://scenes/maps/speedball_arena_01/speedball_arena_01.tscn"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"

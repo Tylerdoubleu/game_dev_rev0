@@ -1,41 +1,73 @@
 extends CharacterBody3D
 
-## First-person paintball player controller for v0.1.0-playtest.
-## TODO(PB-01 / Issue #1): Upgrade discrete Q/E lean and slide to analog peeking and hopper/elbow hitboxes.
-## TODO(PB-03 / Issue #3): Upgrade timed reload bar to staged manual pod pour, physical spills, and spatial audio cues.
+## First-person paintball player controller for v0.1.1-playtest.
+## Features:
+## - Speedball: Separate LMB & RMB triggers (walk the trigger!) capped at 10.5 BPS total
+## - Woodsball (1-Pull): Enforce holding BOTH LMB + RMB together to pull the heavy mechanical trigger
+## - Pump: LMB fires, RMB racks the pump handle
+## - Stances: Standing, Crouch (C), Knee-Slide (Shift+C), Prone (Ctrl), Superman Dive (Shift+Ctrl)
+## - Head/marker bobbing when moving + 3D Pod pour animation on reload (R)
 
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
 
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
 
-const WALK_SPEED: float = 5.4
-const SPRINT_SPEED: float = 8.8
-const SLIDE_SPEED: float = 11.2
-const SLIDE_DURATION: float = 0.55
-const LEAN_OFFSET_X: float = 0.48
-const LEAN_ROLL_DEG: float = 11.0
+enum Stance {
+	STANDING,
+	CROUCHING,
+	PRONE
+}
+
+const WALK_SPEED: float = 6.2
+const SPRINT_SPEED: float = 10.4
+const CROUCH_SPEED: float = 3.6
+const PRONE_SPEED: float = 1.85
+const SLIDE_INITIAL_SPEED: float = 17.5
+const SLIDE_DURATION: float = 0.85
+const DIVE_INITIAL_SPEED: float = 19.5
+const DIVE_DURATION: float = 0.95
+
+const HEIGHT_STANDING: float = 1.58
+const HEIGHT_CROUCH: float = 0.92
+const HEIGHT_SLIDE: float = 0.68
+const HEIGHT_PRONE: float = 0.36
+const HEIGHT_DIVE: float = 0.42
+
+const BASE_FOV: float = 82.0
+const SLIDE_FOV: float = 96.0
+const DIVE_FOV: float = 100.0
+
+const LEAN_OFFSET_X: float = 0.52
+const LEAN_ROLL_DEG: float = 11.5
 const MOUSE_SENSITIVITY: float = 0.0024
 
 var head_pivot: Node3D
 var camera: Camera3D
 var marker_rig: Node3D
 var hopper_mesh: MeshInstance3D
+var hopper_lid_mesh: MeshInstance3D
+var pod_rig: Node3D
+var pod_stream_mesh: MeshInstance3D
 
 var yaw: float = 0.0
 var pitch: float = 0.0
 var current_lean: float = 0.0
 var is_left_handed: bool = false
-var is_crouching: bool = false
-var slide_timer: float = 0.0
-var slide_dir: Vector3 = Vector3.ZERO
 
-var hopper_paint: int = 200
-var pods_remaining: int = 4
+var stance: Stance = Stance.STANDING
+var slide_timer: float = 0.0
+var dive_timer: float = 0.0
+var slide_dir: Vector3 = Vector3.ZERO
+var bob_time: float = 0.0
+
+var hopper_paint: int = 40
+var pods_remaining: int = 3
 var is_reloading_pod: bool = false
 var reload_timer: float = 0.0
-var reload_duration: float = 2.0
+var reload_duration: float = 2.1
 var pump_racked: bool = true
+var woodsball_trigger_latched: bool = false
 var time_since_last_shot: float = 99.0
 
 func _ready() -> void:
@@ -56,12 +88,12 @@ func _build_player_nodes() -> void:
 
 	head_pivot = Node3D.new()
 	head_pivot.name = "HeadPivot"
-	head_pivot.position = Vector3(0, 1.55, 0)
+	head_pivot.position = Vector3(0, HEIGHT_STANDING, 0)
 	add_child(head_pivot)
 
 	camera = Camera3D.new()
 	camera.name = "FirstPersonCamera"
-	camera.fov = 82.0
+	camera.fov = BASE_FOV
 	camera.current = true
 	head_pivot.add_child(camera)
 
@@ -72,7 +104,7 @@ func _build_player_nodes() -> void:
 
 	var body_mesh := MeshInstance3D.new()
 	var box := BoxMesh.new()
-	box.size = Vector3(0.06, 0.11, 0.48)
+	box.size = Vector3(0.06, 0.11, 0.50)
 	body_mesh.mesh = box
 	var marker_mat := StandardMaterial3D.new()
 	marker_mat.albedo_color = Color(0.15, 0.55, 0.95)
@@ -92,13 +124,64 @@ func _build_player_nodes() -> void:
 	hopper_mesh.material_override = hopper_mat
 	marker_rig.add_child(hopper_mesh)
 
+	# Hopper flip lid (opens during pod reload)
+	hopper_lid_mesh = MeshInstance3D.new()
+	var lid_cyl := CylinderMesh.new()
+	lid_cyl.top_radius = 0.045
+	lid_cyl.bottom_radius = 0.045
+	lid_cyl.height = 0.012
+	hopper_lid_mesh.mesh = lid_cyl
+	hopper_lid_mesh.position = Vector3(0.0, 0.175, 0.04)
+	var lid_mat := StandardMaterial3D.new()
+	lid_mat.albedo_color = Color(0.2, 0.8, 1.0, 0.85)
+	hopper_lid_mesh.material_override = lid_mat
+	marker_rig.add_child(hopper_lid_mesh)
+
+	# 3D Pod Viewmodel for reload animation
+	pod_rig = Node3D.new()
+	pod_rig.name = "PodReloadRig"
+	pod_rig.position = Vector3(-0.22, -0.35, -0.1)
+	pod_rig.visible = false
+	marker_rig.add_child(pod_rig)
+
+	var pod_body := MeshInstance3D.new()
+	var pod_cyl := CylinderMesh.new()
+	pod_cyl.top_radius = 0.042
+	pod_cyl.bottom_radius = 0.042
+	pod_cyl.height = 0.24
+	pod_body.mesh = pod_cyl
+	var pod_mat := StandardMaterial3D.new()
+	pod_mat.albedo_color = Color(0.92, 0.95, 0.98)
+	pod_mat.roughness = 0.25
+	pod_body.material_override = pod_mat
+	pod_rig.add_child(pod_body)
+
+	# Paintball stream pouring out of pod into hopper
+	pod_stream_mesh = MeshInstance3D.new()
+	var stream_cyl := CylinderMesh.new()
+	stream_cyl.top_radius = 0.022
+	stream_cyl.bottom_radius = 0.028
+	stream_cyl.height = 0.16
+	pod_stream_mesh.mesh = stream_cyl
+	pod_stream_mesh.position = Vector3(0.0, -0.16, 0.0)
+	var stream_mat := StandardMaterial3D.new()
+	stream_mat.albedo_color = Color(1.0, 0.5, 0.05)
+	stream_mat.emission_enabled = true
+	stream_mat.emission = Color(1.0, 0.4, 0.0)
+	stream_mat.emission_energy_multiplier = 0.9
+	pod_stream_mesh.material_override = stream_mat
+	pod_rig.add_child(pod_stream_mesh)
+
 func _on_bracket_changed(bracket: Resource) -> void:
 	if bracket == null:
 		return
 	hopper_paint = bracket.hopper_capacity
 	pods_remaining = bracket.pod_count
 	is_reloading_pod = false
+	if pod_rig:
+		pod_rig.visible = false
 	pump_racked = true
+	woodsball_trigger_latched = false
 	status_banner_sent.emit("Switched Bracket: %s" % bracket.display_name, Color(0.4, 0.85, 1.0))
 	_emit_hud()
 
@@ -133,21 +216,22 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("reset_round"):
 		GameManager.reset_round()
 
+	# Firing triggers (Speedball dual-trigger walk, Woodsball LMB+RMB simultaneous pull, Pump LMB->RMB)
 	if event.is_action_pressed("fire_primary"):
-		_attempt_fire(false)
+		_handle_trigger_press(false)
 	elif event.is_action_pressed("fire_secondary_walk"):
-		_attempt_fire(true)
+		_handle_trigger_press(true)
 
 func _physics_process(delta: float) -> void:
 	time_since_last_shot += delta
 
-	var bracket: Resource = GearRuleEnforcer.active_bracket
-	if bracket and bracket.trigger_mode == GearBracketDataScript.TriggerMode.RAMP_10_5:
-		if Input.is_action_pressed("fire_primary"):
-			_attempt_fire(false)
+	# Reset Woodsball 1-pull latch once either mouse button is released
+	if woodsball_trigger_latched:
+		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
+			woodsball_trigger_latched = false
 
 	_update_movement_and_stance(delta)
-	_update_lean_and_viewmodel(delta)
+	_update_lean_bob_and_viewmodel(delta)
 	_update_pod_reload(delta)
 
 func _update_movement_and_stance(delta: float) -> void:
@@ -157,32 +241,67 @@ func _update_movement_and_stance(delta: float) -> void:
 	).normalized()
 
 	var move_dir := (transform.basis * Vector3(input_vec.x, 0.0, input_vec.y)).normalized()
-	var wants_sprint := Input.is_action_pressed("sprint") and input_vec.y < -0.1
+	var shift_held := Input.is_action_pressed("sprint")
+	var wants_sprint := shift_held and input_vec.y < -0.1 and slide_timer <= 0.0 and dive_timer <= 0.0
 
+	# C: Sprint + C -> Knee-Slide, otherwise toggle Crouch
 	if Input.is_action_just_pressed("crouch_slide"):
-		if wants_sprint and slide_timer <= 0.0 and move_dir.length() > 0.1:
+		if shift_held and slide_timer <= 0.0 and dive_timer <= 0.0:
 			slide_timer = SLIDE_DURATION
-			slide_dir = move_dir
-			is_crouching = true
+			slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
+			stance = Stance.CROUCHING
+			status_banner_sent.emit("KNEE-SLIDE!", Color(0.35, 0.95, 1.0))
 			if is_reloading_pod:
 				_spill_active_pod("Knee-slide interrupted reload — pod spilled!")
 		else:
-			is_crouching = not is_crouching
+			if stance == Stance.CROUCHING:
+				stance = Stance.STANDING
+			else:
+				stance = Stance.CROUCHING
+		_emit_hud()
+
+	# Ctrl: Shift + Ctrl -> Superman Dive into Prone, otherwise toggle Prone
+	if Input.is_action_just_pressed("prone_dive"):
+		if shift_held and dive_timer <= 0.0 and slide_timer <= 0.0:
+			dive_timer = DIVE_DURATION
+			slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
+			stance = Stance.PRONE
+			status_banner_sent.emit("SUPERMAN DIVE INTO PRONE!", Color(1.0, 0.82, 0.25))
+			if is_reloading_pod:
+				_spill_active_pod("Superman dive interrupted reload — pod spilled!")
+		else:
+			if stance == Stance.PRONE:
+				stance = Stance.STANDING
+			else:
+				stance = Stance.PRONE
+		_emit_hud()
+
+	# Pressing Sprint while Crouched or Prone stands the player up to sprint
+	if wants_sprint and stance != Stance.STANDING:
+		stance = Stance.STANDING
+		_emit_hud()
 
 	if wants_sprint and is_reloading_pod:
 		_spill_active_pod("Sprint interrupted reload — pod spilled!")
 
-	if slide_timer > 0.0:
+	if dive_timer > 0.0:
+		dive_timer -= delta
+		var dive_factor: float = clamp(dive_timer / DIVE_DURATION, 0.15, 1.0)
+		velocity.x = slide_dir.x * DIVE_INITIAL_SPEED * dive_factor
+		velocity.z = slide_dir.z * DIVE_INITIAL_SPEED * dive_factor
+	elif slide_timer > 0.0:
 		slide_timer -= delta
-		var slide_factor: float = clamp(slide_timer / SLIDE_DURATION, 0.25, 1.0)
-		velocity.x = slide_dir.x * SLIDE_SPEED * slide_factor
-		velocity.z = slide_dir.z * SLIDE_SPEED * slide_factor
+		var slide_factor: float = clamp(slide_timer / SLIDE_DURATION, 0.2, 1.0)
+		velocity.x = slide_dir.x * SLIDE_INITIAL_SPEED * slide_factor
+		velocity.z = slide_dir.z * SLIDE_INITIAL_SPEED * slide_factor
 	else:
 		var target_speed: float = WALK_SPEED
 		if wants_sprint:
 			target_speed = SPRINT_SPEED
-		elif is_crouching:
-			target_speed = WALK_SPEED * 0.55
+		elif stance == Stance.CROUCHING:
+			target_speed = CROUCH_SPEED
+		elif stance == Stance.PRONE:
+			target_speed = PRONE_SPEED
 		velocity.x = move_dir.x * target_speed
 		velocity.z = move_dir.z * target_speed
 
@@ -193,7 +312,7 @@ func _update_movement_and_stance(delta: float) -> void:
 
 	move_and_slide()
 
-func _update_lean_and_viewmodel(delta: float) -> void:
+func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	var target_lean: float = 0.0
 	if Input.is_action_pressed("lean_left"):
 		target_lean = -1.0
@@ -203,18 +322,70 @@ func _update_lean_and_viewmodel(delta: float) -> void:
 		is_left_handed = false
 
 	current_lean = lerp(current_lean, target_lean, min(1.0, delta * 12.0))
-	var target_height: float = 1.02 if (is_crouching or slide_timer > 0.0) else 1.55
-	head_pivot.position.y = lerp(head_pivot.position.y, target_height, min(1.0, delta * 12.0))
-	head_pivot.position.x = current_lean * LEAN_OFFSET_X
-	camera.rotation.x = pitch
-	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG)
 
-	var target_hand_x: float = -0.24 if is_left_handed else 0.24
-	var reload_dip_y: float = -0.34 if is_reloading_pod else -0.22
+	# Base camera height per stance / slide / dive
+	var base_height: float = HEIGHT_STANDING
+	var target_fov: float = BASE_FOV
+	var slide_roll_deg: float = 0.0
+	var dive_pitch_offset: float = 0.0
+
+	if dive_timer > 0.0:
+		base_height = HEIGHT_DIVE
+		target_fov = DIVE_FOV
+		dive_pitch_offset = deg_to_rad(-8.0 * (dive_timer / DIVE_DURATION))
+	elif slide_timer > 0.0:
+		base_height = HEIGHT_SLIDE
+		target_fov = SLIDE_FOV
+		slide_roll_deg = -7.5 if not is_left_handed else 7.5
+	elif stance == Stance.CROUCHING:
+		base_height = HEIGHT_CROUCH
+	elif stance == Stance.PRONE:
+		base_height = HEIGHT_PRONE
+
+	# Up-and-down view & marker bobbing when moving on ground
+	var horiz_speed: float = Vector2(velocity.x, velocity.z).length()
+	var bob_y: float = 0.0
+	var bob_x: float = 0.0
+	if horiz_speed > 0.4 and slide_timer <= 0.0 and dive_timer <= 0.0:
+		var bob_freq: float = 13.5 if horiz_speed > 7.5 else (9.5 if stance == Stance.STANDING else 6.8)
+		var bob_amp_y: float = 0.095 if horiz_speed > 7.5 else (0.055 if stance == Stance.STANDING else 0.032)
+		bob_time += delta * bob_freq
+		bob_y = sin(bob_time) * bob_amp_y
+		bob_x = cos(bob_time * 0.5) * bob_amp_y * 0.65
+	else:
+		bob_time = 0.0
+
+	head_pivot.position.y = lerp(head_pivot.position.y, base_height + bob_y, min(1.0, delta * 15.0))
+	head_pivot.position.x = lerp(head_pivot.position.x, current_lean * LEAN_OFFSET_X + bob_x, min(1.0, delta * 14.0))
+	camera.fov = lerp(camera.fov, target_fov, min(1.0, delta * 10.0))
+	camera.rotation.x = clamp(pitch + dive_pitch_offset, deg_to_rad(-85.0), deg_to_rad(85.0))
+	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG + slide_roll_deg)
+
+	# Marker viewmodel + Pod reload animation
+	var hand_sign: float = -1.0 if is_left_handed else 1.0
+	var target_hand_x: float = 0.24 * hand_sign + bob_x * 0.35
+	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 + bob_y * 0.45)
 	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
-	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 10.0))
+	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
+	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else 0.0
+	marker_rig.rotation.z = lerp(marker_rig.rotation.z, target_marker_roll, min(1.0, delta * 12.0))
 
-func _attempt_fire(is_secondary_trigger: bool) -> void:
+	if is_reloading_pod:
+		var pct: float = clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0)
+		pod_rig.visible = true
+		hopper_lid_mesh.rotation.z = deg_to_rad(110.0 * hand_sign)
+		hopper_lid_mesh.position.x = -0.05 * hand_sign
+		# Animate pod rising from pack (0..0.25), pouring with shake (0.25..0.85), and dropping away (0.85..1.0)
+		var shake_y: float = sin(pct * 45.0) * 0.015 if (pct > 0.2 and pct < 0.88) else 0.0
+		pod_rig.position = Vector3(-0.04 * hand_sign, 0.34 + shake_y, 0.04)
+		pod_rig.rotation = Vector3(deg_to_rad(15.0), 0.0, deg_to_rad(-148.0 * hand_sign))
+		pod_stream_mesh.visible = (pct > 0.18 and pct < 0.88)
+	else:
+		pod_rig.visible = false
+		hopper_lid_mesh.rotation.z = 0.0
+		hopper_lid_mesh.position.x = 0.0
+
+func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 	if is_reloading_pod:
 		return
 
@@ -222,25 +393,41 @@ func _attempt_fire(is_secondary_trigger: bool) -> void:
 	if bracket == null:
 		return
 
+	# 1. Speedball Mode: LMB and RMB are two separate triggers (walk the trigger!) capped at 10.5 BPS
+	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.RAMP_10_5:
+		_fire_single_paintball(bracket)
+		return
+
+	# 2. Woodsball Mode (1-Pull): Enforce holding/pressing BOTH LMB and RMB together
+	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
+		var both_held := Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")
+		if not both_held:
+			status_banner_sent.emit("1-Pull Mode: Press & hold BOTH [LMB + RMB] together to fire!", Color(1.0, 0.75, 0.25))
+			return
+		if woodsball_trigger_latched:
+			return
+		woodsball_trigger_latched = true
+		_fire_single_paintball(bracket)
+		return
+
+	# 3. Pump Mode: LMB shoots, RMB racks the pump handle
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
 		if is_secondary_trigger:
 			pump_racked = true
-			status_banner_sent.emit("Pump handle racked!", Color(0.8, 0.95, 1.0))
+			status_banner_sent.emit("Pump handle racked! Ready to fire [LMB].", Color(0.8, 0.95, 1.0))
 			_emit_hud()
 			return
 		elif not pump_racked:
-			status_banner_sent.emit("Pump not racked! Press RMB to rack pump.", Color(1.0, 0.65, 0.2))
+			status_banner_sent.emit("Pump not racked! Press [RMB] to rack pump.", Color(1.0, 0.65, 0.2))
 			return
+		_fire_single_paintball(bracket)
 
-	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL and is_secondary_trigger:
-		status_banner_sent.emit("Woodsball Bracket: Strict 1-Pull Semi (RMB walking disabled)", Color(1.0, 0.7, 0.2))
-		return
-
+func _fire_single_paintball(bracket: Resource) -> void:
 	if time_since_last_shot < GearRuleEnforcer.get_min_shot_interval():
 		return
 
 	if hopper_paint <= 0:
-		status_banner_sent.emit("Hopper Empty! Press [R] behind cover to reload a pod.", Color(1.0, 0.35, 0.35))
+		status_banner_sent.emit("HOPPER EMPTY! Press [R] behind cover to pour a pod.", Color(1.0, 0.35, 0.35))
 		return
 
 	hopper_paint -= 1
@@ -248,7 +435,10 @@ func _attempt_fire(is_secondary_trigger: bool) -> void:
 	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
 		pump_racked = false
 
-	var spread_rad := deg_to_rad(0.9 + (1.4 if velocity.length() > 2.5 else 0.0))
+	# Slight recoil kick on marker viewmodel
+	marker_rig.position.z = -0.39
+
+	var spread_rad := deg_to_rad(0.75 + (1.3 if velocity.length() > 3.0 else 0.0))
 	var forward_dir := -camera.global_transform.basis.z.normalized()
 	var right_dir := camera.global_transform.basis.x.normalized()
 	var up_dir := camera.global_transform.basis.y.normalized()
@@ -265,7 +455,7 @@ func _start_pod_reload() -> void:
 	if bracket == null or is_reloading_pod:
 		return
 	if pods_remaining <= 0:
-		status_banner_sent.emit("No pods remaining!", Color(1.0, 0.3, 0.3))
+		status_banner_sent.emit("OUT OF PODS! Every shot counts!", Color(1.0, 0.3, 0.3))
 		return
 	if hopper_paint >= bracket.hopper_capacity:
 		status_banner_sent.emit("Hopper is already full!", Color(0.75, 0.9, 1.0))
@@ -274,10 +464,11 @@ func _start_pod_reload() -> void:
 	pods_remaining -= 1
 	is_reloading_pod = true
 	reload_timer = reload_duration
-	status_banner_sent.emit("Pouring pod into hopper... DO NOT sprint or slide!", Color(1.0, 0.85, 0.25))
+	status_banner_sent.emit("Pouring pod into hopper... DO NOT sprint, slide, or dive!", Color(1.0, 0.85, 0.25))
 	_emit_hud()
 
 func _update_pod_reload(delta: float) -> void:
+	marker_rig.position.z = lerp(marker_rig.position.z, -0.45, min(1.0, delta * 16.0))
 	if not is_reloading_pod:
 		return
 	reload_timer -= delta
@@ -304,25 +495,39 @@ func _spill_active_pod(reason: String) -> void:
 func _ping_crosshair_target() -> void:
 	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
 	var from_pos := camera.global_position
-	var to_pos := from_pos - camera.global_transform.basis.z * 80.0
+	var to_pos := from_pos - camera.global_transform.basis.z * 140.0
 	var query := PhysicsRayQueryParameters3D.create(from_pos, to_pos)
 	query.exclude = [get_rid()]
 	var hit: Dictionary = space_state.intersect_ray(query)
 	if not hit.is_empty():
 		var col: Object = hit["collider"]
 		var label: String = col.name if col else "Bunker"
-		IntelBus.report_spot(label, hit["position"], 3.0)
+		IntelBus.report_spot(label, hit["position"], 3.5)
 		status_banner_sent.emit("PINGED: %s" % label, Color(1.0, 0.9, 0.2))
+
+func _get_stance_label() -> String:
+	if dive_timer > 0.0:
+		return "SUPERMAN DIVE"
+	if slide_timer > 0.0:
+		return "KNEE-SLIDE"
+	match stance:
+		Stance.CROUCHING:
+			return "CROUCH [C]"
+		Stance.PRONE:
+			return "PRONE [Ctrl]"
+		_:
+			return "STANDING"
 
 func _emit_hud() -> void:
 	var bracket: Resource = GearRuleEnforcer.active_bracket
 	hud_state_changed.emit({
 		"bracket_name": bracket.display_name if bracket else "",
 		"hopper": hopper_paint,
-		"hopper_max": bracket.hopper_capacity if bracket else 200,
+		"hopper_max": bracket.hopper_capacity if bracket else 40,
 		"pods": pods_remaining,
-		"pod_cap": bracket.pod_capacity if bracket else 140,
+		"pod_cap": bracket.pod_capacity if bracket else 30,
 		"hand": "LEFT HAND" if is_left_handed else "RIGHT HAND",
+		"stance": _get_stance_label(),
 		"reloading": is_reloading_pod,
 		"reload_pct": clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0) if is_reloading_pod else 0.0,
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,

@@ -4,10 +4,10 @@ extends Node
 ## TODO(PB-02 / Issue #2): Add Magnus backspin lift, crosswind vector drift, and projected Decal splat normal maps.
 
 const GRAVITY: float = 9.81
-const AIR_DRAG: float = 0.38
+const AIR_DRAG: float = 0.24
 const FPS_TO_MPS: float = 0.3048
-const MAX_ACTIVE_BALLS: int = 160
-const MAX_SPLATS: int = 120
+const MAX_ACTIVE_BALLS: int = 200
+const MAX_SPLATS: int = 160
 const BOUNCE_ANGLE_COS_THRESHOLD: float = 0.42
 
 var projectiles: Array[Dictionary] = []
@@ -18,17 +18,17 @@ var _splat_mesh: CylinderMesh
 
 func _ready() -> void:
 	_ball_mesh = SphereMesh.new()
-	_ball_mesh.radius = 0.035
-	_ball_mesh.height = 0.07
+	_ball_mesh.radius = 0.04
+	_ball_mesh.height = 0.08
 	_ball_material = StandardMaterial3D.new()
 	_ball_material.albedo_color = Color(1.0, 0.45, 0.05)
 	_ball_material.emission_enabled = true
 	_ball_material.emission = Color(1.0, 0.35, 0.0)
-	_ball_material.emission_energy_multiplier = 0.7
+	_ball_material.emission_energy_multiplier = 0.8
 
 	_splat_mesh = CylinderMesh.new()
-	_splat_mesh.top_radius = 0.14
-	_splat_mesh.bottom_radius = 0.14
+	_splat_mesh.top_radius = 0.16
+	_splat_mesh.bottom_radius = 0.16
 	_splat_mesh.height = 0.008
 
 func clear_all() -> void:
@@ -60,7 +60,7 @@ func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shoo
 	scene_root.add_child(mesh_inst)
 	mesh_inst.global_position = origin
 
-	var speed_mps: float = speed_fps * FPS_TO_MPS * 0.55
+	var speed_mps: float = speed_fps * FPS_TO_MPS * 0.68
 	projectiles.append({
 		"node": mesh_inst,
 		"velocity": direction.normalized() * speed_mps,
@@ -84,7 +84,7 @@ func _physics_process(delta: float) -> void:
 			continue
 
 		p["age"] += delta
-		if p["age"] > 4.0:
+		if p["age"] > 5.5:
 			node.queue_free()
 			projectiles.remove_at(i)
 			continue
