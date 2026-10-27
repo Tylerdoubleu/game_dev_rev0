@@ -152,7 +152,7 @@ func _process(delta: float) -> void:
 		PaintBallistics.spawn_paintball(origin, dir, 255.0, self, Color(0.2, 0.95, 0.35))
 
 func on_paintball_break(_hit_pos: Vector3, shooter: Node) -> void:
-	if is_eliminated or GameManager.match_ended:
+	if is_eliminated or GameManager.match_ended or not visible or not NetworkLobby.fill_bots_enabled:
 		return
 	if shooter != null and shooter.has_method("award_kill_bonus_pod"):
 		shooter.call("award_kill_bonus_pod", bot_name)

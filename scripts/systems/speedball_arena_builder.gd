@@ -37,6 +37,7 @@ func _ready() -> void:
 	_build_environment_and_turf()
 	_build_speedball_bunkers()
 	_spawn_opfor_bots()
+	_set_opfor_bots_enabled(NetworkLobby.fill_bots_enabled)
 	if not NetworkLobby.is_dedicated_server:
 		_spawn_player()
 		_build_hud()

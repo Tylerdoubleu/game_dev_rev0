@@ -166,7 +166,7 @@ function startGodotLoop() {
   log("Spawning headless Godot 4.7.2 dedicated server...");
   const p = currentGodotProc = spawn(
     "/tmp/Godot_v4.7.2-stable_linux.x86_64",
-    ["--headless", "--path", APP_DIR, "--", "--server", `--port=${GODOT_WS_PORT}`],
+    ["--headless", "--low-processor-mode", "--path", APP_DIR, "--", "--server", `--port=${GODOT_WS_PORT}`],
     {
       env: {
         ...process.env,

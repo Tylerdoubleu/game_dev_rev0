@@ -46,8 +46,8 @@ function startGodotServerIfRequested() {
   const linuxBin = path.resolve(__dirname, "..", "build", "linux", "paintball_server.x86_64");
   const cmd = fs.existsSync(linuxBin) ? linuxBin : "godot";
   const args = fs.existsSync(linuxBin)
-    ? ["--headless", "--", "--server", `--port=${GODOT_WS_PORT}`]
-    : ["--headless", "--path", path.resolve(__dirname, ".."), "--", "--server", `--port=${GODOT_WS_PORT}`];
+    ? ["--headless", "--low-processor-mode", "--", "--server", `--port=${GODOT_WS_PORT}`]
+    : ["--headless", "--low-processor-mode", "--path", path.resolve(__dirname, ".."), "--", "--server", `--port=${GODOT_WS_PORT}`];
 
   console.log(`[Supervisor] Starting headless Godot server: ${cmd} ${args.join(" ")}`);
   godotProc = spawn(cmd, args, {
