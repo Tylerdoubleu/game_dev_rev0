@@ -611,7 +611,7 @@ func _on_lobby_connection_status(status_text: String, is_online: bool) -> void:
 		lobby_status_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.55) if is_online else Color(1.0, 0.82, 0.35))
 
 func _on_lobby_state_changed(state: Dictionary) -> void:
-	var fill_bots_val := bool(state.get("fill_bots", NetworkLobby.fill_bots_enabled))
+	var fill_bots_val := NetworkLobby.fill_bots_enabled
 	if fill_bots_check != null:
 		fill_bots_check.button_pressed = fill_bots_val
 	_set_opfor_bots_enabled(fill_bots_val)
@@ -624,7 +624,7 @@ func _on_lobby_state_changed(state: Dictionary) -> void:
 		String(state.get("room", "alpha")).to_upper(),
 		p_dict.size(),
 		"" if p_dict.size() == 1 else "s",
-		"5 OpFor Bots" if bool(state.get("fill_bots", false)) else "No Bots"
+		"5 OpFor Bots" if NetworkLobby.fill_bots_enabled else "No Bots"
 	])
 	for pid in p_dict.keys():
 		var info: Dictionary = p_dict[pid]

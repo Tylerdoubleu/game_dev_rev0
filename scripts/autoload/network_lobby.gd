@@ -245,7 +245,7 @@ func _on_connected_to_server() -> void:
 	var my_id := multiplayer.get_unique_id()
 	print("[NetworkLobby] Connected to lobby server as peer %d in room '%s'" % [my_id, active_room])
 	connection_status_changed.emit("LIVE IN LOBBY ROOM [%s] (Peer #%d)" % [active_room.to_upper(), my_id], true)
-	register_player_info.rpc_id(1, local_callsign, local_team, local_bracket, local_ready, active_room, fill_bots_enabled)
+	register_player_info.rpc_id(1, local_callsign, local_team, local_bracket, local_ready, active_room)
 
 func _on_connection_failed() -> void:
 	is_connecting = false
@@ -300,16 +300,15 @@ func update_local_player_choices(callsign: String, team: String, bracket_id: Str
 	fill_bots_enabled = fill_bots
 
 	if is_online_client():
-		register_player_info.rpc_id(1, local_callsign, local_team, local_bracket, true, active_room, fill_bots_enabled)
+		register_player_info.rpc_id(1, local_callsign, local_team, local_bracket, true, active_room)
 	else:
 		_refresh_offline_local_roster()
 
 @rpc("any_peer", "call_local", "reliable")
-func register_player_info(callsign: String, team: String, bracket_id: String, is_ready: bool, room_id: String = "alpha", fill_bots: bool = false) -> void:
+func register_player_info(callsign: String, team: String, bracket_id: String, is_ready: bool, room_id: String = "alpha") -> void:
 	var sender_id := multiplayer.get_remote_sender_id()
 	if sender_id == 0:
 		sender_id = multiplayer.get_unique_id() if peer != null else 1
-	fill_bots_enabled = fill_bots
 	players[sender_id] = {
 		"name": _sanitize_token(callsign, "Player_%d" % (sender_id % 1000)),
 		"team": team.to_upper() if team.to_upper() in ["ALPHA", "BRAVO"] else "ALPHA",
@@ -320,8 +319,8 @@ func register_player_info(callsign: String, team: String, bracket_id: String, is
 		"deaths": int(players.get(sender_id, {}).get("deaths", 0))
 	}
 	if is_dedicated_server:
-		print("[NetworkLobby] Registered peer %d: %s (Team %s, Bracket %s, Room %s, fill_bots=%s)" % [
-			sender_id, players[sender_id]["name"], players[sender_id]["team"], players[sender_id]["bracket"], players[sender_id]["room"], str(fill_bots)
+		print("[NetworkLobby] Registered peer %d: %s (Team %s, Bracket %s, Room %s)" % [
+			sender_id, players[sender_id]["name"], players[sender_id]["team"], players[sender_id]["bracket"], players[sender_id]["room"]
 		])
 		_broadcast_lobby_state_from_server()
 
@@ -329,8 +328,7 @@ func register_player_info(callsign: String, team: String, bracket_id: String, is
 func sync_lobby_state(state_dict: Dictionary) -> void:
 	if state_dict.has("players") and typeof(state_dict["players"]) == TYPE_DICTIONARY:
 		players = state_dict["players"].duplicate(true)
-	if state_dict.has("fill_bots"):
-		fill_bots_enabled = bool(state_dict["fill_bots"])
+	# Keep local fill_bots_enabled choice (default OFF); only menu selection or match start changes it.
 	if state_dict.has("match_active"):
 		match_active = bool(state_dict["match_active"])
 	var existing_ids := remote_player_nodes.keys()
