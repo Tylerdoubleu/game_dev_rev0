@@ -117,7 +117,7 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, {
     "Content-Type": MIME_TYPES[ext] || "application/octet-stream",
     "Content-Length": stats.size,
-    "Cache-Control": ext === ".html" ? "no-cache" : "public, max-age=3600",
+    "Cache-Control": "no-store, no-cache, must-revalidate",
   });
   if (req.method === "HEAD") {
     res.end();
