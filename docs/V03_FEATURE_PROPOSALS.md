@@ -50,7 +50,23 @@ This document compiles each studio discipline's **Top 3 Feature Proposals** for 
 
 ---
 
-## 4. Earlier Tracked Core Backlog (`PB-01` – `PB-06`)
+## 4. Tim (Thinker / Researcher — Transport Protocol, Match Telemetry & Field Intelligence Systems)
+
+1. **[#22 (`PB-18`) — Binary Snapshot Compression (24-Byte `PackedByteArray`) & WebRTC Unreliable UDP DataChannel Transport](https://github.com/Tylerdoubleu/game_dev_rev0/issues/22)**
+   - **75% Bandwidth Reduction + 60 ms Hermite Interpolation Buffer:** Pack the 20–30 Hz player transform, velocity, stance, lean, and sequence number into a fixed **24-byte `PackedByteArray`** (`rpc_sync_player_frame`), removing per-tick string overhead (`team`, `callsign`) and adding a 4-slot velocity-aware Hermite interpolation/extrapolation buffer on `RemotePlayer_*` avatars.
+   - **Zero Head-of-Line Blocking in Browser (`WebRTCMultiplayerPeer`) + `/lobbies` Directory:** Use our existing Edgegap WebSocket strictly for SDP/ICE signaling to negotiate an **unreliable, unordered (`maxPacketLifeTime = 0, ordered = false`) UDP DataChannel** for movement updates (with automatic fallback to WebSocket if UDP is firewalled), plus a `/lobbies` JSON directory endpoint on `deploy/edgegap_bootstrap.js`.
+
+2. **[#23 (`PB-19`) — Post-Match & Respawn Tactical Telemetry Analytics (Lane Control Heatmap, Accuracy %, Breakout Survival & Ping/Jitter Graph)](https://github.com/Tylerdoubleu/game_dev_rev0/issues/23)**
+   - **Per-Round & Per-Match Combat Analytics:** Track shots fired, paint breaks vs. bounces, hit-zone distribution (`Mask/Visor %`, `Hopper/Marker %`, `Torso/Pack %`), pod spills vs. clean pours, and **Breakout Survival Time (`s`)** in `GameManager` and `PaintBallistics`.
+   - **Top-Down 2D Lane Control Heatmap & Network Sparkline:** Quantize the `108m × 132m` arena into a `27 × 33` grid to render a live **2D Lane Control & Elimination Heatmap** on both the **5-Zone Tactical Respawn Map** (`[1]–[5]`) and the **Post-Match Victory/Defeat Summary Card**, paired with a rolling RTT Ping (`ms`), Jitter (`±ms`), and Packet Delivery sparkline in `[TAB]` / `[M]`.
+
+3. **[#24 (`PB-20`) — Acoustic & Visual Field Intelligence, Goggle-Splat Directional Vector & 3-Second Killcam / Tactical AI Bridge](https://github.com/Tylerdoubleu/game_dev_rev0/issues/24)**
+   - **4-Way Radial Callout Wheel (`Hold [F]`) & Networked `IntelBus`:** Broadcast structured team intel packets (`Spot/Count`, `Lock Lane`, `Bump Up`, `Pinned/Help`) across same-room teammates and feed them directly into `SnapTargetBot` (`PB-05`) so AI bots dynamically shift crossfire lanes or bump forward when a bunker is marked `Pinned` or heard reloading (`[R]` within `18m`).
+   - **Directional Impact Vector & 3-Second Ring-Buffer Killcam:** Show the exact shooter bunker callout, distance (`m`), hit zone, and a glowing 3D neon trajectory ribbon on the `"YOU'VE BEEN HIT!"` / Respawn Map screen, backed by a lightweight 60-frame (`3.0s @ 20Hz`) local ring buffer for instant elimination replay.
+
+---
+
+## 5. Earlier Tracked Core Backlog (`PB-01` – `PB-06`)
 
 - **[#5 (`PB-05`)](https://github.com/Tylerdoubleu/game_dev_rev0/issues/5):** Center Flag / CTF Objectives, `NavigationAgent3D` Tactical Bot AI & Multiplayer Lobbies
 - **[#4 (`PB-04`)](https://github.com/Tylerdoubleu/game_dev_rev0/issues/4):** Bunker Callout Zones, LOS Silhouettes & Pinned Suppression HUD
