@@ -299,6 +299,18 @@ static func _build_perimeter_safety_netting(parent: Node3D) -> void:
 		panel.material_override = net_mat
 		net_root.add_child(panel)
 
+		var wall_body := StaticBody3D.new()
+		wall_body.name = "SafetyNetWallBody_%d" % idx
+		wall_body.position = spec["pos"]
+		var wall_col := CollisionShape3D.new()
+		wall_col.name = "CollisionShape3D"
+		var wall_box := BoxShape3D.new()
+		var sz: Vector3 = spec["size"]
+		wall_box.size = Vector3(maxf(sz.x, 1.2), 14.0, maxf(sz.z, 1.2))
+		wall_col.shape = wall_box
+		wall_body.add_child(wall_col)
+		net_root.add_child(wall_body)
+
 	# Outer perimeter support poles along sidelines and backlines only
 	for z_sign in [-1.0, 1.0]:
 		for x_pos in [-48.0, -32.0, -16.0, 0.0, 16.0, 32.0, 48.0]:
@@ -759,15 +771,16 @@ static func spawn_muzzle_gas_puff(scene_root: Node, muzzle_pos: Vector3, forward
 	particles.amount = 10
 	particles.lifetime = 0.18
 
-	var puff_mesh := SphereMesh.new()
-	puff_mesh.radius = 0.022
-	puff_mesh.height = 0.044
-	var puff_mat := StandardMaterial3D.new()
-	puff_mat.albedo_color = Color(0.88, 0.92, 0.96, 0.28)
-	puff_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	puff_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
-	puff_mesh.material = puff_mat
-	particles.mesh = puff_mesh
+	if _puff_mesh_cached == null:
+		_puff_mesh_cached = SphereMesh.new()
+		_puff_mesh_cached.radius = 0.022
+		_puff_mesh_cached.height = 0.044
+		var puff_mat := StandardMaterial3D.new()
+		puff_mat.albedo_color = Color(0.88, 0.92, 0.96, 0.28)
+		puff_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		puff_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+		_puff_mesh_cached.material = puff_mat
+	particles.mesh = _puff_mesh_cached
 
 	particles.direction = forward_dir.normalized()
 	particles.spread = 22.0

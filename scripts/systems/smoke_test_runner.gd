@@ -71,12 +71,27 @@ func _process(_delta: float) -> bool:
 	assert(int(player.get("pods_remaining")) == start_pods + 1, "Eliminating an enemy must grant +1 extra pod of paintballs")
 	assert(gm.local_kills == 1, "GameManager.local_kills must increment on kill")
 
-	# Test Respawn at Original Starting Spot on hit + Death tracking + Pod count reset on death
+	# Test Respawn at Original Starting Spot on hit + Death tracking + Pod count reset on death + Tactical Respawn Map
+	var death_map_ui := arena.get_node_or_null("DeathRespawnMapOverlay") as CanvasLayer
+	assert(death_map_ui != null, "DeathRespawnMapOverlay ('YOU\'VE BEEN HIT!' + Tactical Respawn Map) must exist")
+	var net_wall := arena.get_node_or_null("GrittyStadiumProps/PerimeterSafetyNetting/SafetyNetWallBody_0/CollisionShape3D") as CollisionShape3D
+	assert(net_wall != null and net_wall.shape is BoxShape3D, "Perimeter safety netting must have StaticBody3D + BoxShape3D boundary colliders")
+
+	player.set("_respawn_flash_timer", 0.0)
 	player.global_position = Vector3(12.0, 0.1, 15.0)
 	player.call("on_paintball_break", player.global_position, bot)
 	assert(gm.local_deaths == 1, "GameManager.local_deaths must increment when hit by an enemy")
 	assert(player.global_position.distance_to(player.get("initial_spawn_pos")) < 0.05, "Player must respawn at original starting spot on hit")
 	assert(int(player.get("pods_remaining")) == start_pods, "Pod count must reset to bracket baseline on death")
+
+	# Test choosing a Tactical Map respawn zone (e.g., Zone 0 = Snake Corner Tape)
+	arena.call("_on_respawn_zone_selected", 0)
+	assert(absf(player.global_position.x - (-31.0)) < 0.1, "Selecting Zone 0 on Tactical Respawn Map must spawn player at Snake Corner Tape (X = -31m)")
+
+	# Test perma-fall / outer boundary clamp
+	player.global_position = Vector3(95.0, -10.0, 95.0)
+	player.call("_enforce_arena_bounds_and_permafall_guard")
+	assert(absf(player.global_position.x) <= 52.5 and absf(player.global_position.z) <= 64.5 and player.global_position.y >= 0.0, "Perma-fall & boundary guard must keep player inside the arena")
 
 	# Test First to 10 Deaths loses
 	for _i in range(9):

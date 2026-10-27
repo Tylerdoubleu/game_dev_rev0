@@ -15,6 +15,7 @@ const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd"
 
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
+signal player_eliminated(killer_name: String)
 
 enum Stance {
 	STANDING,
@@ -74,6 +75,7 @@ var woodsball_trigger_latched: bool = false
 var time_since_last_shot: float = 99.0
 var _shot_counter: int = 0
 var lobby_open: bool = false
+var awaiting_respawn_choice: bool = false
 var initial_spawn_pos: Vector3 = Vector3(0.0, 0.1, 45.5)
 var initial_spawn_yaw: float = 0.0
 var _net_sync_timer: float = 0.0
@@ -183,7 +185,7 @@ func _on_bracket_changed(bracket: Resource) -> void:
 	_emit_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if lobby_open or NetworkLobby.is_dedicated_server:
+	if lobby_open or awaiting_respawn_choice or NetworkLobby.is_dedicated_server:
 		return
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * MOUSE_SENSITIVITY
@@ -231,8 +233,9 @@ func _physics_process(delta: float) -> void:
 		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
 			woodsball_trigger_latched = false
 
-	if not lobby_open:
+	if not lobby_open and not awaiting_respawn_choice:
 		_update_movement_and_stance(delta)
+	_enforce_arena_bounds_and_permafall_guard()
 	_update_lean_bob_and_viewmodel(delta)
 	_update_pod_reload(delta)
 
@@ -588,28 +591,42 @@ func set_lobby_open_state(is_open: bool) -> void:
 	if DisplayServer.get_name() != "headless":
 		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if is_open else Input.MOUSE_MODE_CAPTURED)
 
+func _enforce_arena_bounds_and_permafall_guard() -> void:
+	# Hard outer perimeter clamp inside the 108m x 132m safety netting so players can never exit the map
+	var clamped_x := clampf(global_position.x, -52.4, 52.4)
+	var clamped_z := clampf(global_position.z, -64.4, 64.4)
+	if clamped_x != global_position.x or clamped_z != global_position.z:
+		global_position.x = clamped_x
+		global_position.z = clamped_z
+	# Safety floor check: if anything ever pushes the player below turf, immediately snap back onto the field
+	if global_position.y < -1.5:
+		global_position = Vector3(clampf(global_position.x, -48.0, 48.0), 0.2, clampf(global_position.z, -46.0, 46.0))
+		velocity = Vector3.ZERO
+		status_banner_sent.emit("Returned to field boundary!", Color(1.0, 0.85, 0.25))
+
 func respawn_at_team_gate(team: String) -> void:
 	var side := 1.0 if team == "ALPHA" else -1.0
 	initial_spawn_pos = Vector3(0.0, 0.1, 45.5 * side)
 	initial_spawn_yaw = 0.0 if side > 0.0 else PI
-	global_position = initial_spawn_pos
-	velocity = Vector3.ZERO
-	yaw = initial_spawn_yaw
-	pitch = 0.0
-	rotation.y = yaw
-	is_reloading_pod = false
-	reload_timer = 0.0
-	_on_bracket_changed(GearRuleEnforcer.active_bracket)
+	respawn_at_map_zone(initial_spawn_pos, initial_spawn_yaw, "Team %s Breakout Gate" % team)
 
 func respawn_at_starting_spot() -> void:
-	global_position = initial_spawn_pos
+	respawn_at_map_zone(initial_spawn_pos, initial_spawn_yaw, "Breakout Gate")
+
+func respawn_at_map_zone(spawn_pos: Vector3, spawn_yaw: float, zone_label: String = "Breakout Gate") -> void:
+	awaiting_respawn_choice = false
+	_respawn_flash_timer = 2.8
+	global_position = spawn_pos
 	velocity = Vector3.ZERO
-	yaw = initial_spawn_yaw
+	yaw = spawn_yaw
 	pitch = 0.0
 	rotation.y = yaw
 	is_reloading_pod = false
 	reload_timer = 0.0
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
+	if DisplayServer.get_name() != "headless" and not lobby_open:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	status_banner_sent.emit("DROPPED IN AT: %s (2.8s Spawn Protection Active!)" % zone_label.to_upper(), Color(0.35, 1.0, 0.55))
 
 func award_kill_bonus_pod(victim_label: String = "Enemy") -> void:
 	pods_remaining += 1
@@ -618,7 +635,7 @@ func award_kill_bonus_pod(victim_label: String = "Enemy") -> void:
 	_emit_hud()
 
 func on_paintball_break(_hit_pos: Vector3, shooter: Node) -> void:
-	if _respawn_flash_timer > 0.2 or GameManager.match_ended:
+	if _respawn_flash_timer > 0.2 or awaiting_respawn_choice or GameManager.match_ended:
 		return
 	var killer_name: String = "OpFor NPC"
 	if shooter != null and "bot_name" in shooter:
@@ -632,10 +649,14 @@ func _on_remote_player_hit_local(shooter_name: String) -> void:
 	_handle_local_elimination(shooter_name)
 
 func _handle_local_elimination(killer_name: String) -> void:
-	_respawn_flash_timer = 1.2
+	if awaiting_respawn_choice or GameManager.match_ended:
+		return
+	_respawn_flash_timer = 2.8
 	GameManager.record_local_death(killer_name)
+	# Immediately reset pod count and position to starting spot as baseline, then open Tactical Respawn Map on interactive clients
 	respawn_at_starting_spot()
+	player_eliminated.emit(killer_name)
 	if GameManager.match_ended:
 		status_banner_sent.emit("MATCH OVER — Reached 10 Deaths! Press [T] or [M] to Review Scoreboard", Color(1.0, 0.25, 0.25))
 	else:
-		status_banner_sent.emit("HIT BY %s! Respawned at Original Starting Spot (Deaths: %d / %d)" % [killer_name, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE], Color(1.0, 0.32, 0.32))
+		status_banner_sent.emit("YOU'VE BEEN HIT BY %s! Select your Respawn Zone on the Tactical Map (Deaths: %d / %d)" % [killer_name, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE], Color(1.0, 0.22, 0.48))

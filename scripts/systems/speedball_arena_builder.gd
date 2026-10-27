@@ -32,6 +32,12 @@ var npc_presence_on_btn: Button
 var npc_presence_off_btn: Button
 var scoreboard_canvas: CanvasLayer
 var scoreboard_body_label: Label
+var death_respawn_canvas: CanvasLayer
+var death_splat_flash_rect: ColorRect
+var death_killer_label: Label
+var death_sub_label: Label
+var respawn_map_container: Control
+var respawn_zone_buttons: Array[Button] = []
 
 func _ready() -> void:
 	_build_environment_and_turf()
@@ -42,6 +48,7 @@ func _ready() -> void:
 		_build_hud()
 		_build_tournament_lobby_overlay()
 		_build_scoreboard_overlay()
+		_build_death_and_respawn_map_overlay()
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
@@ -225,6 +232,9 @@ func _spawn_player() -> void:
 	add_child(player)
 	player.connect("hud_state_changed", _on_hud_state_changed)
 	player.connect("status_banner_sent", _on_status_banner)
+	player.connect("player_eliminated", _on_local_player_eliminated)
+	if player.has_method("respawn_at_team_gate"):
+		player.call("respawn_at_team_gate", NetworkLobby.local_team)
 
 func _build_hud() -> void:
 	var canvas := CanvasLayer.new()
@@ -306,6 +316,12 @@ func _on_intel_feed(msg: String) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if NetworkLobby.is_dedicated_server or lobby_canvas == null:
 		return
+	if death_respawn_canvas != null and death_respawn_canvas.visible and event is InputEventKey and event.pressed and not event.echo:
+		var k: int = event.physical_keycode
+		if k >= KEY_1 and k <= KEY_5:
+			_on_respawn_zone_selected(k - KEY_1)
+			get_viewport().set_input_as_handled()
+			return
 	if event.is_action_pressed("toggle_lobby") or event.is_action_pressed("ui_cancel"):
 		_set_lobby_overlay_visible(not lobby_canvas.visible)
 		get_viewport().set_input_as_handled()
@@ -612,6 +628,10 @@ func _on_lobby_connection_status(status_text: String, is_online: bool) -> void:
 
 func _on_lobby_state_changed(state: Dictionary) -> void:
 	var fill_bots_val := NetworkLobby.fill_bots_enabled
+	if player != null and lobby_canvas != null and lobby_canvas.visible:
+		var expected_z := 45.5 if NetworkLobby.local_team == "ALPHA" else -45.5
+		if absf(player.global_position.z - expected_z) > 20.0 and player.has_method("respawn_at_team_gate"):
+			player.call("respawn_at_team_gate", NetworkLobby.local_team)
 	if fill_bots_check != null:
 		fill_bots_check.button_pressed = fill_bots_val
 	_set_opfor_bots_enabled(fill_bots_val)
@@ -780,3 +800,263 @@ func _refresh_scoreboard_text() -> void:
 	else:
 		lines.append("Press [M] to Close Scoreboard   |   Press [TAB] for Opening Menu / NPC Toggle")
 	scoreboard_body_label.text = "\n".join(lines)
+
+
+func _get_team_respawn_zones(team: String) -> Array[Dictionary]:
+	var side := 1.0 if team == "ALPHA" else -1.0
+	var base_yaw := 0.0 if side > 0.0 else PI
+	return [
+		{
+			"id": "snake_corner",
+			"title": "[1] SNAKE CORNER TAPE",
+			"desc": "Far Left Tape Entry (X = -31m)",
+			"pos": Vector3(-31.0, 0.1, 38.5 * side),
+			"yaw": base_yaw,
+			"map_uv": Vector2(0.14, 0.80 if side > 0.0 else 0.20)
+		},
+		{
+			"id": "left_brick",
+			"title": "[2] LEFT BACK BRICK",
+			"desc": "Left-Center Bunker Pocket (X = -13m)",
+			"pos": Vector3(-13.0, 0.1, 33.5 * side),
+			"yaw": base_yaw,
+			"map_uv": Vector2(0.33, 0.75 if side > 0.0 else 0.25)
+		},
+		{
+			"id": "home_gate",
+			"title": "[3] CENTER BREAKOUT GATE",
+			"desc": "Home Stone Start Box (X = 0m)",
+			"pos": Vector3(0.0, 0.1, 45.5 * side),
+			"yaw": base_yaw,
+			"map_uv": Vector2(0.50, 0.87 if side > 0.0 else 0.13)
+		},
+		{
+			"id": "right_brick",
+			"title": "[4] RIGHT BACK BRICK",
+			"desc": "Right-Center Bunker Pocket (X = +13m)",
+			"pos": Vector3(13.0, 0.1, 33.5 * side),
+			"yaw": base_yaw,
+			"map_uv": Vector2(0.67, 0.75 if side > 0.0 else 0.25)
+		},
+		{
+			"id": "dorito_corner",
+			"title": "[5] DORITO CORNER TAPE",
+			"desc": "Far Right Dorito Highway (X = +30m)",
+			"pos": Vector3(30.0, 0.1, 38.5 * side),
+			"yaw": base_yaw,
+			"map_uv": Vector2(0.86, 0.80 if side > 0.0 else 0.20)
+		}
+	]
+
+func _build_death_and_respawn_map_overlay() -> void:
+	death_respawn_canvas = CanvasLayer.new()
+	death_respawn_canvas.name = "DeathRespawnMapOverlay"
+	death_respawn_canvas.layer = 12
+	death_respawn_canvas.visible = false
+	add_child(death_respawn_canvas)
+
+	# Full-screen goggle paint-splat shock backdrop
+	death_splat_flash_rect = ColorRect.new()
+	death_splat_flash_rect.name = "GoggleSplatShockBackdrop"
+	death_splat_flash_rect.color = Color(0.96, 0.12, 0.52, 0.86)
+	death_splat_flash_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	death_respawn_canvas.add_child(death_splat_flash_rect)
+
+	# Decorative oily neon yellow/pink goggle lens paint blobs (Gritty 2000s aesthetic)
+	var blob_specs := [
+		{"pos": Vector2(80, 40), "size": Vector2(420, 260), "col": Color(0.98, 0.86, 0.08, 0.42)},
+		{"pos": Vector2(1050, 60), "size": Vector2(460, 290), "col": Color(0.96, 0.14, 0.56, 0.48)},
+		{"pos": Vector2(140, 580), "size": Vector2(390, 240), "col": Color(0.96, 0.14, 0.56, 0.40)},
+		{"pos": Vector2(1080, 560), "size": Vector2(410, 260), "col": Color(0.98, 0.86, 0.08, 0.44)}
+	]
+	for bspec in blob_specs:
+		var blob := Panel.new()
+		blob.position = bspec["pos"]
+		blob.size = bspec["size"]
+		blob.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var bstyle := StyleBoxFlat.new()
+		bstyle.bg_color = bspec["col"]
+		bstyle.corner_radius_top_left = 120
+		bstyle.corner_radius_top_right = 95
+		bstyle.corner_radius_bottom_left = 110
+		bstyle.corner_radius_bottom_right = 130
+		blob.add_theme_stylebox_override("panel", bstyle)
+		death_respawn_canvas.add_child(blob)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	death_respawn_canvas.add_child(center)
+
+	var main_panel := PanelContainer.new()
+	main_panel.name = "TacticalRespawnPanel"
+	main_panel.custom_minimum_size = Vector2(860, 620)
+	var pstyle := StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.08, 0.09, 0.11, 0.96)
+	pstyle.border_width_left = 4
+	pstyle.border_width_top = 4
+	pstyle.border_width_right = 4
+	pstyle.border_width_bottom = 4
+	pstyle.border_color = Color(0.98, 0.84, 0.10, 1.0)
+	pstyle.corner_radius_top_left = 8
+	pstyle.corner_radius_top_right = 8
+	pstyle.corner_radius_bottom_left = 8
+	pstyle.corner_radius_bottom_right = 8
+	pstyle.content_margin_left = 26
+	pstyle.content_margin_right = 26
+	pstyle.content_margin_top = 20
+	pstyle.content_margin_bottom = 20
+	main_panel.add_theme_stylebox_override("panel", pstyle)
+	center.add_child(main_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 10)
+	main_panel.add_child(vbox)
+
+	death_killer_label = Label.new()
+	death_killer_label.name = "YouveBeenHitBanner"
+	death_killer_label.text = "!! YOU'VE BEEN HIT !!"
+	death_killer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	death_killer_label.add_theme_font_size_override("font_size", 36)
+	death_killer_label.add_theme_color_override("font_color", Color(0.99, 0.90, 0.12))
+	vbox.add_child(death_killer_label)
+
+	death_sub_label = Label.new()
+	death_sub_label.name = "DeathSubLabel"
+	death_sub_label.text = "GOGGLE LENS SPLATTED — CHOOSE YOUR RE-ENTRY DROP ZONE BELOW (OR PRESS [1]–[5])"
+	death_sub_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	death_sub_label.add_theme_font_size_override("font_size", 15)
+	death_sub_label.add_theme_color_override("font_color", Color(0.98, 0.45, 0.72))
+	vbox.add_child(death_sub_label)
+
+	# Tactical Top-Down Speedball Arena Map Schematic
+	respawn_map_container = Panel.new()
+	respawn_map_container.name = "TacticalArenaMap"
+	respawn_map_container.custom_minimum_size = Vector2(800, 390)
+	var mstyle := StyleBoxFlat.new()
+	mstyle.bg_color = Color(0.14, 0.19, 0.13, 0.98)
+	mstyle.border_width_left = 3
+	mstyle.border_width_top = 3
+	mstyle.border_width_right = 3
+	mstyle.border_width_bottom = 3
+	mstyle.border_color = Color(0.45, 0.50, 0.42)
+	respawn_map_container.add_theme_stylebox_override("panel", mstyle)
+	vbox.add_child(respawn_map_container)
+
+	# 50-Yard Center Line on Tactical Map
+	var center_line := ColorRect.new()
+	center_line.color = Color(0.85, 0.82, 0.70, 0.55)
+	center_line.position = Vector2(10, 193)
+	center_line.size = Vector2(780, 4)
+	center_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	respawn_map_container.add_child(center_line)
+
+	var lbl_north := Label.new()
+	lbl_north.text = "NORTH END — TEAM BRAVO (-Z)   |   SNAKE SIDE (LEFT)   <--- 50 YD LINE --->   DORITO SIDE (RIGHT)"
+	lbl_north.position = Vector2(18, 10)
+	lbl_north.add_theme_font_size_override("font_size", 13)
+	lbl_north.add_theme_color_override("font_color", Color(1.0, 0.55, 0.55, 0.9))
+	respawn_map_container.add_child(lbl_north)
+
+	var lbl_south := Label.new()
+	lbl_south.text = "SOUTH END — TEAM ALPHA (+Z)   |   CLICK ANY HIGHLIGHTED SPAWN ZONE OR PRESS KEYS [1] - [5]"
+	lbl_south.position = Vector2(18, 362)
+	lbl_south.add_theme_font_size_override("font_size", 13)
+	lbl_south.add_theme_color_override("font_color", Color(0.45, 0.90, 1.0, 0.9))
+	respawn_map_container.add_child(lbl_south)
+
+	# Visual schematic bunker blocks on the tactical map
+	var map_bunkers := [
+		Vector2(385, 182), Vector2(280, 184), Vector2(490, 184),
+		Vector2(95, 130), Vector2(95, 235), Vector2(685, 130), Vector2(685, 235),
+		Vector2(385, 110), Vector2(385, 255), Vector2(240, 115), Vector2(530, 115),
+		Vector2(240, 250), Vector2(530, 250)
+	]
+	for bpos in map_bunkers:
+		var brect := ColorRect.new()
+		brect.size = Vector2(28, 16)
+		brect.position = bpos
+		brect.color = Color(0.84, 0.70, 0.16, 0.45)
+		brect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		respawn_map_container.add_child(brect)
+
+	respawn_zone_buttons.clear()
+	for i in range(5):
+		var btn := Button.new()
+		btn.name = "RespawnZoneBtn_%d" % i
+		btn.custom_minimum_size = Vector2(148, 54)
+		var bstyle := StyleBoxFlat.new()
+		bstyle.bg_color = Color(0.12, 0.34, 0.22, 0.96)
+		bstyle.border_width_left = 2
+		bstyle.border_width_top = 2
+		bstyle.border_width_right = 2
+		bstyle.border_width_bottom = 2
+		bstyle.border_color = Color(0.35, 1.0, 0.55)
+		bstyle.corner_radius_top_left = 6
+		bstyle.corner_radius_top_right = 6
+		bstyle.corner_radius_bottom_left = 6
+		bstyle.corner_radius_bottom_right = 6
+		btn.add_theme_stylebox_override("normal", bstyle)
+		btn.add_theme_font_size_override("font_size", 12)
+		btn.add_theme_color_override("font_color", Color(0.95, 1.0, 0.95))
+		var zone_idx := i
+		btn.pressed.connect(func() -> void: _on_respawn_zone_selected(zone_idx))
+		respawn_map_container.add_child(btn)
+		respawn_zone_buttons.append(btn)
+
+	# Quick bottom bar of 5 spawn buttons as well for fast clicking
+	var quick_row := HBoxContainer.new()
+	quick_row.add_theme_constant_override("separation", 8)
+	vbox.add_child(quick_row)
+	var quick_labels := ["[1] SNAKE CORNER", "[2] LEFT BRICK", "[3] CENTER GATE", "[4] RIGHT BRICK", "[5] DORITO CORNER"]
+	for i in range(5):
+		var qbtn := Button.new()
+		qbtn.text = quick_labels[i]
+		qbtn.custom_minimum_size = Vector2(0, 42)
+		qbtn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		qbtn.add_theme_font_size_override("font_size", 14)
+		qbtn.add_theme_color_override("font_color", Color(0.98, 0.90, 0.20))
+		var z_idx := i
+		qbtn.pressed.connect(func() -> void: _on_respawn_zone_selected(z_idx))
+		quick_row.add_child(qbtn)
+
+func _on_local_player_eliminated(killer_name: String) -> void:
+	if NetworkLobby.is_dedicated_server or DisplayServer.get_name() == "headless":
+		return
+	if GameManager.match_ended or death_respawn_canvas == null:
+		return
+	if lobby_canvas != null and lobby_canvas.visible:
+		_set_lobby_overlay_visible(false)
+
+	player.set("awaiting_respawn_choice", true)
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+	var zones := _get_team_respawn_zones(NetworkLobby.local_team)
+	for i in range(min(zones.size(), respawn_zone_buttons.size())):
+		var z: Dictionary = zones[i]
+		var btn: Button = respawn_zone_buttons[i]
+		btn.text = "%s\n%s" % [z["title"], z["desc"]]
+		var uv: Vector2 = z["map_uv"]
+		btn.position = Vector2(uv.x * 800.0 - 74.0, uv.y * 390.0 - 27.0)
+
+	death_killer_label.text = "!! YOU'VE BEEN HIT BY %s !!" % killer_name.to_upper()
+	death_sub_label.text = "TEAM %s — PODS REFILLED & 2.8s SPAWN PROTECTION READY! CLICK A MAP ZONE OR PRESS [1]–[5] (DEATHS: %d / %d)" % [
+		NetworkLobby.local_team,
+		GameManager.local_deaths,
+		GameManager.MAX_DEATHS_TO_LOSE
+	]
+	death_splat_flash_rect.color = Color(0.98, 0.14, 0.56, 0.94)
+	death_respawn_canvas.visible = true
+
+	# Jump-scare goggle paint-splat flash that settles into the tactical map background
+	var tw := create_tween()
+	tw.tween_property(death_splat_flash_rect, "color", Color(0.14, 0.04, 0.09, 0.84), 0.48)
+
+func _on_respawn_zone_selected(zone_index: int) -> void:
+	var zones := _get_team_respawn_zones(NetworkLobby.local_team)
+	if zone_index < 0 or zone_index >= zones.size():
+		zone_index = 2
+	var chosen: Dictionary = zones[zone_index]
+	if death_respawn_canvas != null:
+		death_respawn_canvas.visible = false
+	if player != null and player.has_method("respawn_at_map_zone"):
+		player.call("respawn_at_map_zone", chosen["pos"], chosen["yaw"], chosen["title"])

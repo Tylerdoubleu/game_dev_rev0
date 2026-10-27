@@ -309,12 +309,32 @@ func register_player_info(callsign: String, team: String, bracket_id: String, is
 	var sender_id := multiplayer.get_remote_sender_id()
 	if sender_id == 0:
 		sender_id = multiplayer.get_unique_id() if peer != null else 1
+	var clean_room := _sanitize_token(room_id, "alpha")
+	var resolved_team := team.to_upper() if team.to_upper() in ["ALPHA", "BRAVO"] else "ALPHA"
+	# Auto-balance new peer in a room onto the opposite team if another human is already on that side
+	if is_dedicated_server and not players.get(sender_id, {}).get("team_locked", false):
+		var alpha_count := 0
+		var bravo_count := 0
+		for pid in players.keys():
+			if int(pid) == sender_id:
+				continue
+			var pinfo: Dictionary = players[pid]
+			if String(pinfo.get("room", "alpha")) == clean_room:
+				if String(pinfo.get("team", "ALPHA")) == "ALPHA":
+					alpha_count += 1
+				else:
+					bravo_count += 1
+		if resolved_team == "ALPHA" and alpha_count > bravo_count:
+			resolved_team = "BRAVO"
+		elif resolved_team == "BRAVO" and bravo_count > alpha_count:
+			resolved_team = "ALPHA"
 	players[sender_id] = {
 		"name": _sanitize_token(callsign, "Player_%d" % (sender_id % 1000)),
-		"team": team.to_upper() if team.to_upper() in ["ALPHA", "BRAVO"] else "ALPHA",
+		"team": resolved_team,
+		"team_locked": true,
 		"bracket": bracket_id if bracket_id in ["speedball", "woodsball", "pump"] else "speedball",
 		"ready": is_ready,
-		"room": _sanitize_token(room_id, "alpha"),
+		"room": clean_room,
 		"kills": int(players.get(sender_id, {}).get("kills", 0)),
 		"deaths": int(players.get(sender_id, {}).get("deaths", 0))
 	}
@@ -328,6 +348,11 @@ func register_player_info(callsign: String, team: String, bracket_id: String, is
 func sync_lobby_state(state_dict: Dictionary) -> void:
 	if state_dict.has("players") and typeof(state_dict["players"]) == TYPE_DICTIONARY:
 		players = state_dict["players"].duplicate(true)
+		var my_id := multiplayer.get_unique_id() if peer != null else 1
+		if players.has(my_id):
+			var srv_team := String(players[my_id].get("team", local_team)).to_upper()
+			if srv_team in ["ALPHA", "BRAVO"] and srv_team != local_team:
+				local_team = srv_team
 	# Keep local fill_bots_enabled choice (default OFF); only menu selection or match start changes it.
 	if state_dict.has("match_active"):
 		match_active = bool(state_dict["match_active"])
@@ -587,14 +612,7 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	tag.modulate = Color(0.35, 0.85, 1.0) if team == "ALPHA" else Color(1.0, 0.42, 0.42)
 	body.add_child(tag)
 
-	var hit_script := GDScript.new()
-	hit_script.source_code = """extends StaticBody3D
-func on_paintball_break(_hit_pos: Vector3, _shooter: Node) -> void:
-	if has_meta("remote_peer_id"):
-		NetworkLobby.notify_remote_player_hit(int(get_meta("remote_peer_id")))
-"""
-	hit_script.reload()
-	body.set_script(hit_script)
+	body.set_script(load("res://scripts/player/remote_player_avatar.gd"))
 
 	return body
 

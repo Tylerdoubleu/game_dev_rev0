@@ -232,7 +232,7 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color, collider: Object 
 		if is_instance_valid(old_splat):
 			old_splat.queue_free()
 
-	var n := normal.normalized()
+	var n := normal.normalized() if normal.length_squared() >= 0.001 else Vector3.UP
 	var decal := Decal.new()
 	decal.name = "OilyPaintSplatDecal"
 	decal.size = Vector3(0.46, 0.36, 0.46)
@@ -241,8 +241,8 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color, collider: Object 
 	decal.albedo_mix = 0.96
 	decal.normal_fade = 0.25
 
-	# Parent to moving targets (e.g., peeking bots) so wrapped splats move with them, or scene_root for static cover
-	if collider is Node3D and collider.get_script() != null:
+	# Parent only to static cover or OpFor bots; never parent decals to scaled RemotePlayer avatars or Player3D
+	if collider is Node3D and collider.get_script() != null and not collider.has_meta("remote_peer_id") and collider.name != "Player3D":
 		collider.add_child(decal)
 	else:
 		scene_root.add_child(decal)
@@ -251,7 +251,8 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color, collider: Object 
 	var up := Vector3.FORWARD if abs(n.dot(Vector3.UP)) > 0.96 else Vector3.UP
 	var bx := up.cross(n).normalized()
 	var bz := n.cross(bx).normalized()
-	decal.global_transform.basis = Basis(bx, n, bz).rotated(n, _rng.randf_range(0.0, TAU))
+	if bx.length_squared() > 0.001 and bz.length_squared() > 0.001:
+		decal.global_transform.basis = Basis(bx, n, bz).rotated(n, _rng.randf_range(0.0, TAU))
 
 	# Also attach our surface-wrapped glossy clearcoat mesh (use fast 2x2 grid on WebGL2 to avoid 72 raycasts per shot)
 	var space_state: PhysicsDirectSpaceState3D = scene_root.get_world_3d().direct_space_state if (not OS.has_feature("web") and scene_root.get_world_3d()) else null
