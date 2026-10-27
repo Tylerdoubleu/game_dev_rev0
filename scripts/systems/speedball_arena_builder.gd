@@ -640,6 +640,10 @@ func _set_opfor_bots_enabled(enabled: bool) -> void:
 		if b != null:
 			b.visible = enabled
 			b.set_process(enabled)
+			b.process_mode = Node.PROCESS_MODE_INHERIT if enabled else Node.PROCESS_MODE_DISABLED
+			for child in b.get_children():
+				if child is CollisionShape3D:
+					child.disabled = not enabled
 
 func _select_npc_presence(enabled: bool) -> void:
 	NetworkLobby.fill_bots_enabled = enabled

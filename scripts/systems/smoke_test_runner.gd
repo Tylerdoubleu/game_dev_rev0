@@ -65,11 +65,12 @@ func _process(_delta: float) -> bool:
 	assert(int(player.get("pods_remaining")) == start_pods + 1, "Eliminating an enemy must grant +1 extra pod of paintballs")
 	assert(gm.local_kills == 1, "GameManager.local_kills must increment on kill")
 
-	# Test Respawn at Original Starting Spot on hit + Death tracking
+	# Test Respawn at Original Starting Spot on hit + Death tracking + Pod count reset on death
 	player.global_position = Vector3(12.0, 0.1, 15.0)
 	player.call("on_paintball_break", player.global_position, bot)
 	assert(gm.local_deaths == 1, "GameManager.local_deaths must increment when hit by an enemy")
 	assert(player.global_position.distance_to(player.get("initial_spawn_pos")) < 0.05, "Player must respawn at original starting spot on hit")
+	assert(int(player.get("pods_remaining")) == start_pods, "Pod count must reset to bracket baseline on death")
 
 	# Test First to 10 Deaths loses
 	for _i in range(9):
