@@ -588,45 +588,7 @@ static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInsta
 				cshape_node.shape = conv
 			break
 
-	# Wrap weathered neon yellow & hot pink paint splat decals conformally onto the bunker surface
-	var yellow_mat := create_oily_paint_material(NEON_YELLOW_PAINT, true)
-	var pink_mat := create_oily_paint_material(HOT_PINK_PAINT, true)
-
-	if is_cylinder_can:
-		var rad: float = min(size.x, size.z) * 0.48 + 0.008
-		for s_idx in range(2):
-			var splat_Wrap := MeshInstance3D.new()
-			splat_Wrap.name = "WrappedBunkerSplat_%d" % s_idx
-			var angle := 0.0 if s_idx == 0 else PI
-			splat_Wrap.mesh = _create_curved_bunker_splat_mesh(rad, rad, angle, 0.82, 0.58)
-			var is_pink := ((bname.hash() + s_idx) % 2) == 0
-			splat_Wrap.material_override = pink_mat if is_pink else yellow_mat
-			splat_Wrap.position = Vector3(0.0, 0.08 * (1 if s_idx == 0 else -1), 0.0)
-			bunker_body.add_child(splat_Wrap)
-	elif not is_horizontal_tube:
-		# Conform splat onto tapered front/back faces using exact slope angle
-		for s_idx in range(2):
-			var splat_quad := MeshInstance3D.new()
-			splat_quad.name = "WrappedBunkerSplat_%d" % s_idx
-			var qm := QuadMesh.new()
-			qm.size = Vector2(min(0.55, size.x * 0.42), min(0.55, size.y * 0.36))
-			splat_quad.mesh = qm
-			var is_pink := ((bname.hash() + s_idx) % 2) == 0
-			splat_quad.material_override = pink_mat if is_pink else yellow_mat
-			var z_sign := 1.0 if s_idx == 0 else -1.0
-			var top_z_r := 0.14 if "Dorito" in bname else (0.22 if "Wedge" in bname else (0.58 if ("Aztec" in bname or "Temple" in bname or "Gate" in bname or "Win" in bname or "Center50_W" in bname or "BackCenter" in bname) else 0.82))
-			var z_bottom := size.z * 0.5
-			var z_top := z_bottom * top_z_r
-			var slope_angle := atan2(z_bottom - z_top, size.y)
-			var y_off := -0.08
-			var t: float = (y_off + size.y * 0.5) / maxf(0.01, size.y)
-			var z_at_y := lerpf(z_bottom, z_top, t) + 0.008
-			splat_quad.position = Vector3(0.0, y_off, z_at_y * z_sign)
-			if z_sign > 0.0:
-				splat_quad.rotation = Vector3(-slope_angle, 0.0, 0.0)
-			else:
-				splat_quad.rotation = Vector3(slope_angle, PI, 0.0)
-			bunker_body.add_child(splat_quad)
+	# Bunkers start without pre-baked center paint splats; live paintballs project wrapped splats where they break.
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
 	# 1. Weathered scratched anodized gunmetal/silver marker body
