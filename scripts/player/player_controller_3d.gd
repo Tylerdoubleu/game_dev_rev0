@@ -73,13 +73,15 @@ var pump_racked: bool = true
 var woodsball_trigger_latched: bool = false
 var time_since_last_shot: float = 99.0
 var _shot_counter: int = 0
+var lobby_open: bool = false
+var _net_sync_timer: float = 0.0
+var _respawn_flash_timer: float = 0.0
 
 func _ready() -> void:
 	_build_player_nodes()
 	GearRuleEnforcer.bracket_changed.connect(_on_bracket_changed)
+	NetworkLobby.remote_player_hit_local.connect(_on_remote_player_hit_local)
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
-	if DisplayServer.get_name() != "headless":
-		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
 
 func _build_player_nodes() -> void:
 	var col := CollisionShape3D.new()
@@ -176,6 +178,8 @@ func _on_bracket_changed(bracket: Resource) -> void:
 	_emit_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
+	if lobby_open or NetworkLobby.is_dedicated_server:
+		return
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * MOUSE_SENSITIVITY
 		pitch = clamp(pitch - event.relative.y * MOUSE_SENSITIVITY, deg_to_rad(-80.0), deg_to_rad(80.0))
@@ -212,15 +216,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_trigger_press(true)
 
 func _physics_process(delta: float) -> void:
+	if NetworkLobby.is_dedicated_server:
+		return
 	time_since_last_shot += delta
+	if _respawn_flash_timer > 0.0:
+		_respawn_flash_timer = maxf(0.0, _respawn_flash_timer - delta)
 
 	if woodsball_trigger_latched:
 		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
 			woodsball_trigger_latched = false
 
-	_update_movement_and_stance(delta)
+	if not lobby_open:
+		_update_movement_and_stance(delta)
 	_update_lean_bob_and_viewmodel(delta)
 	_update_pod_reload(delta)
+
+	_net_sync_timer += delta
+	if _net_sync_timer >= 0.05:
+		_net_sync_timer = 0.0
+		NetworkLobby.send_local_player_state(global_position, yaw, pitch, current_lean, int(stance), _respawn_flash_timer > 0.0)
 
 func _resolve_held_stance() -> Stance:
 	if Input.is_action_pressed("prone_dive"):
@@ -466,6 +480,7 @@ func _fire_single_paintball(bracket: Resource) -> void:
 	GrittyArtThemeScript.spawn_muzzle_gas_puff(get_tree().current_scene, muzzle_pos, forward_dir)
 	var paint_col := GrittyArtThemeScript.HOT_PINK_PAINT if (_shot_counter % 2 == 0) else GrittyArtThemeScript.NEON_YELLOW_PAINT
 	PaintBallistics.spawn_paintball(muzzle_pos, shot_dir, bracket.muzzle_fps, self, paint_col)
+	NetworkLobby.broadcast_paintball_shot(muzzle_pos, shot_dir, bracket.muzzle_fps)
 	_emit_hud()
 
 func _start_pod_reload() -> void:
@@ -562,3 +577,21 @@ func _emit_hud() -> void:
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,
 		"pump_racked": pump_racked
 	})
+
+func set_lobby_open_state(is_open: bool) -> void:
+	lobby_open = is_open
+	if DisplayServer.get_name() != "headless":
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if is_open else Input.MOUSE_MODE_CAPTURED)
+
+func respawn_at_team_gate(team: String) -> void:
+	var side := 1.0 if team == "ALPHA" else -1.0
+	global_position = Vector3(randf_range(-1.8, 1.8), 0.1, 45.5 * side)
+	yaw = 0.0 if side > 0.0 else PI
+	pitch = 0.0
+	rotation.y = yaw
+	_on_bracket_changed(GearRuleEnforcer.active_bracket)
+
+func _on_remote_player_hit_local(shooter_name: String) -> void:
+	_respawn_flash_timer = 1.2
+	status_banner_sent.emit("MARKED OUT BY %s! Re-inserting at %s Breakout Gate..." % [shooter_name, NetworkLobby.local_team], Color(1.0, 0.32, 0.32))
+	respawn_at_team_gate(NetworkLobby.local_team)

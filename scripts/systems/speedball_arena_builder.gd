@@ -13,15 +13,36 @@ var status_label: Label
 var intel_label: Label
 var round_label: Label
 
+# Gritty 2000s Tournament Lobby Overlay Nodes
+var lobby_canvas: CanvasLayer
+var lobby_panel: PanelContainer
+var lobby_status_label: Label
+var lobby_roster_label: Label
+var callsign_input: LineEdit
+var room_input: LineEdit
+var server_url_input: LineEdit
+var team_alpha_btn: Button
+var team_bravo_btn: Button
+var bracket_speedball_btn: Button
+var bracket_woodsball_btn: Button
+var bracket_pump_btn: Button
+var fill_bots_check: CheckBox
+var copy_link_btn: Button
+
 func _ready() -> void:
 	_build_environment_and_turf()
 	_build_speedball_bunkers()
 	_spawn_opfor_bots()
-	_spawn_player()
-	_build_hud()
+	if not NetworkLobby.is_dedicated_server:
+		_spawn_player()
+		_build_hud()
+		_build_tournament_lobby_overlay()
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	IntelBus.intel_feed_updated.connect(_on_intel_feed)
+	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
+	NetworkLobby.connection_status_changed.connect(_on_lobby_connection_status)
+	NetworkLobby.match_started_signal.connect(_on_network_match_started)
 	GameManager.register_round_start(5)
 
 func _build_environment_and_turf() -> void:
@@ -253,12 +274,13 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 func _on_round_updated(round_num: int, remaining: int, time_left: float) -> void:
 	if round_label == null:
 		return
+	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else "SOLO+BOTS"
 	round_label.text = (
-		"ROUND %d  |  OPFOR ALIVE: %d  |  TIME: %.0fs\n" % [round_num, remaining, time_left] +
+		"ROUND %d  |  OPFOR ALIVE: %d  |  TIME: %.0fs  |  %s\n" % [round_num, remaining, time_left, net_tag] +
 		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide\n" +
 		"Ctrl Prone | Shift+Ctrl Superman Dive | Q/E Lean + Hand Swap\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
-		"R Animated Pod Reload (Scarce Paint!) | F Ping | T Reset Round"
+		"R Pod Reload | F Ping | T Reset | [TAB / ESC] Multiplayer Lobby"
 	)
 
 func _on_round_won(round_num: int) -> void:
@@ -272,3 +294,316 @@ func _on_status_banner(msg: String, color: Color) -> void:
 func _on_intel_feed(msg: String) -> void:
 	if intel_label:
 		intel_label.text = msg
+
+func _unhandled_input(event: InputEvent) -> void:
+	if NetworkLobby.is_dedicated_server or lobby_canvas == null:
+		return
+	if event.is_action_pressed("toggle_lobby") or event.is_action_pressed("ui_cancel"):
+		_set_lobby_overlay_visible(not lobby_canvas.visible)
+		get_viewport().set_input_as_handled()
+
+func _build_tournament_lobby_overlay() -> void:
+	lobby_canvas = CanvasLayer.new()
+	lobby_canvas.name = "TournamentLobbyOverlay"
+	lobby_canvas.layer = 10
+	add_child(lobby_canvas)
+
+	var backdrop := ColorRect.new()
+	backdrop.name = "LobbyBackdrop"
+	backdrop.color = Color(0.05, 0.06, 0.08, 0.82)
+	backdrop.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_canvas.add_child(backdrop)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	lobby_canvas.add_child(center)
+
+	lobby_panel = PanelContainer.new()
+	lobby_panel.name = "LobbyMainPanel"
+	lobby_panel.custom_minimum_size = Vector2(760, 560)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.11, 0.12, 0.15, 0.96)
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 3
+	style.border_color = Color(0.92, 0.76, 0.14, 0.95)
+	style.corner_radius_top_left = 6
+	style.corner_radius_top_right = 6
+	style.corner_radius_bottom_left = 6
+	style.corner_radius_bottom_right = 6
+	style.content_margin_left = 26
+	style.content_margin_right = 26
+	style.content_margin_top = 22
+	style.content_margin_bottom = 22
+	lobby_panel.add_theme_stylebox_override("panel", style)
+	center.add_child(lobby_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	lobby_panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "NPPL / PSP 2004 TOURNAMENT STAGING PITS — CLICK-TO-LOBBY"
+	title.add_theme_font_size_override("font_size", 22)
+	title.add_theme_color_override("font_color", Color(0.98, 0.84, 0.15))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+
+	lobby_status_label = Label.new()
+	lobby_status_label.name = "LobbyStatusLabel"
+	lobby_status_label.text = "LIVE LOBBY STATUS: Initializing WebSocket Staging..."
+	lobby_status_label.add_theme_font_size_override("font_size", 15)
+	lobby_status_label.add_theme_color_override("font_color", Color(0.45, 0.95, 0.65))
+	lobby_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(lobby_status_label)
+
+	# Row 1: Callsign & Room Code
+	var row_id := HBoxContainer.new()
+	row_id.add_theme_constant_override("separation", 12)
+	vbox.add_child(row_id)
+
+	var lbl_callsign := Label.new()
+	lbl_callsign.text = "CALLSIGN:"
+	lbl_callsign.custom_minimum_size = Vector2(95, 0)
+	row_id.add_child(lbl_callsign)
+
+	callsign_input = LineEdit.new()
+	callsign_input.name = "CallsignInput"
+	callsign_input.text = NetworkLobby.local_callsign
+	callsign_input.placeholder_text = "Enter player callsign..."
+	callsign_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row_id.add_child(callsign_input)
+
+	var lbl_room := Label.new()
+	lbl_room.text = "ROOM:"
+	row_id.add_child(lbl_room)
+
+	room_input = LineEdit.new()
+	room_input.name = "RoomInput"
+	room_input.text = NetworkLobby.active_room
+	room_input.custom_minimum_size = Vector2(120, 0)
+	row_id.add_child(room_input)
+
+	# Row 2: Server WebSocket Endpoint (Edgegap Arbitrium / Local / Custom WS)
+	var row_srv := HBoxContainer.new()
+	row_srv.add_theme_constant_override("separation", 10)
+	vbox.add_child(row_srv)
+
+	var lbl_srv := Label.new()
+	lbl_srv.text = "SERVER WS:"
+	lbl_srv.custom_minimum_size = Vector2(95, 0)
+	row_srv.add_child(lbl_srv)
+
+	server_url_input = LineEdit.new()
+	server_url_input.name = "ServerUrlInput"
+	server_url_input.text = NetworkLobby.current_ws_url
+	server_url_input.placeholder_text = "wss://... or ip:port (Edgegap Arbitrium / Custom)"
+	server_url_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row_srv.add_child(server_url_input)
+
+	var connect_btn := Button.new()
+	connect_btn.name = "ConnectServerButton"
+	connect_btn.text = "CONNECT / SYNC WS"
+	connect_btn.custom_minimum_size = Vector2(165, 34)
+	connect_btn.pressed.connect(_on_connect_ws_pressed)
+	row_srv.add_child(connect_btn)
+
+	# Row 3: Team Selection (ALPHA vs BRAVO)
+	var row_team := HBoxContainer.new()
+	row_team.add_theme_constant_override("separation", 12)
+	vbox.add_child(row_team)
+
+	var lbl_team := Label.new()
+	lbl_team.text = "TEAM SIDE:"
+	lbl_team.custom_minimum_size = Vector2(95, 0)
+	row_team.add_child(lbl_team)
+
+	team_alpha_btn = Button.new()
+	team_alpha_btn.text = "TEAM ALPHA (SOUTH GATE)"
+	team_alpha_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	team_alpha_btn.pressed.connect(func() -> void: _select_team("ALPHA"))
+	row_team.add_child(team_alpha_btn)
+
+	team_bravo_btn = Button.new()
+	team_bravo_btn.text = "TEAM BRAVO (NORTH GATE)"
+	team_bravo_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	team_bravo_btn.pressed.connect(func() -> void: _select_team("BRAVO"))
+	row_team.add_child(team_bravo_btn)
+
+	# Row 4: Gear Bracket Selection
+	var row_bracket := HBoxContainer.new()
+	row_bracket.add_theme_constant_override("separation", 10)
+	vbox.add_child(row_bracket)
+
+	var lbl_bracket := Label.new()
+	lbl_bracket.text = "BRACKET:"
+	lbl_bracket.custom_minimum_size = Vector2(95, 0)
+	row_bracket.add_child(lbl_bracket)
+
+	bracket_speedball_btn = Button.new()
+	bracket_speedball_btn.text = "SPEEDBALL (10.5 BPS)"
+	bracket_speedball_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bracket_speedball_btn.pressed.connect(func() -> void: _select_bracket("speedball"))
+	row_bracket.add_child(bracket_speedball_btn)
+
+	bracket_woodsball_btn = Button.new()
+	bracket_woodsball_btn.text = "WOODSBALL (1-PULL)"
+	bracket_woodsball_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bracket_woodsball_btn.pressed.connect(func() -> void: _select_bracket("woodsball"))
+	row_bracket.add_child(bracket_woodsball_btn)
+
+	bracket_pump_btn = Button.new()
+	bracket_pump_btn.text = "STOCK PUMP"
+	bracket_pump_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	bracket_pump_btn.pressed.connect(func() -> void: _select_bracket("pump"))
+	row_bracket.add_child(bracket_pump_btn)
+
+	# Row 5: Bot Fill Checkbox
+	fill_bots_check = CheckBox.new()
+	fill_bots_check.text = "Keep 5 OpFor Snap-Shooting Bots Active alongside Human Players"
+	fill_bots_check.button_pressed = NetworkLobby.fill_bots_enabled
+	fill_bots_check.toggled.connect(func(on: bool) -> void:
+		NetworkLobby.fill_bots_enabled = on
+		_set_opfor_bots_enabled(on)
+	)
+	vbox.add_child(fill_bots_check)
+
+	# Roster Box
+	var roster_panel := PanelContainer.new()
+	roster_panel.custom_minimum_size = Vector2(0, 135)
+	var rstyle := StyleBoxFlat.new()
+	rstyle.bg_color = Color(0.07, 0.08, 0.10, 0.95)
+	rstyle.border_width_left = 1
+	rstyle.border_width_top = 1
+	rstyle.border_width_right = 1
+	rstyle.border_width_bottom = 1
+	rstyle.border_color = Color(0.32, 0.36, 0.42)
+	rstyle.content_margin_left = 14
+	rstyle.content_margin_right = 14
+	rstyle.content_margin_top = 10
+	rstyle.content_margin_bottom = 10
+	roster_panel.add_theme_stylebox_override("panel", rstyle)
+	vbox.add_child(roster_panel)
+
+	lobby_roster_label = Label.new()
+	lobby_roster_label.name = "LobbyRosterLabel"
+	lobby_roster_label.add_theme_font_size_override("font_size", 14)
+	lobby_roster_label.add_theme_color_override("font_color", Color(0.85, 0.92, 1.0))
+	roster_panel.add_child(lobby_roster_label)
+
+	# Bottom Action Buttons: DROP IN TO ARENA & COPY INVITE LINK
+	var row_actions := HBoxContainer.new()
+	row_actions.add_theme_constant_override("separation", 14)
+	vbox.add_child(row_actions)
+
+	var drop_in_btn := Button.new()
+	drop_in_btn.name = "DropInArenaButton"
+	drop_in_btn.text = ">> DROP IN TO ARENA (PLAY NOW) <<"
+	drop_in_btn.custom_minimum_size = Vector2(0, 48)
+	drop_in_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	drop_in_btn.add_theme_font_size_override("font_size", 18)
+	drop_in_btn.add_theme_color_override("font_color", Color(0.15, 1.0, 0.45))
+	drop_in_btn.pressed.connect(_on_drop_in_pressed)
+	row_actions.add_child(drop_in_btn)
+
+	copy_link_btn = Button.new()
+	copy_link_btn.name = "CopyInviteLinkButton"
+	copy_link_btn.text = "COPY INVITE LINK"
+	copy_link_btn.custom_minimum_size = Vector2(210, 48)
+	copy_link_btn.add_theme_font_size_override("font_size", 16)
+	copy_link_btn.pressed.connect(_on_copy_invite_pressed)
+	row_actions.add_child(copy_link_btn)
+
+	_refresh_lobby_button_highlights()
+	_on_lobby_state_changed(NetworkLobby.get_lobby_state_snapshot())
+
+	# Show lobby overlay on interactive clients; keep hidden in headless smoke tests
+	var is_headless := (DisplayServer.get_name() == "headless")
+	_set_lobby_overlay_visible(not is_headless)
+
+func _set_lobby_overlay_visible(show_lobby: bool) -> void:
+	if lobby_canvas == null:
+		return
+	lobby_canvas.visible = show_lobby
+	if player and player.has_method("set_lobby_open_state"):
+		player.call("set_lobby_open_state", show_lobby)
+
+func _select_team(team: String) -> void:
+	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
+	NetworkLobby.update_local_player_choices(callsign_input.text, team, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
+	if player and player.has_method("respawn_at_team_gate"):
+		player.call("respawn_at_team_gate", NetworkLobby.local_team)
+	_refresh_lobby_button_highlights()
+
+func _select_bracket(bracket_id: String) -> void:
+	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
+	NetworkLobby.update_local_player_choices(callsign_input.text, NetworkLobby.local_team, bracket_id, fill_bots_check.button_pressed)
+	_refresh_lobby_button_highlights()
+
+func _refresh_lobby_button_highlights() -> void:
+	if team_alpha_btn == null:
+		return
+	team_alpha_btn.modulate = Color(0.4, 0.95, 1.0) if NetworkLobby.local_team == "ALPHA" else Color(0.75, 0.75, 0.75)
+	team_bravo_btn.modulate = Color(1.0, 0.55, 0.55) if NetworkLobby.local_team == "BRAVO" else Color(0.75, 0.75, 0.75)
+	bracket_speedball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "speedball" else Color(0.75, 0.75, 0.75)
+	bracket_woodsball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "woodsball" else Color(0.75, 0.75, 0.75)
+	bracket_pump_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "pump" else Color(0.75, 0.75, 0.75)
+
+func _on_connect_ws_pressed() -> void:
+	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
+	NetworkLobby.local_callsign = callsign_input.text.strip_edges() if not callsign_input.text.strip_edges().is_empty() else NetworkLobby.local_callsign
+	NetworkLobby.connect_to_lobby(server_url_input.text)
+	server_url_input.text = NetworkLobby.current_ws_url
+
+func _on_drop_in_pressed() -> void:
+	var chosen_room := room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
+	NetworkLobby.active_room = chosen_room
+	NetworkLobby.update_local_player_choices(callsign_input.text, NetworkLobby.local_team, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
+	NetworkLobby.request_start_match(chosen_room, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
+	_set_lobby_overlay_visible(false)
+
+func _on_copy_invite_pressed() -> void:
+	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
+	var url := NetworkLobby.copy_invite_link()
+	if copy_link_btn:
+		copy_link_btn.text = "COPIED! (%s)" % NetworkLobby.active_room
+	_on_status_banner("Copied Lobby Invite Link: %s" % url, Color(0.4, 1.0, 0.6))
+
+func _on_lobby_connection_status(status_text: String, is_online: bool) -> void:
+	if lobby_status_label:
+		lobby_status_label.text = "LIVE LOBBY STATUS: %s" % status_text
+		lobby_status_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.55) if is_online else Color(1.0, 0.82, 0.35))
+
+func _on_lobby_state_changed(state: Dictionary) -> void:
+	if lobby_roster_label == null:
+		return
+	var p_dict: Dictionary = state.get("players", {})
+	var lines: Array[String] = []
+	lines.append("STAGING ROSTER — ROOM [%s] (%d Human Player%s + %s):" % [
+		String(state.get("room", "alpha")).to_upper(),
+		p_dict.size(),
+		"" if p_dict.size() == 1 else "s",
+		"5 OpFor Bots" if bool(state.get("fill_bots", true)) else "No Bots"
+	])
+	for pid in p_dict.keys():
+		var info: Dictionary = p_dict[pid]
+		lines.append("  • [%s] %s  —  Bracket: %s  (%s)" % [
+			info.get("team", "ALPHA"),
+			info.get("name", "Player"),
+			String(info.get("bracket", "speedball")).to_upper(),
+			"READY / ON TURF" if info.get("ready", true) else "STAGING"
+		])
+	lobby_roster_label.text = "\n".join(lines)
+
+func _on_network_match_started(_room_id: String, bracket_id: String, fill_bots: bool) -> void:
+	_set_opfor_bots_enabled(fill_bots)
+	_refresh_lobby_button_highlights()
+	_on_status_banner("MATCH LIVE — Room [%s] | Bracket: %s | Press [TAB] for Lobby" % [NetworkLobby.active_room.to_upper(), bracket_id.to_upper()], Color(0.35, 1.0, 0.55))
+
+func _set_opfor_bots_enabled(enabled: bool) -> void:
+	for bname in ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]:
+		var b := get_node_or_null(bname) as Node3D
+		if b != null:
+			b.visible = enabled
+			b.set_process(enabled)

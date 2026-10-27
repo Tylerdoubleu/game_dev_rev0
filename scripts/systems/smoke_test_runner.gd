@@ -55,6 +55,14 @@ func _process(_delta: float) -> bool:
 	assert(ballistics.splat_nodes.size() >= 1 and ballistics.splat_nodes[0] is Decal, "Paint splat must be a wrapped Decal node")
 	assert(ballistics.mist_burst_count >= 1, "Airborne paint mist burst must be triggered on break")
 
-	print("=== All Prototype v0.2.1 Gritty 2000s Art & Realism Smoke Checks PASSED ===")
+	# 5. Verify NetworkLobby Autoload & TournamentLobbyOverlay (PB-05 Click-to-Lobby)
+	var lobby := root.get_node_or_null("NetworkLobby")
+	assert(lobby != null, "NetworkLobby autoload singleton must exist")
+	assert(lobby.normalize_ws_url("abc.pr.edgegap.net:31200") == "ws://abc.pr.edgegap.net:31200/ws", "NetworkLobby must normalize Edgegap host:port to ws://.../ws")
+	var lobby_ui := arena.get_node_or_null("TournamentLobbyOverlay") as CanvasLayer
+	assert(lobby_ui != null, "TournamentLobbyOverlay CanvasLayer must be built in SpeedballArena01")
+	assert(not lobby_ui.visible, "TournamentLobbyOverlay must remain hidden during headless smoke tests")
+
+	print("=== All Prototype v0.2.2 Gritty 2000s Art, Realism & Click-to-Lobby Smoke Checks PASSED ===")
 	quit(0)
 	return true

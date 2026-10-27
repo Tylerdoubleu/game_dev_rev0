@@ -132,11 +132,20 @@ func _process(delta: float) -> void:
 func on_paintball_break(_hit_pos: Vector3, _shooter: Node) -> void:
 	if is_eliminated:
 		return
+	_apply_elimination("ELIMINATED: %s (Clean Hit!)" % bot_name)
+	NetworkLobby.broadcast_bot_eliminated(name)
+
+func eliminate_from_network() -> void:
+	if is_eliminated:
+		return
+	_apply_elimination("TEAMMATE ELIMINATED: %s!" % bot_name)
+
+func _apply_elimination(feed_msg: String) -> void:
 	is_eliminated = true
 	base_mat.albedo_color = Color(0.28, 0.28, 0.3)
 	base_mat.emission_enabled = false
 	rotation.x = deg_to_rad(-75.0)
-	IntelBus.intel_feed_updated.emit("ELIMINATED: %s (Clean Hit!)" % bot_name)
+	IntelBus.intel_feed_updated.emit(feed_msg)
 	GameManager.notify_enemy_eliminated()
 
 func on_paintball_bounce(_hit_pos: Vector3) -> void:

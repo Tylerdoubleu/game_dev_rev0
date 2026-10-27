@@ -54,6 +54,7 @@ func _setup_input_map() -> void:
 	_bind_key("bracket_woodsball", KEY_2)
 	_bind_key("bracket_pump", KEY_3)
 	_bind_key("reset_round", KEY_T)
+	_bind_key("toggle_lobby", KEY_TAB)
 	_bind_mouse("fire_primary", MOUSE_BUTTON_LEFT)
 	_bind_mouse("fire_secondary_walk", MOUSE_BUTTON_RIGHT)
 	_bind_mouse("swap_shoulder", MOUSE_BUTTON_MIDDLE)
