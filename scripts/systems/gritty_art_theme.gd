@@ -13,6 +13,9 @@ const NEON_YELLOW_PAINT := Color(0.98, 0.84, 0.10, 1.0)
 const HOT_PINK_PAINT := Color(0.96, 0.16, 0.58, 1.0)
 
 static var _texture_cache: Dictionary = {}
+static var _vinyl_mat_cache: Dictionary = {}
+static var _paint_mat_cache: Dictionary = {}
+static var _puff_mesh_cached: SphereMesh = null
 
 static func load_texture_safe(res_path: String) -> Texture2D:
 	if _texture_cache.has(res_path):
@@ -100,19 +103,23 @@ static func create_muddy_turf_material() -> StandardMaterial3D:
 	return mat
 
 static func create_scuffed_vinyl_material(base_color: Color) -> StandardMaterial3D:
+	var cache_key := base_color.to_html(false)
+	if _vinyl_mat_cache.has(cache_key):
+		return _vinyl_mat_cache[cache_key]
 	var mat := StandardMaterial3D.new()
 	var weathered := base_color.lerp(Color(0.30, 0.29, 0.27), 0.26)
 	mat.albedo_color = weathered
 	mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
 	mat.roughness = 0.44
 	mat.roughness_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_roughness.png")
-	mat.normal_enabled = true
+	mat.normal_enabled = not OS.has_feature("web")
 	mat.normal_scale = 1.30
-	mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png")
-	mat.clearcoat_enabled = true
+	mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png") if not OS.has_feature("web") else null
+	mat.clearcoat_enabled = not OS.has_feature("web")
 	mat.clearcoat = 0.38
 	mat.clearcoat_roughness = 0.24
 	mat.uv1_scale = Vector3(1.8, 1.6, 1.8)
+	_vinyl_mat_cache[cache_key] = mat
 	return mat
 
 static func create_wood_spool_material() -> StandardMaterial3D:
@@ -127,11 +134,14 @@ static func create_wood_spool_material() -> StandardMaterial3D:
 	return mat
 
 static func create_oily_paint_material(color: Color, use_splat_mask: bool = false) -> StandardMaterial3D:
+	var cache_key := "%s_%s" % [color.to_html(false), "mask" if use_splat_mask else "solid"]
+	if _paint_mat_cache.has(cache_key):
+		return _paint_mat_cache[cache_key]
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.metallic = 0.08
 	mat.roughness = 0.10
-	mat.clearcoat_enabled = true
+	mat.clearcoat_enabled = not OS.has_feature("web")
 	mat.clearcoat = 0.92
 	mat.clearcoat_roughness = 0.06
 	mat.emission_enabled = true
@@ -144,6 +154,7 @@ static func create_oily_paint_material(color: Color, use_splat_mask: bool = fals
 			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 			mat.alpha_scissor_threshold = 0.25
 			mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_paint_mat_cache[cache_key] = mat
 	return mat
 
 static func build_stadium_props(arena_root: Node3D) -> Node3D:
