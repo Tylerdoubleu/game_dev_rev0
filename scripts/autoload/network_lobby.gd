@@ -16,6 +16,8 @@ signal lobby_state_changed(state_dict: Dictionary)
 signal connection_status_changed(status_text: String, is_online: bool)
 signal match_started_signal(room_id: String, bracket_id: String, fill_bots: bool)
 signal remote_player_hit_local(shooter_name: String)
+signal local_player_scored_kill(victim_name: String)
+signal match_over_networked(loser_name: String, winner_name: String)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -217,7 +219,9 @@ func _refresh_offline_local_roster() -> void:
 		"team": local_team,
 		"bracket": local_bracket,
 		"ready": local_ready,
-		"room": active_room
+		"room": active_room,
+		"kills": GameManager.local_kills if GameManager else 0,
+		"deaths": GameManager.local_deaths if GameManager else 0
 	}
 	lobby_state_changed.emit(get_lobby_state_snapshot())
 
@@ -261,7 +265,9 @@ func _on_peer_connected(id: int) -> void:
 			"team": "ALPHA" if (players.size() % 2 == 0) else "BRAVO",
 			"bracket": local_bracket,
 			"ready": true,
-			"room": active_room
+			"room": active_room,
+			"kills": 0,
+			"deaths": 0
 		}
 		_broadcast_lobby_state_from_server()
 
@@ -304,7 +310,9 @@ func register_player_info(callsign: String, team: String, bracket_id: String, is
 		"team": team.to_upper() if team.to_upper() in ["ALPHA", "BRAVO"] else "ALPHA",
 		"bracket": bracket_id if bracket_id in ["speedball", "woodsball", "pump"] else "speedball",
 		"ready": is_ready,
-		"room": _sanitize_token(room_id, "alpha")
+		"room": _sanitize_token(room_id, "alpha"),
+		"kills": int(players.get(sender_id, {}).get("kills", 0)),
+		"deaths": int(players.get(sender_id, {}).get("deaths", 0))
 	}
 	if is_dedicated_server:
 		print("[NetworkLobby] Registered peer %d: %s (Team %s, Bracket %s, Room %s)" % [
@@ -448,15 +456,37 @@ func notify_remote_player_hit(victim_peer_id: int) -> void:
 
 @rpc("any_peer", "call_local", "reliable")
 func rpc_notify_player_hit(victim_peer_id: int, shooter_peer_id: int, shooter_name: String) -> void:
+	if players.has(victim_peer_id):
+		players[victim_peer_id]["deaths"] = int(players[victim_peer_id].get("deaths", 0)) + 1
+	if players.has(shooter_peer_id):
+		players[shooter_peer_id]["kills"] = int(players[shooter_peer_id].get("kills", 0)) + 1
+
 	if is_dedicated_server:
+		_broadcast_lobby_state_from_server()
+		var v_deaths: int = int(players.get(victim_peer_id, {}).get("deaths", 0))
+		if v_deaths >= 10:
+			var loser_n: String = str(players.get(victim_peer_id, {}).get("name", "Peer #%d" % victim_peer_id))
+			rpc_announce_match_over.rpc(loser_n, shooter_name)
 		return
+
 	var my_id := multiplayer.get_unique_id() if peer != null else 1
 	if victim_peer_id == my_id:
 		remote_player_hit_local.emit(shooter_name)
-		IntelBus.intel_feed_updated.emit("HIT BY %s! Respawning at Breakout Gate..." % shooter_name)
+		IntelBus.intel_feed_updated.emit("HIT BY %s! Respawning at Original Starting Gate..." % shooter_name)
 	elif shooter_peer_id == my_id:
 		var victim_name: String = players.get(victim_peer_id, {}).get("name", "Peer #%d" % victim_peer_id)
-		IntelBus.intel_feed_updated.emit("ELIMINATED PLAYER: %s (Clean Break!)" % victim_name)
+		local_player_scored_kill.emit(victim_name)
+		IntelBus.intel_feed_updated.emit("ELIMINATED %s! (+1 BONUS PAINT POD AWARDED!)" % victim_name)
+	lobby_state_changed.emit(get_lobby_state_snapshot())
+
+@rpc("authority", "call_local", "reliable")
+func rpc_announce_match_over(loser_name: String, winner_name: String) -> void:
+	if is_dedicated_server:
+		return
+	match_active = false
+	match_over_networked.emit(loser_name, winner_name)
+	GameManager.match_ended = true
+	GameManager.match_over.emit(loser_name, winner_name)
 
 func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float, _head_pitch: float, lean: float, stance_idx: int, team: String, callsign: String, eliminated: bool) -> void:
 	var scene_root := get_tree().current_scene as Node3D

@@ -1,21 +1,29 @@
 extends Node
 
-## Manages round loop, target elimination counts, and runtime InputMap bindings.
-## TODO(PB-05 / Issue #5): Add Center Flag / CTF objectives, tactical bot AI, and multiplayer lobbies.
+## Manages round loop, target elimination counts, K/D scoreboard, First-to-10-Deaths rule, and runtime InputMap bindings.
 
 signal round_updated(round_num: int, remaining_enemies: int, round_time_left: float)
 signal round_won(round_num: int)
+signal scoreboard_updated(stats: Dictionary)
+signal match_over(loser_name: String, winner_label: String)
+
+const MAX_DEATHS_TO_LOSE: int = 10
 
 var current_round: int = 1
 var remaining_enemies: int = 0
 var round_time_left: float = 240.0
 var round_active: bool = false
 
+var local_kills: int = 0
+var local_deaths: int = 0
+var npc_deaths: int = 0
+var match_ended: bool = false
+
 func _ready() -> void:
 	_setup_input_map()
 
 func _process(delta: float) -> void:
-	if round_active:
+	if round_active and not match_ended:
 		round_time_left = max(0.0, round_time_left - delta)
 		round_updated.emit(current_round, remaining_enemies, round_time_left)
 
@@ -23,17 +31,63 @@ func register_round_start(enemy_count: int) -> void:
 	remaining_enemies = enemy_count
 	round_time_left = 240.0
 	round_active = true
+	match_ended = false
 	round_updated.emit(current_round, remaining_enemies, round_time_left)
+	_emit_scoreboard()
+
+func reset_match_stats() -> void:
+	local_kills = 0
+	local_deaths = 0
+	npc_deaths = 0
+	match_ended = false
+	_emit_scoreboard()
+
+func record_local_kill(_victim_label: String = "Enemy") -> void:
+	if match_ended:
+		return
+	local_kills += 1
+	_emit_scoreboard()
+
+func record_local_death(killer_label: String = "Enemy") -> void:
+	if match_ended:
+		return
+	local_deaths += 1
+	_emit_scoreboard()
+	if local_deaths >= MAX_DEATHS_TO_LOSE:
+		match_ended = true
+		round_active = false
+		match_over.emit(NetworkLobby.local_callsign, killer_label)
 
 func notify_enemy_eliminated() -> void:
+	if match_ended:
+		return
+	npc_deaths += 1
 	remaining_enemies = max(0, remaining_enemies - 1)
 	round_updated.emit(current_round, remaining_enemies, round_time_left)
-	if remaining_enemies == 0 and round_active:
+	_emit_scoreboard()
+	if npc_deaths >= MAX_DEATHS_TO_LOSE and round_active:
+		match_ended = true
 		round_active = false
 		round_won.emit(current_round)
+		match_over.emit("OpFor NPC Squad (10 Deaths)", NetworkLobby.local_callsign)
+
+func get_scoreboard_snapshot() -> Dictionary:
+	return {
+		"local_name": NetworkLobby.local_callsign if NetworkLobby else "Player",
+		"local_team": NetworkLobby.local_team if NetworkLobby else "ALPHA",
+		"local_kills": local_kills,
+		"local_deaths": local_deaths,
+		"npc_deaths": npc_deaths,
+		"max_deaths": MAX_DEATHS_TO_LOSE,
+		"match_ended": match_ended
+	}
+
+func _emit_scoreboard() -> void:
+	scoreboard_updated.emit(get_scoreboard_snapshot())
 
 func reset_round() -> void:
 	current_round += 1
+	reset_match_stats()
 	PaintBallistics.clear_all()
 	get_tree().reload_current_scene()
 
@@ -55,6 +109,7 @@ func _setup_input_map() -> void:
 	_bind_key("bracket_pump", KEY_3)
 	_bind_key("reset_round", KEY_T)
 	_bind_key("toggle_lobby", KEY_TAB)
+	_bind_key("toggle_scoreboard", KEY_M)
 	_bind_mouse("fire_primary", MOUSE_BUTTON_LEFT)
 	_bind_mouse("fire_secondary_walk", MOUSE_BUTTON_RIGHT)
 	_bind_mouse("swap_shoulder", MOUSE_BUTTON_MIDDLE)

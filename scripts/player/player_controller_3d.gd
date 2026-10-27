@@ -74,13 +74,18 @@ var woodsball_trigger_latched: bool = false
 var time_since_last_shot: float = 99.0
 var _shot_counter: int = 0
 var lobby_open: bool = false
+var initial_spawn_pos: Vector3 = Vector3(0.0, 0.1, 45.5)
+var initial_spawn_yaw: float = 0.0
 var _net_sync_timer: float = 0.0
 var _respawn_flash_timer: float = 0.0
 
 func _ready() -> void:
 	_build_player_nodes()
 	GearRuleEnforcer.bracket_changed.connect(_on_bracket_changed)
+	initial_spawn_pos = global_position
+	initial_spawn_yaw = yaw
 	NetworkLobby.remote_player_hit_local.connect(_on_remote_player_hit_local)
+	NetworkLobby.local_player_scored_kill.connect(award_kill_bonus_pod)
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
 
 func _build_player_nodes() -> void:
@@ -585,13 +590,52 @@ func set_lobby_open_state(is_open: bool) -> void:
 
 func respawn_at_team_gate(team: String) -> void:
 	var side := 1.0 if team == "ALPHA" else -1.0
-	global_position = Vector3(randf_range(-1.8, 1.8), 0.1, 45.5 * side)
-	yaw = 0.0 if side > 0.0 else PI
+	initial_spawn_pos = Vector3(0.0, 0.1, 45.5 * side)
+	initial_spawn_yaw = 0.0 if side > 0.0 else PI
+	global_position = initial_spawn_pos
+	velocity = Vector3.ZERO
+	yaw = initial_spawn_yaw
 	pitch = 0.0
 	rotation.y = yaw
+	is_reloading_pod = false
+	reload_timer = 0.0
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
 
+func respawn_at_starting_spot() -> void:
+	global_position = initial_spawn_pos
+	velocity = Vector3.ZERO
+	yaw = initial_spawn_yaw
+	pitch = 0.0
+	rotation.y = yaw
+	is_reloading_pod = false
+	reload_timer = 0.0
+	_on_bracket_changed(GearRuleEnforcer.active_bracket)
+
+func award_kill_bonus_pod(victim_label: String = "Enemy") -> void:
+	pods_remaining += 1
+	GameManager.record_local_kill(victim_label)
+	status_banner_sent.emit("ELIMINATED %s! +1 BONUS POD AWARDED (Pods: %d)" % [victim_label, pods_remaining], Color(0.30, 1.0, 0.45))
+	_emit_hud()
+
+func on_paintball_break(_hit_pos: Vector3, shooter: Node) -> void:
+	if _respawn_flash_timer > 0.2 or GameManager.match_ended:
+		return
+	var killer_name: String = "OpFor NPC"
+	if shooter != null and "bot_name" in shooter:
+		killer_name = String(shooter.get("bot_name"))
+	_handle_local_elimination(killer_name)
+
+func on_paintball_bounce(_hit_pos: Vector3) -> void:
+	status_banner_sent.emit("LUCKY BOUNCE ON YOUR JERSEY — No Break, Keep Playing!", Color(0.45, 0.95, 1.0))
+
 func _on_remote_player_hit_local(shooter_name: String) -> void:
+	_handle_local_elimination(shooter_name)
+
+func _handle_local_elimination(killer_name: String) -> void:
 	_respawn_flash_timer = 1.2
-	status_banner_sent.emit("MARKED OUT BY %s! Re-inserting at %s Breakout Gate..." % [shooter_name, NetworkLobby.local_team], Color(1.0, 0.32, 0.32))
-	respawn_at_team_gate(NetworkLobby.local_team)
+	GameManager.record_local_death(killer_name)
+	respawn_at_starting_spot()
+	if GameManager.match_ended:
+		status_banner_sent.emit("MATCH OVER — Reached 10 Deaths! Press [T] or [M] to Review Scoreboard", Color(1.0, 0.25, 0.25))
+	else:
+		status_banner_sent.emit("HIT BY %s! Respawned at Original Starting Spot (Deaths: %d / %d)" % [killer_name, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE], Color(1.0, 0.32, 0.32))

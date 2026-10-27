@@ -12,6 +12,8 @@ extends StaticBody3D
 var base_pos: Vector3
 var timer: float = 0.0
 var is_eliminated: bool = false
+var respawn_timer: float = 0.0
+const BOT_RESPAWN_DELAY: float = 3.2
 var is_spotted_timer: float = 0.0
 var mesh_inst: MeshInstance3D
 var base_mat: StandardMaterial3D
@@ -107,7 +109,12 @@ func _build_visual_and_collider() -> void:
 	add_child(loader_mesh)
 
 func _process(delta: float) -> void:
+	if GameManager.match_ended:
+		return
 	if is_eliminated:
+		respawn_timer -= delta
+		if respawn_timer <= 0.0:
+			_respawn_bot()
 		return
 
 	timer += delta
@@ -126,13 +133,21 @@ func _process(delta: float) -> void:
 	# Fire occasional suppressive paintballs while peeking out
 	if fire_at_player and peek_alpha > 0.75 and randf() < delta * 2.2:
 		var origin := global_position + Vector3(0.20, 1.24, 0.58)
-		var dir := (Vector3(0, 1.3, 14.0) - origin).normalized()
+		var target_pos := Vector3(0, 1.3, 14.0)
+		var scene_root := get_tree().current_scene
+		if scene_root != null:
+			var pnode := scene_root.get_node_or_null("Player3D") as Node3D
+			if pnode != null:
+				target_pos = pnode.global_position + Vector3(randf_range(-0.45, 0.45), 1.15, randf_range(-0.45, 0.45))
+		var dir := (target_pos - origin).normalized()
 		PaintBallistics.spawn_paintball(origin, dir, 255.0, self, Color(0.2, 0.95, 0.35))
 
-func on_paintball_break(_hit_pos: Vector3, _shooter: Node) -> void:
-	if is_eliminated:
+func on_paintball_break(_hit_pos: Vector3, shooter: Node) -> void:
+	if is_eliminated or GameManager.match_ended:
 		return
-	_apply_elimination("ELIMINATED: %s (Clean Hit!)" % bot_name)
+	if shooter != null and shooter.has_method("award_kill_bonus_pod"):
+		shooter.call("award_kill_bonus_pod", bot_name)
+	_apply_elimination("ELIMINATED: %s (+1 BONUS POD! Respawning at gate...)" % bot_name)
 	NetworkLobby.broadcast_bot_eliminated(name)
 
 func eliminate_from_network() -> void:
@@ -142,11 +157,19 @@ func eliminate_from_network() -> void:
 
 func _apply_elimination(feed_msg: String) -> void:
 	is_eliminated = true
+	respawn_timer = BOT_RESPAWN_DELAY
 	base_mat.albedo_color = Color(0.28, 0.28, 0.3)
 	base_mat.emission_enabled = false
 	rotation.x = deg_to_rad(-75.0)
 	IntelBus.intel_feed_updated.emit(feed_msg)
 	GameManager.notify_enemy_eliminated()
+
+func _respawn_bot() -> void:
+	is_eliminated = false
+	position = base_pos
+	rotation.x = 0.0
+	base_mat.albedo_color = Color(0.76, 0.16, 0.18)
+	base_mat.emission_enabled = false
 
 func on_paintball_bounce(_hit_pos: Vector3) -> void:
 	if is_eliminated:

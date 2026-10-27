@@ -28,6 +28,10 @@ var bracket_woodsball_btn: Button
 var bracket_pump_btn: Button
 var fill_bots_check: CheckBox
 var copy_link_btn: Button
+var npc_presence_on_btn: Button
+var npc_presence_off_btn: Button
+var scoreboard_canvas: CanvasLayer
+var scoreboard_body_label: Label
 
 func _ready() -> void:
 	_build_environment_and_turf()
@@ -37,8 +41,11 @@ func _ready() -> void:
 		_spawn_player()
 		_build_hud()
 		_build_tournament_lobby_overlay()
+		_build_scoreboard_overlay()
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
+	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
+	GameManager.match_over.connect(_on_match_over)
 	IntelBus.intel_feed_updated.connect(_on_intel_feed)
 	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
 	NetworkLobby.connection_status_changed.connect(_on_lobby_connection_status)
@@ -271,16 +278,15 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 		"STANCE: %s  |  SHOULDER: %s%s" % [state["stance"], state["hand"], reload_text]
 	)
 
-func _on_round_updated(round_num: int, remaining: int, time_left: float) -> void:
+func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> void:
 	if round_label == null:
 		return
-	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else "SOLO+BOTS"
+	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else ("SOLO+NPCs" if NetworkLobby.fill_bots_enabled else "PVP ONLY")
 	round_label.text = (
-		"ROUND %d  |  OPFOR ALIVE: %d  |  TIME: %.0fs  |  %s\n" % [round_num, remaining, time_left, net_tag] +
-		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide\n" +
-		"Ctrl Prone | Shift+Ctrl Superman Dive | Q/E Lean + Hand Swap\n" +
+		"ROUND %d  |  KILLS: %d (+1 Pod/Kill)  |  DEATHS: %d/%d  |  TIME: %.0fs  |  %s\n" % [round_num, GameManager.local_kills, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, time_left, net_tag] +
+		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide | Ctrl Prone | Shift+Ctrl Dive\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
-		"R Pod Reload | F Ping | T Reset | [TAB / ESC] Multiplayer Lobby"
+		"R Pod Reload | F Ping | [M] Scoreboard (K/D) | [TAB / ESC] Opening Menu | T Reset"
 	)
 
 func _on_round_won(round_num: int) -> void:
@@ -300,6 +306,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("toggle_lobby") or event.is_action_pressed("ui_cancel"):
 		_set_lobby_overlay_visible(not lobby_canvas.visible)
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("toggle_scoreboard"):
+		if scoreboard_canvas != null:
+			scoreboard_canvas.visible = not scoreboard_canvas.visible
+			_refresh_scoreboard_text()
 		get_viewport().set_input_as_handled()
 
 func _build_tournament_lobby_overlay() -> void:
@@ -459,14 +470,33 @@ func _build_tournament_lobby_overlay() -> void:
 	bracket_pump_btn.pressed.connect(func() -> void: _select_bracket("pump"))
 	row_bracket.add_child(bracket_pump_btn)
 
-	# Row 5: Bot Fill Checkbox
+	# Row 5: NPC Presence Selector (Selectable in Opening Menu)
+	var row_npc := HBoxContainer.new()
+	row_npc.add_theme_constant_override("separation", 10)
+	vbox.add_child(row_npc)
+
+	var lbl_npc := Label.new()
+	lbl_npc.text = "NPC PRESENCE:"
+	lbl_npc.custom_minimum_size = Vector2(95, 0)
+	row_npc.add_child(lbl_npc)
+
+	npc_presence_on_btn = Button.new()
+	npc_presence_on_btn.name = "NpcPresenceOnButton"
+	npc_presence_on_btn.text = "NPC PRESENCE: ON (5 OpFor Bots)"
+	npc_presence_on_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	npc_presence_on_btn.pressed.connect(func() -> void: _select_npc_presence(true))
+	row_npc.add_child(npc_presence_on_btn)
+
+	npc_presence_off_btn = Button.new()
+	npc_presence_off_btn.name = "NpcPresenceOffButton"
+	npc_presence_off_btn.text = "NPC PRESENCE: OFF (Players Only)"
+	npc_presence_off_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	npc_presence_off_btn.pressed.connect(func() -> void: _select_npc_presence(false))
+	row_npc.add_child(npc_presence_off_btn)
+
 	fill_bots_check = CheckBox.new()
-	fill_bots_check.text = "Keep 5 OpFor Snap-Shooting Bots Active alongside Human Players"
+	fill_bots_check.visible = false
 	fill_bots_check.button_pressed = NetworkLobby.fill_bots_enabled
-	fill_bots_check.toggled.connect(func(on: bool) -> void:
-		NetworkLobby.fill_bots_enabled = on
-		_set_opfor_bots_enabled(on)
-	)
 	vbox.add_child(fill_bots_check)
 
 	# Roster Box
@@ -549,6 +579,9 @@ func _refresh_lobby_button_highlights() -> void:
 	bracket_speedball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "speedball" else Color(0.75, 0.75, 0.75)
 	bracket_woodsball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "woodsball" else Color(0.75, 0.75, 0.75)
 	bracket_pump_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "pump" else Color(0.75, 0.75, 0.75)
+	if npc_presence_on_btn != null and npc_presence_off_btn != null:
+		npc_presence_on_btn.modulate = Color(0.35, 1.0, 0.55) if NetworkLobby.fill_bots_enabled else Color(0.72, 0.72, 0.72)
+		npc_presence_off_btn.modulate = Color(1.0, 0.75, 0.35) if not NetworkLobby.fill_bots_enabled else Color(0.72, 0.72, 0.72)
 
 func _on_connect_ws_pressed() -> void:
 	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
@@ -607,3 +640,120 @@ func _set_opfor_bots_enabled(enabled: bool) -> void:
 		if b != null:
 			b.visible = enabled
 			b.set_process(enabled)
+
+func _select_npc_presence(enabled: bool) -> void:
+	NetworkLobby.fill_bots_enabled = enabled
+	if fill_bots_check != null:
+		fill_bots_check.button_pressed = enabled
+	_set_opfor_bots_enabled(enabled)
+	NetworkLobby.update_local_player_choices(callsign_input.text, NetworkLobby.local_team, NetworkLobby.local_bracket, enabled)
+	_refresh_lobby_button_highlights()
+
+func _build_scoreboard_overlay() -> void:
+	scoreboard_canvas = CanvasLayer.new()
+	scoreboard_canvas.name = "ScoreboardOverlay"
+	scoreboard_canvas.layer = 9
+	scoreboard_canvas.visible = false
+	add_child(scoreboard_canvas)
+
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	scoreboard_canvas.add_child(center)
+
+	var panel := PanelContainer.new()
+	panel.name = "ScoreboardPanel"
+	panel.custom_minimum_size = Vector2(640, 340)
+	var pstyle := StyleBoxFlat.new()
+	pstyle.bg_color = Color(0.06, 0.08, 0.11, 0.92)
+	pstyle.border_width_left = 3
+	pstyle.border_width_top = 3
+	pstyle.border_width_right = 3
+	pstyle.border_width_bottom = 3
+	pstyle.border_color = Color(0.95, 0.80, 0.18, 0.95)
+	pstyle.corner_radius_top_left = 6
+	pstyle.corner_radius_top_right = 6
+	pstyle.corner_radius_bottom_left = 6
+	pstyle.corner_radius_bottom_right = 6
+	pstyle.content_margin_left = 24
+	pstyle.content_margin_right = 24
+	pstyle.content_margin_top = 20
+	pstyle.content_margin_bottom = 20
+	panel.add_theme_stylebox_override("panel", pstyle)
+	center.add_child(panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 12)
+	panel.add_child(vbox)
+
+	var hdr := Label.new()
+	hdr.text = "LIVE MATCH SCOREBOARD [M] — FIRST TO 10 DEATHS LOSES"
+	hdr.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hdr.add_theme_font_size_override("font_size", 20)
+	hdr.add_theme_color_override("font_color", Color(0.98, 0.85, 0.18))
+	vbox.add_child(hdr)
+
+	var rules_sub := Label.new()
+	rules_sub.text = "RULE: Respawn at Original Starting Gate on Hit  |  +1 Bonus Paint Pod per Kill  |  10 Deaths = Loss"
+	rules_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	rules_sub.add_theme_font_size_override("font_size", 13)
+	rules_sub.add_theme_color_override("font_color", Color(0.65, 0.92, 1.0))
+	vbox.add_child(rules_sub)
+
+	scoreboard_body_label = Label.new()
+	scoreboard_body_label.name = "ScoreboardBodyLabel"
+	scoreboard_body_label.add_theme_font_size_override("font_size", 16)
+	scoreboard_body_label.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	vbox.add_child(scoreboard_body_label)
+
+	_refresh_scoreboard_text()
+
+func _on_scoreboard_updated(_stats: Dictionary) -> void:
+	_refresh_scoreboard_text()
+
+func _on_match_over(loser_name: String, winner_label: String) -> void:
+	if scoreboard_canvas != null:
+		scoreboard_canvas.visible = true
+	_refresh_scoreboard_text()
+	_on_status_banner("MATCH OVER! %s hit 10 Deaths — %s WINS! Press [T] for Rematch" % [loser_name, winner_label], Color(1.0, 0.88, 0.22))
+
+func _refresh_scoreboard_text() -> void:
+	if scoreboard_body_label == null:
+		return
+	var lines: Array[String] = []
+	lines.append("----------------------------------------------------------------------")
+	lines.append("PLAYER / SQUAD                  TEAM       KILLS (+PODS)     DEATHS (MAX 10)")
+	lines.append("----------------------------------------------------------------------")
+	lines.append("%-30s  %-9s  %-16d  %d / %d" % [
+		NetworkLobby.local_callsign + " (YOU)",
+		NetworkLobby.local_team,
+		GameManager.local_kills,
+		GameManager.local_deaths,
+		GameManager.MAX_DEATHS_TO_LOSE
+	])
+	for pid in NetworkLobby.players.keys():
+		var my_id := multiplayer.get_unique_id() if NetworkLobby.peer != null else 1
+		if int(pid) == my_id:
+			continue
+		var pinfo: Dictionary = NetworkLobby.players[pid]
+		lines.append("%-30s  %-9s  %-16d  %d / %d" % [
+			String(pinfo.get("name", "Peer #%d" % int(pid))),
+			String(pinfo.get("team", "BRAVO")),
+			int(pinfo.get("kills", 0)),
+			int(pinfo.get("deaths", 0)),
+			GameManager.MAX_DEATHS_TO_LOSE
+		])
+	if NetworkLobby.fill_bots_enabled:
+		lines.append("%-30s  %-9s  %-16d  %d / %d" % [
+			"OpFor NPC Squad (5 Bots)",
+			"OPFOR",
+			GameManager.local_deaths,
+			GameManager.npc_deaths,
+			GameManager.MAX_DEATHS_TO_LOSE
+		])
+	lines.append("----------------------------------------------------------------------")
+	if GameManager.match_ended:
+		lines.append(">> MATCH ENDED (10 DEATH LIMIT REACHED) — PRESS [T] TO START NEXT MATCH <<")
+	else:
+		lines.append("Press [M] to Close Scoreboard   |   Press [TAB] for Opening Menu / NPC Toggle")
+	scoreboard_body_label.text = "\n".join(lines)
