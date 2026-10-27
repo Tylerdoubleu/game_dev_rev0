@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3 uid="uid://speedball_arena_01"]
+
+[ext_resource type="Script" path="res://scripts/systems/speedball_arena_builder.gd" id="1_arena"]
+
+[node name="SpeedballArena01" type="Node3D"]
+script = ExtResource("1_arena")
