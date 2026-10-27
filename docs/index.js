@@ -142,7 +142,8 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 			loaded: 0,
 			done: false,
 		};
-		return fetch(file).then(function (response) {
+		const _u = file.endsWith('.pck') ? (file + '?v=024_altw_guard') : file;
+		return fetch(_u, { cache: 'no-store' }).then(function (response) {
 			if (!response.ok) {
 				return Promise.reject(new Error(`Failed loading file '${file}'`));
 			}
