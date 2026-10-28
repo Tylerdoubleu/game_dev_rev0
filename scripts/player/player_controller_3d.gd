@@ -87,7 +87,7 @@ var breakout_penalty_timer: float = 0.0
 var _was_moving_before_horn: bool = false
 
 # PB-16: Exaggerated Bunker Cover Pocket + Strong Corner Edge-Detent + Deep Viewmodel Tuck
-const BUNKER_POCKET_REACH: float = 1.45
+const BUNKER_POCKET_REACH: float = 1.65
 const BUNKER_POCKET_IDEAL_DIST: float = 0.40
 var bunker_pocket_weight: float = 0.0
 var active_bunker_name: String = ""
@@ -782,31 +782,25 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 		fwd = Vector3(0, 0, -1)
 	else:
 		fwd = fwd.normalized()
-	var right := transform.basis.x.normalized()
-	right.y = 0.0
-	right = right.normalized()
 
 	var origin := global_position + Vector3(0.0, 0.55, 0.0)
-	var dirs := [
-		fwd,
-		(fwd + right * 0.35).normalized(),
-		(fwd - right * 0.35).normalized(),
-		(fwd + right * 0.75).normalized(),
-		(fwd - right * 0.75).normalized(),
-		right,
-		-right
-	]
 	var best_hit: Dictionary = {}
-	var best_dist: float = BUNKER_POCKET_REACH + 0.1
-	for d in dirs:
+	var best_score: float = 999.0
+	# 12-ray 360-degree horizontal ring so turning your camera sideways down the tape never drops the bunker pocket
+	for i in range(12):
+		var ang: float = float(i) * (TAU / 12.0)
+		var d := Vector3(sin(ang), 0.0, cos(ang)).normalized()
 		var q := PhysicsRayQueryParameters3D.create(origin, origin + d * BUNKER_POCKET_REACH)
 		q.exclude = [get_rid()]
 		var res: Dictionary = space_state.intersect_ray(q)
 		if not res.is_empty() and _is_cover_bunker_collider(res.get("collider")):
 			var hit_pos: Vector3 = res["position"]
 			var dist: float = Vector2(hit_pos.x - origin.x, hit_pos.z - origin.z).length()
-			if dist < best_dist:
-				best_dist = dist
+			# Slightly favor the bunker face in front of look/movement when equidistant, but keep full 360 lock
+			var align_bonus: float = maxf(0.0, d.dot(fwd)) * 0.15
+			var score: float = dist - align_bonus
+			if score < best_score:
+				best_score = score
 				best_hit = res
 				best_hit["horiz_dist"] = dist
 	return best_hit
@@ -835,9 +829,12 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var n := raw_normal.normalized() # Points outward from bunker surface toward player
 	var dist: float = float(hit.get("horiz_dist", 0.5))
 
-	# Instant zero-friction breakaway if sprinting (Shift) or backing away from the bunker face (S)
-	var moving_away := (move_dir.length() > 0.15 and move_dir.dot(n) > 0.52)
-	if wants_sprint or moving_away:
+	# Instant zero-friction breakaway if backing away from the bunker face (move_dir.dot(n) > 0.48),
+	# or holding Shift (Sprint) while steering out/away from the bunker (move_dir.dot(n) > -0.05).
+	# Sprinting INTO a bunker (move_dir.dot(n) <= -0.05) now actively vacuums and latches you into the pocket!
+	var moving_away: bool = (move_dir.length() > 0.15 and move_dir.dot(n) > 0.48)
+	var sprinting_out: bool = (wants_sprint and (move_dir.length() < 0.1 or move_dir.dot(n) > -0.05))
+	if sprinting_out or moving_away:
 		var was_tucked := bunker_pocket_weight > 0.25
 		bunker_pocket_weight = 0.0
 		active_bunker_name = ""
@@ -864,7 +861,7 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 
 	# 2. Strong magnetic surface-normal snap toward the ideal 0.40m tuck pocket distance
 	var dist_err: float = dist - BUNKER_POCKET_IDEAL_DIST
-	var radial_pull: float = clampf(-dist_err * 11.5, -6.8, 6.8) * bunker_pocket_weight
+	var radial_pull: float = clampf(-dist_err * 14.5, -8.2, 8.2) * bunker_pocket_weight
 	velocity.x += n.x * radial_pull
 	velocity.z += n.z * radial_pull
 
