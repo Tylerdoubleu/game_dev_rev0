@@ -96,6 +96,7 @@ var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
 var _edge_breakaway_hold_timer: float = 0.0
 var _at_bunker_edge_side: float = 0.0
+var _manual_hand_override_in_pocket: bool = false
 var _sustained_back_escape_timer: float = 0.0
 
 func _ready() -> void:
@@ -244,6 +245,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	if event.is_action_pressed("swap_shoulder"):
 		is_left_handed = not is_left_handed
+		if bunker_pocket_weight > 0.25:
+			_manual_hand_override_in_pocket = true
 		_emit_hud()
 
 	if event.is_action_pressed("reload_pod"):
@@ -812,6 +815,7 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 			active_bunker_name = ""
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
+		_manual_hand_override_in_pocket = false
 		if was_tucked and bunker_pocket_weight <= 0.25:
 			_emit_hud()
 		return
@@ -840,6 +844,7 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		active_bunker_name = ""
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
+		_manual_hand_override_in_pocket = false
 		if was_tucked:
 			status_banner_sent.emit("BROKE OUT OF COVER! (Shift + Move/Look Away)", Color(0.55, 0.95, 1.0))
 			_emit_hud()
@@ -865,8 +870,51 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	velocity.x += n.x * radial_pull
 	velocity.z += n.z * radial_pull
 
-	# 3. Tangent-rail strafe + firm corner edge-detent latch so A/D locks you flush at the peeking edge
+	# 3. Camera-Right-aligned Tangent-Rail Strafe + Automatic Bunker-Edge Marker Hand Selection
+	# Ensure `tangent` always points to the PLAYER'S RIGHT (+X) when facing downfield/through the bunker (-n),
+	# so -tangent is ALWAYS the player's LEFT edge and +tangent is ALWAYS the player's RIGHT edge!
 	var tangent := Vector3(-n.z, 0.0, n.x).normalized()
+	var cam_right := transform.basis.x
+	cam_right.y = 0.0
+	if cam_right.length_squared() > 0.001:
+		cam_right = cam_right.normalized()
+	if tangent.dot(cam_right) < 0.0:
+		tangent = -tangent
+
+	# Continuous Left/Right Bunker-Edge Detection & Automatic Marker Hand Assignment:
+	# 1) Relative offset from bunker center along camera-right tangent tells us which half of the bunker we're on.
+	# 2) Twin shoulder edge-probes at ±0.42m detect when the left or right peeking lane is open right next to us.
+	var space_state := get_world_3d().direct_space_state
+	var probe_base := global_position + Vector3(0.0, 0.55, 0.0)
+	var q_left := PhysicsRayQueryParameters3D.create(probe_base - tangent * 0.42, (probe_base - tangent * 0.42) - n * (BUNKER_POCKET_REACH + 0.35))
+	q_left.exclude = [get_rid()]
+	var hit_left: Dictionary = space_state.intersect_ray(q_left)
+	var left_edge_open: bool = (hit_left.is_empty() or hit_left.get("collider") != col)
+
+	var q_right := PhysicsRayQueryParameters3D.create(probe_base + tangent * 0.42, (probe_base + tangent * 0.42) - n * (BUNKER_POCKET_REACH + 0.35))
+	q_right.exclude = [get_rid()]
+	var hit_right: Dictionary = space_state.intersect_ray(q_right)
+	var right_edge_open: bool = (hit_right.is_empty() or hit_right.get("collider") != col)
+
+	var prev_hand := is_left_handed
+	if left_edge_open and not right_edge_open:
+		# Standing/sliding at the LEFT peeking edge -> automatically switch to LEFT hand!
+		is_left_handed = true
+		_at_bunker_edge_side = -1.0
+		_manual_hand_override_in_pocket = false
+	elif right_edge_open and not left_edge_open:
+		# Standing/sliding at the RIGHT peeking edge -> automatically switch to RIGHT hand!
+		is_left_handed = false
+		_at_bunker_edge_side = 1.0
+		_manual_hand_override_in_pocket = false
+	elif col != null and not _manual_hand_override_in_pocket:
+		# Inside a wide or narrow bunker: check which side of the bunker center we are offset toward in camera-right space
+		var rel_offset: float = (global_position - col.global_position).dot(tangent)
+		if absf(rel_offset) > 0.08:
+			is_left_handed = (rel_offset < 0.0)
+	if prev_hand != is_left_handed:
+		_emit_hud()
+
 	if move_dir.length() > 0.08 and slide_timer <= 0.0 and dive_timer <= 0.0:
 		# Project movement cleanly along the bunker tangent rail; damp backward S movement strongly so Shift+Look/Move is the primary escape
 		var tang_speed: float = velocity.dot(tangent) * 0.72
@@ -875,24 +923,20 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		velocity.x = tangent.x * tang_speed + n.x * damped_normal
 		velocity.z = tangent.z * tang_speed + n.z * damped_normal
 
-		if absf(tang_speed) > 0.12:
-			var side_sign: float = signf(tang_speed)
-			var probe_origin := global_position + Vector3(0.0, 0.55, 0.0) + tangent * (side_sign * 0.44)
-			var q_edge := PhysicsRayQueryParameters3D.create(probe_origin, probe_origin - n * (BUNKER_POCKET_REACH + 0.35))
-			q_edge.exclude = [get_rid()]
-			var edge_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(q_edge)
-			var still_has_bunker: bool = (not edge_hit.is_empty() and edge_hit.get("collider") == col)
-			if not still_has_bunker:
+		if absf(tang_speed) > 0.10:
+			var side_sign: float = signf(tang_speed) # -1.0 = moving Left (A), +1.0 = moving Right (D)
+			is_left_handed = (side_sign < 0.0)
+			_manual_hand_override_in_pocket = false
+			var moving_into_open_edge: bool = (left_edge_open if side_sign < 0.0 else right_edge_open)
+			if moving_into_open_edge:
 				# Reached the peeking corner edge of the bunker! Hard corner detent latch for 0.45s unless held through
 				_edge_breakaway_hold_timer += delta
 				_at_bunker_edge_side = side_sign
-				is_left_handed = (side_sign < 0.0)
 				if _edge_breakaway_hold_timer < 0.45:
 					velocity.x -= tangent.x * tang_speed * 0.96
 					velocity.z -= tangent.z * tang_speed * 0.96
 			else:
 				_edge_breakaway_hold_timer = 0.0
-				_at_bunker_edge_side = 0.0
 	else:
 		# When idle in the pocket, bleed off residual lateral drift so you stay locked in cover
 		velocity.x = move_toward(velocity.x, n.x * radial_pull, delta * 18.0)

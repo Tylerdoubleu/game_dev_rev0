@@ -142,7 +142,7 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 			loaded: 0,
 			done: false,
 		};
-		const fetchUrl = file.endsWith('.pck') ? (file + '?v=030_epeek_live_v5_' + Date.now()) : file;
+		const fetchUrl = file.endsWith('.pck') ? (file + '?v=030_edgehand_v6_' + Date.now()) : file;
 		return fetch(fetchUrl, { cache: 'no-store' }).then(function (response) {
 			if (!response.ok) {
 				return Promise.reject(new Error(`Failed loading file '${file}'`));

@@ -121,12 +121,16 @@ func _process(_delta: float) -> bool:
 	arena.call("_update_center_flag_pickup_and_hang")
 	assert(not bool(player.get("carrying_center_flag")) and gm.alpha_flag_hangs == 1 and gm.flag_state == "CENTER_50", "Reaching enemy Breakout Gate must hang the flag, score a Flag Hang point, and reset flag to Center-50")
 
-	# Test PB-16 Bunker Cover Pocket & Sprint Breakaway
-	player.global_position = Vector3(0.0, 0.1, 39.25) # Just behind Home_BackCenter (0, 0, 38.0, depth 1.4)
+	# Test PB-16 Bunker Cover Pocket, Auto Left/Right Edge Marker Hand & Sprint Breakaway
+	player.global_position = Vector3(-0.95, 0.1, 39.25) # Left edge of Home_BackCenter (0, 0, 38.0, width 2.4)
 	player.rotation.y = 0.0 # Facing -Z toward Home_BackCenter
 	for _i in range(6):
 		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
 	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Player behind a bunker face must settle into the PB-16 Bunker Cover Pocket")
+	assert(bool(player.get("is_left_handed")) == true, "Standing at the LEFT edge of a bunker must automatically select LEFT marker hand")
+	player.global_position = Vector3(0.95, 0.1, 39.25) # Right edge of Home_BackCenter
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(bool(player.get("is_left_handed")) == false, "Standing at the RIGHT edge of a bunker must automatically select RIGHT marker hand")
 	player.call("_apply_bunker_cover_pocket_physics", 0.1, Vector3(0, 0, 1), Vector2(0, 1), true)
 	assert(float(player.get("bunker_pocket_weight")) == 0.0, "Sprinting or moving away must immediately release the PB-16 Bunker Cover Pocket")
 	print("[PASS] PB-16 Soft Bunker Cover Pocket + Corner Edge-Detent + Instant Sprint Breakaway verified")
