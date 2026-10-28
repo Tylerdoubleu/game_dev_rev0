@@ -95,6 +95,7 @@ var _active_bunker_node: Node3D = null
 var _bunker_slam_flex_cooldown: float = 0.0
 var _bunker_contact_latched: bool = false
 var _latched_bunker_push_dir: Vector3 = Vector3.ZERO
+var _pocket_entry_tangent: Vector3 = Vector3.ZERO
 var active_bunker_normal: Vector3 = Vector3.ZERO
 var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
@@ -808,34 +809,26 @@ func resolve_hit_subzone(world_hit_pos: Vector3) -> Dictionary:
 	return {"zone": "TORSO / JERSEY", "bounce_cos_threshold": 0.48}
 
 func is_wrong_hand_peek() -> bool:
-	if bunker_pocket_weight <= 0.20 or absf(_at_bunker_edge_side) < 0.1:
-		return false
-	# Left edge (_at_bunker_edge_side < 0) requires Left hand; Right edge (> 0) requires Right hand
-	return (_at_bunker_edge_side < 0.0 and not is_left_handed) or (_at_bunker_edge_side > 0.0 and is_left_handed)
+	return false
 
 func _update_exposed_profile_hitboxes_and_visor(delta: float) -> void:
 	if _bunker_rub_cooldown > 0.0:
 		_bunker_rub_cooldown = maxf(0.0, _bunker_rub_cooldown - delta)
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
-	var wrong_hand := is_wrong_hand_peek()
-	var prev_exp := hopper_exposure_multiplier
-	hopper_exposure_multiplier = 2.4 if wrong_hand else 1.0
+	hopper_exposure_multiplier = 1.0
 	if hitbox_mask != null and head_pivot != null:
 		hitbox_mask.position = head_pivot.position
 	if hitbox_hopper_marker != null and head_pivot != null:
 		var hm_box := hitbox_hopper_marker.shape as BoxShape3D
 		if hm_box != null:
-			hm_box.size = Vector3(0.18 * hopper_exposure_multiplier, 0.28, 0.50)
-		var extra_outward := 0.22 * signf(_at_bunker_edge_side) if wrong_hand else 0.0
+			hm_box.size = Vector3(0.18, 0.28, 0.50)
 		hitbox_hopper_marker.position = Vector3(
-			head_pivot.position.x + 0.20 * hand_sign + extra_outward,
+			head_pivot.position.x + 0.20 * hand_sign,
 			head_pivot.position.y - 0.12,
 			-0.34
 		)
 	if hitbox_pod_pack != null and head_pivot != null:
 		hitbox_pod_pack.position = Vector3(head_pivot.position.x * 0.4, maxf(0.32, head_pivot.position.y - 0.68), 0.20)
-	if absf(prev_exp - hopper_exposure_multiplier) > 0.05:
-		_emit_hud()
 
 	# Thermal lens breath fogging when sprinting or diving hard
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
@@ -992,6 +985,7 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 			active_bunker_name = ""
 			_active_bunker_node = null
 		_bunker_contact_latched = false
+		_pocket_entry_tangent = Vector3.ZERO
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
 		_manual_hand_override_in_pocket = false
@@ -1025,6 +1019,7 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		active_bunker_name = ""
 		_active_bunker_node = null
 		_bunker_contact_latched = false
+		_pocket_entry_tangent = Vector3.ZERO
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
 		_manual_hand_override_in_pocket = false
@@ -1088,39 +1083,48 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var prev_hand := is_left_handed
 	var prev_edge_side := _at_bunker_edge_side
 	var actively_peeking: bool = (_locked_peek_hand != 0 or absf(current_lean) > 0.08)
-	var moved_since_switch: float = global_position.distance_to(_last_auto_hand_switch_pos)
-	var can_auto_switch: bool = (not actively_peeking) and (_auto_hand_switch_cooldown <= 0.0 or moved_since_switch > 0.35)
-	var rel_cam_x: float = (global_position - col.global_position).dot(cam_right) if col != null else 0.0
-	if absf(rel_cam_x) <= 0.04 and col != null:
-		rel_cam_x = (global_position - col.global_position).dot(tangent)
-
-	if can_auto_switch:
-		if left_edge_open and not right_edge_open and rel_cam_x <= 0.12:
-			_at_bunker_edge_side = -1.0
-			if prev_edge_side != -1.0:
-				_manual_hand_override_in_pocket = false
-			if not _manual_hand_override_in_pocket and not is_left_handed:
+	var switched_bunker_now: bool = (_active_bunker_node != col)
+	if switched_bunker_now or _pocket_entry_tangent.length_squared() < 0.001 or prev_weight <= 0.25:
+		_pocket_entry_tangent = cam_right if cam_right.length_squared() > 0.001 else tangent
+		_auto_hand_switch_cooldown = 0.0
+	var stable_tangent: Vector3 = _pocket_entry_tangent.normalized()
+	# Compute offset along the locked bunker entry tangent so mouse panning or curved Can/Spool normals never flip the axis
+	var rel_offset: float = (global_position - col.global_position).dot(stable_tangent) if col != null else 0.0
+	if absf(rel_offset) <= 0.08 and col != null:
+		rel_offset = (global_position - col.global_position).dot(cam_right)
+	var moved_far_in_pocket: bool = (global_position.distance_to(_last_hand_switch_pos) > 0.32)
+	var deliberate_strafe_left: bool = (input_vec.x < -0.35)
+	var deliberate_strafe_right: bool = (input_vec.x > 0.35)
+	var is_initial_entry_or_reposition: bool = (prev_weight <= 0.25 or switched_bunker_now or moved_far_in_pocket)
+	if not actively_peeking and _auto_hand_switch_cooldown <= 0.0:
+		if deliberate_strafe_left and not is_left_handed:
+			is_left_handed = true
+			_manual_hand_override_in_pocket = false
+			_auto_hand_switch_cooldown = 0.28
+			_last_hand_switch_pos = global_position
+		elif deliberate_strafe_right and is_left_handed:
+			is_left_handed = false
+			_manual_hand_override_in_pocket = false
+			_auto_hand_switch_cooldown = 0.28
+			_last_hand_switch_pos = global_position
+		elif is_initial_entry_or_reposition and not _manual_hand_override_in_pocket:
+			if left_edge_open and not right_edge_open and rel_offset < -0.15:
+				_at_bunker_edge_side = -1.0
 				is_left_handed = true
-				_auto_hand_switch_cooldown = 0.28
-				_last_auto_hand_switch_pos = global_position
-		elif right_edge_open and not left_edge_open and rel_cam_x >= -0.12:
-			_at_bunker_edge_side = 1.0
-			if prev_edge_side != 1.0:
-				_manual_hand_override_in_pocket = false
-			if not _manual_hand_override_in_pocket and is_left_handed:
+				_last_hand_switch_pos = global_position
+			elif right_edge_open and not left_edge_open and rel_offset > 0.15:
+				_at_bunker_edge_side = 1.0
 				is_left_handed = false
-				_auto_hand_switch_cooldown = 0.28
-				_last_auto_hand_switch_pos = global_position
-		elif col != null and not _manual_hand_override_in_pocket:
-			# Wide ±0.24m center hysteresis deadzone so small aim/position changes never oscillate hands
-			if rel_cam_x < -0.24 and not is_left_handed:
-				is_left_handed = true
-				_auto_hand_switch_cooldown = 0.28
-				_last_auto_hand_switch_pos = global_position
-			elif rel_cam_x > 0.24 and is_left_handed:
-				is_left_handed = false
-				_auto_hand_switch_cooldown = 0.28
-				_last_auto_hand_switch_pos = global_position
+				_last_hand_switch_pos = global_position
+			elif col != null:
+				if rel_offset < -0.22:
+					_at_bunker_edge_side = -1.0
+					is_left_handed = true
+					_last_hand_switch_pos = global_position
+				elif rel_offset > 0.22:
+					_at_bunker_edge_side = 1.0
+					is_left_handed = false
+					_last_hand_switch_pos = global_position
 	if prev_hand != is_left_handed:
 		_emit_hud()
 
@@ -1135,12 +1139,12 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		velocity.x = tangent.x * tang_speed + n.x * damped_normal
 		velocity.z = tangent.z * tang_speed + n.z * damped_normal
 
-		if absf(tang_speed) > 0.55 and absf(input_vec.x) > 0.35:
-			var side_sign: float = signf(tang_speed) # -1.0 = moving Left (A), +1.0 = moving Right (D)
-			if can_auto_switch and is_left_handed != (side_sign < 0.0):
+		if absf(tang_speed) > 0.35 and absf(input_vec.x) > 0.35 and not actively_peeking:
+			var side_sign: float = signf(input_vec.x) # -1.0 = pressing Left (A), +1.0 = pressing Right (D)
+			if is_left_handed != (side_sign < 0.0) and _auto_hand_switch_cooldown <= 0.0:
 				is_left_handed = (side_sign < 0.0)
 				_auto_hand_switch_cooldown = 0.28
-				_last_auto_hand_switch_pos = global_position
+				_last_hand_switch_pos = global_position
 			_manual_hand_override_in_pocket = false
 			var moving_into_open_edge: bool = (left_edge_open if side_sign < 0.0 else right_edge_open)
 			if moving_into_open_edge:
