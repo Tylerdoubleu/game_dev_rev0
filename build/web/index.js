@@ -136,7 +136,7 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 		}), { headers: response.headers });
 	}
 
-	function loadFetch(file, tracker, fileSize, raw) { file = file + "?v=030_can_entry_tangent_lock";
+	function loadFetch(file, tracker, fileSize, raw) { file = file + "?v=030_no_wrong_hand_penalty";
 		tracker[file] = {
 			total: fileSize || 0,
 			loaded: 0,
