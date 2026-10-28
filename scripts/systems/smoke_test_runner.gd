@@ -161,7 +161,7 @@ func _process(_delta: float) -> bool:
 	player.set("_manual_hand_override_in_pocket", true)
 	player.set("is_left_handed", false)
 	player.call("_update_exposed_profile_hitboxes_and_visor", 0.05)
-	assert(absf(float(player.get("hopper_exposure_multiplier")) - 2.4) < 0.05, "Peeking Left edge with Right hand must expose 2.4x wider hopper hitbox")
+	assert(absf(float(player.get("hopper_exposure_multiplier")) - 1.0) < 0.05, "Hopper hitbox size must stay 1.0x without wrong-hand penalty")
 
 	# Verify Visor Splatter & [G] Squeegee Wipe
 	player.call("add_visor_splatter", 0.45, Color(0.98, 0.84, 0.10), "TEST SPLATTER")

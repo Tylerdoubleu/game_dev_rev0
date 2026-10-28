@@ -342,14 +342,12 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 		if wiping:
 			squeegee_wipe_bar.position.x = lerpf(0.0, 1600.0, float(state.get("squeegee_pct", 0.0)))
 
-	var exp_mult: float = float(state.get("hopper_exposure", 1.0))
-	var exp_warn := "  |  [!! WRONG-HAND PEEK: %.1fx HOPPER EXPOSED — SWAP [X] !!]" % exp_mult if exp_mult > 1.5 else ""
 	var visor_warn := "  |  [VISOR SMEARED — PRESS [G] TO SQUEEGEE WIPE!]" if (splat_a > 0.08 or fog_a > 0.18) else ""
 	var flag_carry_text := "  |  [!! CARRYING CENTER FLAG -> HANG AT ENEMY GATE !!]" if state.get("carrying_flag", false) else ""
 	hud_label.text = (
 		"BRACKET: %s%s%s\n" % [state["bracket_name"], flag_carry_text, visor_warn] +
 		"HOPPER: %d / %d  |  PODS: %d (%d rnds)%s\n" % [state["hopper"], state["hopper_max"], state["pods"], state["pod_cap"], pump_text] +
-		"STANCE: %s  |  SHOULDER: %s%s%s" % [state["stance"], state["hand"], exp_warn, reload_text]
+		"STANCE: %s  |  SHOULDER: %s%s" % [state["stance"], state["hand"], reload_text]
 	)
 
 func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> void:
