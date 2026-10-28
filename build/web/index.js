@@ -136,7 +136,7 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 		}), { headers: response.headers });
 	}
 
-	function loadFetch(file, tracker, fileSize, raw) { file = file + "?v=030_no_w_jiggle_v2";
+	function loadFetch(file, tracker, fileSize, raw) { file = file + "?v=030_hand_lock_hysteresis";
 		tracker[file] = {
 			total: fileSize || 0,
 			loaded: 0,
