@@ -1,8 +1,8 @@
 extends StaticBody3D
 
 ## Attached to RemotePlayer_<peer_id> nodes spawned by NetworkLobby.
-## Supports sub-hitbox classification (HOPPER / MARKER, MASK / GOGGLES, POD PACK, TORSO / JERSEY)
-## and articulated 3P marker/hopper tilts when tucked vs. snap-peeking (#16 + #20).
+## Powered by the 22-joint ProPaintballRig3D (PB-14) with bone-synced sub-hitboxes
+## (Hitbox_HopperMarker, Hitbox_Mask, Hitbox_PodPack, Hitbox_Torso).
 
 var last_hit_zone: String = "TORSO / JERSEY"
 
@@ -11,20 +11,18 @@ func classify_hit_zone(hit_pos: Vector3) -> String:
 	return String(sub.get("zone", "TORSO / JERSEY"))
 
 func resolve_hit_subzone(world_hit_pos: Vector3) -> Dictionary:
-	var marker_piv := get_node_or_null("MarkerPivot3D") as Node3D
-	if marker_piv != null:
-		var hopper_piv := marker_piv.get_node_or_null("HopperPivot3D") as Node3D
-		var hopper_world := hopper_piv.global_position if hopper_piv != null else (marker_piv.global_position + Vector3(0.0, 0.12, 0.0))
-		if world_hit_pos.distance_to(hopper_world) <= 0.28 or world_hit_pos.distance_to(marker_piv.global_position) <= 0.28:
-			last_hit_zone = "HOPPER / MARKER"
-			return {"zone": "HOPPER / MARKER", "bounce_cos_threshold": 0.28}
-	var local_hit := to_local(world_hit_pos)
-	if local_hit.y >= 1.32:
+	var h_col := get_node_or_null("Hitbox_HopperMarker") as Node3D
+	if h_col != null and world_hit_pos.distance_to(h_col.global_position) <= 0.30:
+		last_hit_zone = "HOPPER / MARKER"
+		return {"zone": "HOPPER / MARKER", "bounce_cos_threshold": 0.28}
+	var m_col := get_node_or_null("Hitbox_Mask") as Node3D
+	if m_col != null and world_hit_pos.distance_to(m_col.global_position) <= 0.26:
 		last_hit_zone = "MASK / GOGGLES"
-		return {"zone": "MASK / GOGGLES", "bounce_cos_threshold": 0.26}
-	if local_hit.z >= 0.12 and local_hit.y >= 0.65 and local_hit.y <= 1.18:
+		return {"zone": "MASK / GOGGLES", "bounce_cos_threshold": 0.28}
+	var p_col := get_node_or_null("Hitbox_PodPack") as Node3D
+	if p_col != null and world_hit_pos.distance_to(p_col.global_position) <= 0.28:
 		last_hit_zone = "POD PACK"
-		return {"zone": "POD PACK", "bounce_cos_threshold": 0.36}
+		return {"zone": "POD PACK", "bounce_cos_threshold": 0.32}
 	last_hit_zone = "TORSO / JERSEY"
 	return {"zone": "TORSO / JERSEY", "bounce_cos_threshold": 0.48}
 

@@ -137,12 +137,15 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 	}
 
 	function loadFetch(file, tracker, fileSize, raw) {
+	if (typeof file === 'string' && (file.endsWith('.pck') || file.endsWith('.wasm'))) {
+		file = file + (file.indexOf('?') === -1 ? '?v=040_pro_character_rig_' + Date.now() : '');
+	}
 		tracker[file] = {
 			total: fileSize || 0,
 			loaded: 0,
 			done: false,
 		};
-		return fetch(file).then(function (response) {
+		return fetch(file, { cache: 'no-store' }).then(function (response) {
 			if (!response.ok) {
 				return Promise.reject(new Error(`Failed loading file '${file}'`));
 			}

@@ -1,4 +1,7 @@
 extends Node
+const ProPaintballRig3DScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
+
+const ProRigScript := preload("res://scripts/player/pro_paintball_rig_3d.gd")
 
 const GrittyArtTheme = preload("res://scripts/systems/gritty_art_theme.gd")
 
@@ -541,33 +544,45 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 		scene_root.add_child(avatar)
 		remote_player_nodes[peer_id] = avatar
 
+	var prev_pos := avatar.global_position
 	avatar.global_position = avatar.global_position.lerp(pos, 0.45)
+	var est_vel := (avatar.global_position - prev_pos) / 0.05
 	avatar.rotation.y = body_yaw
-	avatar.rotation.z = deg_to_rad(-lean * 10.0)
-	avatar.rotation.x = deg_to_rad(-70.0) if eliminated else 0.0
+	avatar.rotation.z = 0.0
+	avatar.rotation.x = 0.0
+	avatar.scale = Vector3.ONE
 
 	var base_stance: int = stance_idx & 3
 	var remote_left_handed: bool = (stance_idx & 4) != 0 if stance_idx >= 4 else (lean < -0.05)
-	var stance_scale_y: float = 1.0
-	if base_stance == 1:
-		stance_scale_y = 0.65
-	elif base_stance == 2:
-		stance_scale_y = 0.35
-	avatar.scale.y = lerpf(avatar.scale.y, stance_scale_y, 0.35)
+	var remote_tucked: bool = (stance_idx & 8) != 0
+	var remote_sliding: bool = (stance_idx & 16) != 0
+	var remote_diving: bool = (stance_idx & 32) != 0
+	var remote_reloading: bool = (stance_idx & 64) != 0
+	var p_bracket: String = String(players.get(peer_id, {}).get("bracket", local_bracket))
 
-	# PB-13 (#16) & PB-16 (#20): Articulated 3P MarkerPivot3D + HopperPivot3D cant & shoulder swap
-	var hand_sign: float = -1.0 if remote_left_handed else 1.0
-	var marker_piv := avatar.get_node_or_null("MarkerPivot3D") as Node3D
-	if marker_piv != null:
-		marker_piv.position = marker_piv.position.lerp(Vector3(0.22 * hand_sign + lean * 0.14, 1.22, -0.28), 0.45)
-		var cant_deg: float = clampf(-lean * 24.0, -26.0, 26.0) if absf(lean) > 0.08 else (-14.0 * hand_sign)
-		marker_piv.rotation_degrees = Vector3(0.0, 0.0, cant_deg)
-		var hopper_piv := marker_piv.get_node_or_null("HopperPivot3D") as Node3D
-		if hopper_piv != null:
-			hopper_piv.rotation_degrees = Vector3(0.0, 0.0, cant_deg * 0.45)
-	var hm_col := avatar.get_node_or_null("Hitbox_HopperMarker") as CollisionShape3D
-	if hm_col != null and marker_piv != null:
-		hm_col.position = marker_piv.position + Vector3(0.0, 0.06, 0.0)
+	var pro_rig := avatar.get_node_or_null("ProPaintballRig3D") as Node3D
+	if pro_rig != null and pro_rig.has_method("apply_pose"):
+		pro_rig.call("apply_pose", 0.05, {
+			"velocity": est_vel,
+			"stance": base_stance,
+			"lean": lean,
+			"is_left_handed": remote_left_handed,
+			"bunker_tuck": 1.0 if remote_tucked else 0.0,
+			"is_sliding": remote_sliding,
+			"is_diving": remote_diving,
+			"is_reloading": remote_reloading,
+			"is_eliminated": eliminated,
+			"team": team,
+			"bracket": p_bracket,
+		})
+		var marker_piv := avatar.get_node_or_null("MarkerPivot3D") as Node3D
+		var m_asm := pro_rig.get("marker_assembly_pivot") as Node3D
+		var h_unit := pro_rig.get("hopper_unit_pivot") as Node3D
+		if marker_piv != null and m_asm != null:
+			marker_piv.global_transform = m_asm.global_transform
+			var hopper_piv := marker_piv.get_node_or_null("HopperPivot3D") as Node3D
+			if hopper_piv != null and h_unit != null:
+				hopper_piv.global_transform = h_unit.global_transform
 
 	var tag := avatar.get_node_or_null("CallsignTag3D") as Label3D
 	if tag != null:
@@ -579,113 +594,29 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	body.name = "RemotePlayer_%d" % peer_id
 	body.set_meta("remote_peer_id", peer_id)
 
-	var col_torso := CollisionShape3D.new()
-	col_torso.name = "Hitbox_Torso"
-	var cap := CapsuleShape3D.new()
-	cap.radius = 0.26
-	cap.height = 1.38
-	col_torso.shape = cap
-	col_torso.position = Vector3(0, 0.69, 0)
-	body.add_child(col_torso)
-
-	var col_mask := CollisionShape3D.new()
-	col_mask.name = "Hitbox_Mask"
-	var m_sphere := SphereShape3D.new()
-	m_sphere.radius = 0.175
-	col_mask.shape = m_sphere
-	col_mask.position = Vector3(0, 1.48, 0.0)
-	body.add_child(col_mask)
-
-	var col_hm := CollisionShape3D.new()
-	col_hm.name = "Hitbox_HopperMarker"
-	var hm_box := BoxShape3D.new()
-	hm_box.size = Vector3(0.20, 0.28, 0.52)
-	col_hm.shape = hm_box
-	col_hm.position = Vector3(0.22, 1.28, -0.28)
-	body.add_child(col_hm)
-
-	var col_pack := CollisionShape3D.new()
-	col_pack.name = "Hitbox_PodPack"
-	var p_box := BoxShape3D.new()
-	p_box.size = Vector3(0.32, 0.26, 0.18)
-	col_pack.shape = p_box
-	col_pack.position = Vector3(0, 0.88, 0.20)
-	body.add_child(col_pack)
-
-	var jersey := MeshInstance3D.new()
-	jersey.name = "JerseyMesh"
-	var cmesh := CapsuleMesh.new()
-	cmesh.radius = 0.26
-	cmesh.height = 1.35
-	jersey.mesh = cmesh
-	jersey.position = Vector3(0, 0.70, 0)
-	var jmat := StandardMaterial3D.new()
-	jmat.albedo_color = Color(0.18, 0.44, 0.86) if team == "ALPHA" else Color(0.82, 0.20, 0.22)
-	jmat.roughness = 0.55
-	jersey.material_override = jmat
-	body.add_child(jersey)
-
-	var head := MeshInstance3D.new()
-	head.name = "MaskMesh3D"
-	var smesh := SphereMesh.new()
-	smesh.radius = 0.17
-	smesh.height = 0.34
-	head.mesh = smesh
-	head.position = Vector3(0, 1.48, 0.0)
-	var hmat := StandardMaterial3D.new()
-	hmat.albedo_color = Color(0.15, 0.16, 0.18)
-	hmat.roughness = 0.40
-	head.material_override = hmat
-	body.add_child(head)
-
-	var visor := MeshInstance3D.new()
-	visor.name = "VisorMesh3D"
-	var vbox := BoxMesh.new()
-	vbox.size = Vector3(0.30, 0.12, 0.18)
-	visor.mesh = vbox
-	visor.position = Vector3(0, 1.49, -0.12)
-	var vmat := StandardMaterial3D.new()
-	vmat.albedo_color = Color(0.90, 0.65, 0.15)
-	vmat.metallic = 0.85
-	vmat.roughness = 0.12
-	visor.material_override = vmat
-	body.add_child(visor)
-
-	var pack_mesh := MeshInstance3D.new()
-	pack_mesh.name = "PodPackMesh3D"
-	var pm_box := BoxMesh.new()
-	pm_box.size = Vector3(0.30, 0.24, 0.15)
-	pack_mesh.mesh = pm_box
-	pack_mesh.position = Vector3(0, 0.88, 0.19)
-	pack_mesh.material_override = hmat
-	body.add_child(pack_mesh)
+	var p_bracket: String = String(players.get(peer_id, {}).get("bracket", local_bracket))
+	var pro_rig := ProRigScript.new()
+	pro_rig.name = "ProPaintballRig3D"
+	body.add_child(pro_rig)
+	pro_rig.build_rig(team, p_bracket)
+	pro_rig.build_sub_hitboxes_on(body)
+	pro_rig.apply_pose(0.0, {
+		"velocity": Vector3.ZERO,
+		"stance": 0,
+		"lean": 0.0,
+		"is_left_handed": false,
+		"bunker_tuck": 0.0,
+		"is_eliminated": false,
+		"team": team,
+		"bracket": p_bracket,
+	})
 
 	var marker_piv := Node3D.new()
 	marker_piv.name = "MarkerPivot3D"
-	marker_piv.position = Vector3(0.22, 1.22, -0.28)
 	body.add_child(marker_piv)
-
-	var marker := MeshInstance3D.new()
-	marker.name = "MarkerBody3D"
-	var mbox := BoxMesh.new()
-	mbox.size = Vector3(0.06, 0.12, 0.52)
-	marker.mesh = mbox
-	marker.material_override = hmat
-	marker_piv.add_child(marker)
-
 	var hopper_piv := Node3D.new()
 	hopper_piv.name = "HopperPivot3D"
-	hopper_piv.position = Vector3(0.0, 0.12, 0.05)
 	marker_piv.add_child(hopper_piv)
-
-	var loader_mesh := MeshInstance3D.new()
-	loader_mesh.name = "HopperMesh3D"
-	var lsphere := SphereMesh.new()
-	lsphere.radius = 0.085
-	lsphere.height = 0.15
-	loader_mesh.mesh = lsphere
-	loader_mesh.material_override = hmat
-	hopper_piv.add_child(loader_mesh)
 
 	var tag := Label3D.new()
 	tag.name = "CallsignTag3D"
