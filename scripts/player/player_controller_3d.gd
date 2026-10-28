@@ -96,6 +96,7 @@ var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
 var _edge_breakaway_hold_timer: float = 0.0
 var _at_bunker_edge_side: float = 0.0
+var _sustained_back_escape_timer: float = 0.0
 
 func _ready() -> void:
 	_build_player_nodes()
@@ -314,7 +315,7 @@ func _update_movement_and_stance(delta: float) -> void:
 		slide_timer = SLIDE_DURATION
 		slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
 		stance = Stance.CROUCHING
-		status_banner_sent.emit("KNEE-SLIDE! (Hold [C] to stay crouched)", Color(0.35, 0.95, 1.0))
+		status_banner_sent.emit("KNEE-SLIDE! (Hold [Q] to stay crouched)", Color(0.35, 0.95, 1.0))
 		if is_reloading_pod:
 			_spill_active_pod("Knee-slide interrupted reload — pod spilled!")
 		_emit_hud()
@@ -324,7 +325,7 @@ func _update_movement_and_stance(delta: float) -> void:
 		dive_timer = DIVE_DURATION
 		slide_dir = move_dir if move_dir.length() > 0.1 else -transform.basis.z.normalized()
 		stance = Stance.PRONE
-		status_banner_sent.emit("SUPERMAN DIVE! (Hold [Ctrl] to stay prone)", Color(1.0, 0.82, 0.25))
+		status_banner_sent.emit("SUPERMAN DIVE! (Hold [C] to stay prone)", Color(1.0, 0.82, 0.25))
 		if is_reloading_pod:
 			_spill_active_pod("Superman dive interrupted reload — pod spilled!")
 		_emit_hud()
@@ -349,7 +350,7 @@ func _update_movement_and_stance(delta: float) -> void:
 		if stance != prev_stance:
 			_emit_hud()
 
-	var wants_sprint := shift_held and input_vec.y < -0.1 and slide_timer <= 0.0 and dive_timer <= 0.0 and not crouch_held and not prone_held
+	var wants_sprint := shift_held and input_vec.length() > 0.1 and slide_timer <= 0.0 and dive_timer <= 0.0 and not crouch_held and not prone_held
 
 	if wants_sprint and is_reloading_pod:
 		_spill_active_pod("Sprint interrupted reload — pod spilled!")
@@ -395,12 +396,9 @@ func _update_movement_and_stance(delta: float) -> void:
 
 func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	var target_lean: float = 0.0
-	if Input.is_action_pressed("lean_left"):
-		target_lean = -1.0 * lean_exposure_scale
-		is_left_handed = true
-	elif Input.is_action_pressed("lean_right"):
-		target_lean = 1.0 * lean_exposure_scale
-		is_left_handed = false
+	if (InputMap.has_action("lean_peek") and Input.is_action_pressed("lean_peek")) or (InputMap.has_action("lean_right") and Input.is_action_pressed("lean_right")):
+		# [E] peeks in whatever direction matches how you are holding the marker (is_left_handed: Left = -1, Right = +1)
+		target_lean = (-1.0 if is_left_handed else 1.0) * lean_exposure_scale
 
 	current_lean = lerp(current_lean, target_lean, min(1.0, delta * 12.0))
 
@@ -829,19 +827,21 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var n := raw_normal.normalized() # Points outward from bunker surface toward player
 	var dist: float = float(hit.get("horiz_dist", 0.5))
 
-	# Instant zero-friction breakaway if backing away from the bunker face (move_dir.dot(n) > 0.48),
-	# or holding Shift (Sprint) while steering out/away from the bunker (move_dir.dot(n) > -0.05).
-	# Sprinting INTO a bunker (move_dir.dot(n) <= -0.05) now actively vacuums and latches you into the pocket!
-	var moving_away: bool = (move_dir.length() > 0.15 and move_dir.dot(n) > 0.48)
-	var sprinting_out: bool = (wants_sprint and (move_dir.length() < 0.1 or move_dir.dot(n) > -0.05))
-	if sprinting_out or moving_away:
+	# Shift + look/steer away is the primary way to break out of the bunker pocket!
+	# Pressing S without Shift stays sticky inside the bunker pocket (only detaching if you walk far outside the 1.65m probe reach).
+	var fwd_look := -transform.basis.z.normalized()
+	fwd_look.y = 0.0
+	if fwd_look.length_squared() > 0.001:
+		fwd_look = fwd_look.normalized()
+	var sprinting_out: bool = (wants_sprint or Input.is_action_pressed("sprint")) and (move_dir.dot(n) > -0.05 or fwd_look.dot(n) > 0.15)
+	if sprinting_out:
 		var was_tucked := bunker_pocket_weight > 0.25
 		bunker_pocket_weight = 0.0
 		active_bunker_name = ""
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
 		if was_tucked:
-			status_banner_sent.emit("BROKE OUT OF COVER!", Color(0.55, 0.95, 1.0))
+			status_banner_sent.emit("BROKE OUT OF COVER! (Shift + Move/Look Away)", Color(0.55, 0.95, 1.0))
 			_emit_hud()
 		return
 
@@ -868,11 +868,12 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	# 3. Tangent-rail strafe + firm corner edge-detent latch so A/D locks you flush at the peeking edge
 	var tangent := Vector3(-n.z, 0.0, n.x).normalized()
 	if move_dir.length() > 0.08 and slide_timer <= 0.0 and dive_timer <= 0.0:
-		# Project movement cleanly along the bunker tangent rail
+		# Project movement cleanly along the bunker tangent rail; damp backward S movement strongly so Shift+Look/Move is the primary escape
 		var tang_speed: float = velocity.dot(tangent) * 0.72
 		var normal_speed: float = velocity.dot(n)
-		velocity.x = tangent.x * tang_speed + n.x * minf(0.0, normal_speed)
-		velocity.z = tangent.z * tang_speed + n.z * minf(0.0, normal_speed)
+		var damped_normal: float = normal_speed * 0.16 if normal_speed > 0.0 else normal_speed
+		velocity.x = tangent.x * tang_speed + n.x * damped_normal
+		velocity.z = tangent.z * tang_speed + n.z * damped_normal
 
 		if absf(tang_speed) > 0.12:
 			var side_sign: float = signf(tang_speed)
@@ -899,5 +900,5 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		_edge_breakaway_hold_timer = 0.0
 
 	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
-		status_banner_sent.emit("LOCKED IN COVER: %s — [A/D] Edge-Stop | [Q/E] Snap-Peek | [Shift] Break Out" % active_bunker_name, Color(0.35, 1.0, 0.58))
+		status_banner_sent.emit("LOCKED IN COVER: %s — [E] Peek (%s Hand) | [X] Swap Hand | [Q] Crouch | [C] Prone | [Shift] Break Out" % [active_bunker_name, "LEFT" if is_left_handed else "RIGHT"], Color(0.35, 1.0, 0.58))
 		_emit_hud()

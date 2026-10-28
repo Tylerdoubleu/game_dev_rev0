@@ -321,7 +321,7 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 		flag_hud_status = "DROPPED"
 	round_label.text = (
 		"ROUND %d  |  FLAG: %s (A:%d B:%d)  |  KILLS: %d  |  DEATHS: %d/%d  |  %.0fs  |  %s\n" % [round_num, flag_hud_status, GameManager.alpha_flag_hangs, GameManager.bravo_flag_hangs, GameManager.local_kills, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, time_left, net_tag] +
-		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide | Ctrl/Alt/Z Prone | Shift+Ctrl Dive\n" +
+		"Move: WASD + Shift Break Out | E Peek (Active Hand, X Swap) | Q Crouch (Shift+Q Slide) | C Prone (Shift+C Dive)\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
 		"Center-50 Flag Pull & Hang at Enemy Gate | R Pod Reload | F Ping | [M] Scoreboard | [TAB] Menu"
 	)
