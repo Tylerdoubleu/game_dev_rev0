@@ -86,15 +86,16 @@ var breakout_boost_timer: float = 0.0
 var breakout_penalty_timer: float = 0.0
 var _was_moving_before_horn: bool = false
 
-# PB-16: Soft Bunker Cover Pocket + Corner Edge-Detent + Analog Lean Exposure
-const BUNKER_POCKET_REACH: float = 0.85
-const BUNKER_POCKET_IDEAL_DIST: float = 0.44
+# PB-16: Exaggerated Bunker Cover Pocket + Strong Corner Edge-Detent + Deep Viewmodel Tuck
+const BUNKER_POCKET_REACH: float = 1.45
+const BUNKER_POCKET_IDEAL_DIST: float = 0.40
 var bunker_pocket_weight: float = 0.0
 var active_bunker_name: String = ""
 var active_bunker_normal: Vector3 = Vector3.ZERO
 var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
 var _edge_breakaway_hold_timer: float = 0.0
+var _at_bunker_edge_side: float = 0.0
 
 func _ready() -> void:
 	_build_player_nodes()
@@ -433,22 +434,26 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	else:
 		bob_time = 0.0
 
-	head_pivot.position.y = lerp(head_pivot.position.y, base_height + bob_y, min(1.0, delta * 15.0))
-	head_pivot.position.x = lerp(head_pivot.position.x, current_lean * LEAN_OFFSET_X + bob_x, min(1.0, delta * 14.0))
-	camera.fov = lerp(camera.fov, target_fov, min(1.0, delta * 10.0))
+	var tuck_factor: float = bunker_pocket_weight * clampf(1.0 - absf(current_lean), 0.0, 1.0)
+	var pocket_crouch_sink: float = -0.16 * tuck_factor if (stance == Stance.STANDING and slide_timer <= 0.0 and dive_timer <= 0.0) else -0.06 * tuck_factor
+	var pocket_fov_tighten: float = -6.5 * tuck_factor
+	var corner_peek_boost: float = 1.28 if (bunker_pocket_weight > 0.35 and absf(current_lean) > 0.05) else 1.0
+
+	head_pivot.position.y = lerp(head_pivot.position.y, base_height + pocket_crouch_sink + bob_y, min(1.0, delta * 15.0))
+	head_pivot.position.x = lerp(head_pivot.position.x, current_lean * LEAN_OFFSET_X * corner_peek_boost + bob_x, min(1.0, delta * 14.0))
+	camera.fov = lerp(camera.fov, target_fov + pocket_fov_tighten, min(1.0, delta * 10.0))
 	camera.rotation.x = clamp(pitch + dive_pitch_offset, deg_to_rad(-85.0), deg_to_rad(85.0))
-	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG + slide_roll_deg)
+	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG * corner_peek_boost + slide_roll_deg)
 
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
-	var tuck_factor: float = bunker_pocket_weight * clampf(1.0 - absf(current_lean), 0.0, 1.0)
-	var target_hand_x: float = (0.17 - 0.055 * tuck_factor) * hand_sign + bob_x * 0.35
-	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 - 0.025 * tuck_factor + bob_y * 0.45)
+	var target_hand_x: float = (0.17 - 0.105 * tuck_factor) * hand_sign + bob_x * 0.35
+	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 - 0.055 * tuck_factor + bob_y * 0.45)
 	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
 	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
-	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else deg_to_rad(-12.0 * hand_sign * tuck_factor)
-	var target_marker_pitch: float = deg_to_rad(10.0 * tuck_factor)
-	marker_rig.rotation.z = lerp(marker_rig.rotation.z, target_marker_roll, min(1.0, delta * 12.0))
-	marker_rig.rotation.x = lerp(marker_rig.rotation.x, target_marker_pitch, min(1.0, delta * 12.0))
+	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else deg_to_rad(-24.0 * hand_sign * tuck_factor)
+	var target_marker_pitch: float = deg_to_rad(18.0 * tuck_factor)
+	marker_rig.rotation.z = lerp(marker_rig.rotation.z, target_marker_roll, min(1.0, delta * 14.0))
+	marker_rig.rotation.x = lerp(marker_rig.rotation.x, target_marker_pitch, min(1.0, delta * 14.0))
 
 	if is_reloading_pod:
 		var pct: float = clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0)
@@ -571,7 +576,8 @@ func _start_pod_reload() -> void:
 	_emit_hud()
 
 func _update_pod_reload(delta: float) -> void:
-	marker_rig.position.z = lerp(marker_rig.position.z, -0.45, min(1.0, delta * 16.0))
+	var tuck_z_pull: float = 0.09 * bunker_pocket_weight * clampf(1.0 - absf(current_lean), 0.0, 1.0)
+	marker_rig.position.z = lerp(marker_rig.position.z, -0.45 + tuck_z_pull, min(1.0, delta * 16.0))
 	if not is_reloading_pod:
 		return
 	reload_timer -= delta
@@ -783,10 +789,12 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 	var origin := global_position + Vector3(0.0, 0.55, 0.0)
 	var dirs := [
 		fwd,
-		(fwd + right * 0.42).normalized(),
-		(fwd - right * 0.42).normalized(),
-		(fwd + right * 0.85).normalized(),
-		(fwd - right * 0.85).normalized()
+		(fwd + right * 0.35).normalized(),
+		(fwd - right * 0.35).normalized(),
+		(fwd + right * 0.75).normalized(),
+		(fwd - right * 0.75).normalized(),
+		right,
+		-right
 	]
 	var best_hit: Dictionary = {}
 	var best_dist: float = BUNKER_POCKET_REACH + 0.1
@@ -806,10 +814,14 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_vec: Vector2, wants_sprint: bool) -> void:
 	var hit := _probe_nearest_bunker_cover()
 	if hit.is_empty():
-		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 6.5)
+		var was_tucked := bunker_pocket_weight > 0.25
+		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 7.5)
 		if bunker_pocket_weight <= 0.01:
 			active_bunker_name = ""
 		_edge_breakaway_hold_timer = 0.0
+		_at_bunker_edge_side = 0.0
+		if was_tucked and bunker_pocket_weight <= 0.25:
+			_emit_hud()
 		return
 
 	var col: Node3D = hit["collider"] as Node3D
@@ -823,55 +835,72 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var n := raw_normal.normalized() # Points outward from bunker surface toward player
 	var dist: float = float(hit.get("horiz_dist", 0.5))
 
-	# Instant zero-friction breakaway if sprinting or steering > 35 degrees away from the bunker face
-	var moving_away := (move_dir.length() > 0.15 and move_dir.dot(n) > 0.57)
+	# Instant zero-friction breakaway if sprinting (Shift) or backing away from the bunker face (S)
+	var moving_away := (move_dir.length() > 0.15 and move_dir.dot(n) > 0.52)
 	if wants_sprint or moving_away:
-		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 12.0)
+		var was_tucked := bunker_pocket_weight > 0.25
+		bunker_pocket_weight = 0.0
 		active_bunker_name = ""
 		_edge_breakaway_hold_timer = 0.0
+		_at_bunker_edge_side = 0.0
+		if was_tucked:
+			status_banner_sent.emit("BROKE OUT OF COVER!", Color(0.55, 0.95, 1.0))
+			_emit_hud()
 		return
 
-	# Settle into the bunker pocket!
+	# Settle strongly into the bunker pocket!
 	var prev_weight := bunker_pocket_weight
-	bunker_pocket_weight = move_toward(bunker_pocket_weight, 1.0, delta * 7.5)
-	active_bunker_name = String(col.name) if col != null else "Bunker"
+	bunker_pocket_weight = move_toward(bunker_pocket_weight, 1.0, delta * 11.5)
+	active_bunker_name = IntelBus.format_bunker_callout(String(col.name), global_position) if col != null else "BUNKER"
 	active_bunker_normal = n
 	active_bunker_dist = dist
 
-	# 1. Cushion slide/dive impact into the pocket so sliding into a Dorito/Snake catches you cleanly behind cover
+	# 1. Exaggerated slide/dive catch: sliding or diving into a bunker magnetic-catches you behind the vinyl
 	if slide_timer > 0.0 or dive_timer > 0.0:
 		var into_bunker_speed := -Vector2(velocity.x, velocity.z).dot(Vector2(n.x, n.z))
-		if into_bunker_speed > 0.0 and dist < 0.65:
-			velocity.x *= 0.72
-			velocity.z *= 0.72
+		if into_bunker_speed > 0.0 and dist < 1.15:
+			velocity.x *= 0.45
+			velocity.z *= 0.45
 
-	# 2. Gentle surface-normal spring toward the ideal 0.44m tuck pocket distance
+	# 2. Strong magnetic surface-normal snap toward the ideal 0.40m tuck pocket distance
 	var dist_err: float = dist - BUNKER_POCKET_IDEAL_DIST
-	var radial_pull: float = clampf(-dist_err * 4.8, -2.6, 2.6) * bunker_pocket_weight
+	var radial_pull: float = clampf(-dist_err * 11.5, -6.8, 6.8) * bunker_pocket_weight
 	velocity.x += n.x * radial_pull
 	velocity.z += n.z * radial_pull
 
-	# 3. Tangent-rail strafe + soft corner edge-detent so tapping A/D stops flush at the peeking edge
+	# 3. Tangent-rail strafe + firm corner edge-detent latch so A/D locks you flush at the peeking edge
+	var tangent := Vector3(-n.z, 0.0, n.x).normalized()
 	if move_dir.length() > 0.08 and slide_timer <= 0.0 and dive_timer <= 0.0:
-		var tangent := Vector3(-n.z, 0.0, n.x).normalized()
-		var tang_speed: float = velocity.dot(tangent)
-		if absf(tang_speed) > 0.15:
+		# Project movement cleanly along the bunker tangent rail
+		var tang_speed: float = velocity.dot(tangent) * 0.72
+		var normal_speed: float = velocity.dot(n)
+		velocity.x = tangent.x * tang_speed + n.x * minf(0.0, normal_speed)
+		velocity.z = tangent.z * tang_speed + n.z * minf(0.0, normal_speed)
+
+		if absf(tang_speed) > 0.12:
 			var side_sign: float = signf(tang_speed)
-			var probe_origin := global_position + Vector3(0.0, 0.55, 0.0) + tangent * (side_sign * 0.36)
-			var q_edge := PhysicsRayQueryParameters3D.create(probe_origin, probe_origin - n * (BUNKER_POCKET_REACH + 0.25))
+			var probe_origin := global_position + Vector3(0.0, 0.55, 0.0) + tangent * (side_sign * 0.44)
+			var q_edge := PhysicsRayQueryParameters3D.create(probe_origin, probe_origin - n * (BUNKER_POCKET_REACH + 0.35))
 			q_edge.exclude = [get_rid()]
 			var edge_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(q_edge)
 			var still_has_bunker: bool = (not edge_hit.is_empty() and edge_hit.get("collider") == col)
 			if not still_has_bunker:
-				# Reached the peeking corner edge of the bunker! Apply soft edge detent for 0.22s unless deliberately held through
+				# Reached the peeking corner edge of the bunker! Hard corner detent latch for 0.45s unless held through
 				_edge_breakaway_hold_timer += delta
-				if _edge_breakaway_hold_timer < 0.22:
-					velocity -= tangent * (tang_speed * 0.86)
-					is_left_handed = (side_sign < 0.0)
+				_at_bunker_edge_side = side_sign
+				is_left_handed = (side_sign < 0.0)
+				if _edge_breakaway_hold_timer < 0.45:
+					velocity.x -= tangent.x * tang_speed * 0.96
+					velocity.z -= tangent.z * tang_speed * 0.96
 			else:
 				_edge_breakaway_hold_timer = 0.0
+				_at_bunker_edge_side = 0.0
 	else:
+		# When idle in the pocket, bleed off residual lateral drift so you stay locked in cover
+		velocity.x = move_toward(velocity.x, n.x * radial_pull, delta * 18.0)
+		velocity.z = move_toward(velocity.z, n.z * radial_pull, delta * 18.0)
 		_edge_breakaway_hold_timer = 0.0
 
 	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
+		status_banner_sent.emit("LOCKED IN COVER: %s — [A/D] Edge-Stop | [Q/E] Snap-Peek | [Shift] Break Out" % active_bunker_name, Color(0.35, 1.0, 0.58))
 		_emit_hud()
