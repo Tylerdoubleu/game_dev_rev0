@@ -294,6 +294,29 @@ func _build_hud() -> void:
 	breakout_horn_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.16))
 	canvas.add_child(breakout_horn_label)
 
+	visor_fog_overlay = ColorRect.new()
+	visor_fog_overlay.name = "VisorFogOverlay"
+	visor_fog_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	visor_fog_overlay.color = Color(0.82, 0.88, 0.94, 0.0)
+	visor_fog_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(visor_fog_overlay)
+
+	visor_splat_overlay = ColorRect.new()
+	visor_splat_overlay.name = "VisorSplatOverlay"
+	visor_splat_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+	visor_splat_overlay.color = Color(0.98, 0.84, 0.10, 0.0)
+	visor_splat_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(visor_splat_overlay)
+
+	squeegee_wipe_bar = ColorRect.new()
+	squeegee_wipe_bar.name = "SqueegeeWipeBar"
+	squeegee_wipe_bar.size = Vector2(38, 920)
+	squeegee_wipe_bar.position = Vector2(-60, -10)
+	squeegee_wipe_bar.color = Color(0.18, 0.90, 1.0, 0.85)
+	squeegee_wipe_bar.visible = false
+	squeegee_wipe_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas.add_child(squeegee_wipe_bar)
+
 	player.call("_emit_hud")
 
 func _on_hud_state_changed(state: Dictionary) -> void:
