@@ -150,7 +150,7 @@ func _physics_process(delta: float) -> void:
 
 			_spawn_splat(hit_pos, hit_normal, p["color"], collider)
 			if collider is Node3D:
-				GrittyArtThemeScript.trigger_bunker_vinyl_flex(collider as Node3D, vel.normalized(), 0.05)
+				GrittyArtThemeScript.trigger_bunker_vinyl_flex(collider as Node3D, vel.normalized(), 0.14)
 			var local_player := scene_root.get_node_or_null("Player3D") as Node3D
 			if local_player != null and p["shooter"] != local_player and collider != local_player:
 				if local_player.global_position.distance_to(hit_pos) < 1.85 and local_player.has_method("add_visor_splatter"):

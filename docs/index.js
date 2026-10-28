@@ -138,7 +138,7 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 
 	function loadFetch(file, tracker, fileSize, raw) {
 	if (typeof file === 'string' && (file.endsWith('.pck') || file.endsWith('.wasm'))) {
-		file = file + (file.indexOf('?') === -1 ? '?v=030_hitboxes_visor_flex_3p_' + Date.now() : '');
+		file = file + (file.indexOf('?') === -1 ? '?v=030_bunker_bulge_v2_' + Date.now() : '');
 	}
 		tracker[file] = {
 			total: fileSize || 0,

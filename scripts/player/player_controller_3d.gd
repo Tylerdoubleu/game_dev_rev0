@@ -91,6 +91,9 @@ const BUNKER_POCKET_REACH: float = 1.65
 const BUNKER_POCKET_IDEAL_DIST: float = 0.40
 var bunker_pocket_weight: float = 0.0
 var active_bunker_name: String = ""
+var _active_bunker_node: Node3D = null
+var _bunker_slam_flex_cooldown: float = 0.0
+var _bunker_contact_latched: bool = false
 var active_bunker_normal: Vector3 = Vector3.ZERO
 var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
@@ -964,11 +967,17 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 
 func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_vec: Vector2, wants_sprint: bool) -> void:
 	var hit := _probe_nearest_bunker_cover()
+	if _bunker_slam_flex_cooldown > 0.0:
+		_bunker_slam_flex_cooldown = maxf(0.0, _bunker_slam_flex_cooldown - delta)
 	if hit.is_empty():
 		var was_tucked := bunker_pocket_weight > 0.25
 		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 7.5)
+		if _active_bunker_node != null and is_instance_valid(_active_bunker_node):
+			GrittyArtThemeScript.apply_sustained_bunker_pocket_bulge(_active_bunker_node, Vector3.ZERO, bunker_pocket_weight, 0.0, delta)
 		if bunker_pocket_weight <= 0.01:
 			active_bunker_name = ""
+			_active_bunker_node = null
+		_bunker_contact_latched = false
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
 		_manual_hand_override_in_pocket = false
@@ -996,8 +1005,12 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var sprinting_out: bool = (wants_sprint or Input.is_action_pressed("sprint")) and (move_dir.dot(n) > -0.05 or fwd_look.dot(n) > 0.15)
 	if sprinting_out:
 		var was_tucked := bunker_pocket_weight > 0.25
+		if _active_bunker_node != null and is_instance_valid(_active_bunker_node):
+			GrittyArtThemeScript.trigger_bunker_vinyl_flex(_active_bunker_node, n, 0.20)
 		bunker_pocket_weight = 0.0
 		active_bunker_name = ""
+		_active_bunker_node = null
+		_bunker_contact_latched = false
 		_edge_breakaway_hold_timer = 0.0
 		_at_bunker_edge_side = 0.0
 		_manual_hand_override_in_pocket = false
@@ -1118,9 +1131,25 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 				add_visor_splatter(0.24, (bchild as Decal).modulate, "BUNKER RUB SMEAR ON VISOR")
 				break
 
+	if _active_bunker_node != null and _active_bunker_node != col and is_instance_valid(_active_bunker_node):
+		GrittyArtThemeScript.apply_sustained_bunker_pocket_bulge(_active_bunker_node, Vector3.ZERO, 0.0, 0.0, delta)
+	_active_bunker_node = col
+
+	# Trigger exaggerated vinyl impact bulge on initial latch AND when physically contacting the bunker face (<0.82m)
+	var approach_speed: float = maxf(0.0, -velocity.dot(n))
+	var just_contacted_vinyl: bool = (dist < 0.82 and not _bunker_contact_latched)
+	if dist < 0.82:
+		_bunker_contact_latched = true
+	elif dist > 1.05:
+		_bunker_contact_latched = false
+	if col != null and ((prev_weight <= 0.25 and bunker_pocket_weight > 0.25) or just_contacted_vinyl or (approach_speed > 2.8 and dist < 0.78 and _bunker_slam_flex_cooldown <= 0.0)):
+		_bunker_slam_flex_cooldown = 0.48
+		var flex_amp: float = 0.42 if (slide_timer > 0.0 or dive_timer > 0.0 or approach_speed > 5.5) else 0.34
+		GrittyArtThemeScript.trigger_bunker_vinyl_flex(col, -n, flex_amp)
+	elif col != null and bunker_pocket_weight > 0.15:
+		var closeness: float = clampf((1.25 - dist) / 0.80, 0.35, 1.25)
+		GrittyArtThemeScript.apply_sustained_bunker_pocket_bulge(col, -n, bunker_pocket_weight * closeness, current_lean, delta)
+
 	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
-		if col != null:
-			var flex_amp: float = 0.15 if (slide_timer > 0.0 or dive_timer > 0.0) else 0.09
-			GrittyArtThemeScript.trigger_bunker_vinyl_flex(col, -n, flex_amp)
 		status_banner_sent.emit("LOCKED IN COVER: %s — [E] Peek (%s Hand) | [X] Swap Hand | [Q] Crouch | [C] Prone | [Shift] Break Out" % [active_bunker_name, "LEFT" if is_left_handed else "RIGHT"], Color(0.35, 1.0, 0.58))
 		_emit_hud()

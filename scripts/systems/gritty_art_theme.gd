@@ -621,9 +621,10 @@ static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInsta
 
 	mesh_inst.set_meta("base_scale", mesh_inst.scale)
 	mesh_inst.set_meta("base_pos", mesh_inst.position)
+	mesh_inst.set_meta("base_rot_deg", mesh_inst.rotation_degrees)
 	# Bunkers start without pre-baked center paint splats; live paintballs project wrapped splats where they break.
 
-static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.12) -> void:
+static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.28) -> void:
 	if bunker_body == null or not is_instance_valid(bunker_body):
 		return
 	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
@@ -633,6 +634,7 @@ static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, 
 		return
 	var base_scale: Vector3 = mesh_inst.get_meta("base_scale", Vector3.ONE)
 	var base_pos: Vector3 = mesh_inst.get_meta("base_pos", Vector3.ZERO)
+	var base_rot: Vector3 = mesh_inst.get_meta("base_rot_deg", Vector3.ZERO)
 	var dir := impact_dir
 	dir.y = 0.0
 	if dir.length_squared() < 0.001:
@@ -642,22 +644,76 @@ static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, 
 	var local_dir := (bunker_body.global_transform.basis.inverse() * dir).normalized()
 	var ax := absf(local_dir.x)
 	var az := absf(local_dir.z)
-	var amp := clampf(intensity, 0.02, 0.24)
+	var amp := clampf(intensity, 0.06, 0.45)
+	# Dramatic air-bunker squash along impact axis + wide balloon bulge across perpendicular axes + pitch rock
+	var squash_x: float = 1.0 - amp * 1.15 * ax + amp * 0.92 * az
+	var squash_z: float = 1.0 - amp * 1.15 * az + amp * 0.92 * ax
+	var bulge_y: float = 1.0 + amp * 0.62
 	var flex_scale := Vector3(
-		base_scale.x * (1.0 - amp * ax + amp * 0.45 * az),
-		base_scale.y * (1.0 + amp * 0.28),
-		base_scale.z * (1.0 - amp * az + amp * 0.45 * ax)
+		base_scale.x * clampf(squash_x, 0.48, 1.55),
+		base_scale.y * clampf(bulge_y, 1.0, 1.42),
+		base_scale.z * clampf(squash_z, 0.48, 1.55)
 	)
-	var flex_pos := base_pos + Vector3(dir.x * amp * 0.26, -amp * 0.05, dir.z * amp * 0.26)
+	var flex_pos := base_pos + Vector3(local_dir.x * amp * 0.55, base_scale.y * (bulge_y - 1.0) * 0.35, local_dir.z * amp * 0.55)
+	var flex_rot := base_rot + Vector3(local_dir.z * amp * 26.0, 0.0, -local_dir.x * amp * 26.0)
 	mesh_inst.scale = flex_scale
 	mesh_inst.position = flex_pos
+	mesh_inst.rotation_degrees = flex_rot
 	bunker_body.set_meta("last_vinyl_flex_intensity", amp)
 	bunker_body.set_meta("vinyl_flex_active", true)
+	if bunker_body.has_meta("vinyl_flex_tween"):
+		var old_tw: Tween = bunker_body.get_meta("vinyl_flex_tween") as Tween
+		if old_tw != null and old_tw.is_valid():
+			old_tw.kill()
 	if bunker_body.is_inside_tree():
 		var tw := bunker_body.create_tween()
+		bunker_body.set_meta("vinyl_flex_tween", tw)
 		tw.set_parallel(true)
-		tw.tween_property(mesh_inst, "scale", base_scale, 0.32).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(mesh_inst, "position", base_pos, 0.32).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "scale", base_scale, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "position", base_pos, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "rotation_degrees", base_rot, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+
+static func apply_sustained_bunker_pocket_bulge(bunker_body: Node3D, push_dir: Vector3, pocket_weight: float, lean_amount: float, delta: float) -> void:
+	if bunker_body == null or not is_instance_valid(bunker_body):
+		return
+	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
+		return
+	var mesh_inst := bunker_body.get_node_or_null("BunkerMesh") as MeshInstance3D
+	if mesh_inst == null:
+		return
+	if bunker_body.has_meta("vinyl_flex_tween"):
+		var active_tw: Tween = bunker_body.get_meta("vinyl_flex_tween") as Tween
+		if active_tw != null and active_tw.is_running():
+			return
+	var base_scale: Vector3 = mesh_inst.get_meta("base_scale", Vector3.ONE)
+	var base_pos: Vector3 = mesh_inst.get_meta("base_pos", Vector3.ZERO)
+	var base_rot: Vector3 = mesh_inst.get_meta("base_rot_deg", Vector3.ZERO)
+	if pocket_weight <= 0.05:
+		mesh_inst.scale = mesh_inst.scale.lerp(base_scale, minf(1.0, delta * 10.0))
+		mesh_inst.position = mesh_inst.position.lerp(base_pos, minf(1.0, delta * 10.0))
+		mesh_inst.rotation_degrees = mesh_inst.rotation_degrees.lerp(base_rot, minf(1.0, delta * 10.0))
+		return
+	var dir := push_dir
+	dir.y = 0.0
+	if dir.length_squared() < 0.001:
+		dir = Vector3(0, 0, -1)
+	else:
+		dir = dir.normalized()
+	var local_dir := (bunker_body.global_transform.basis.inverse() * dir).normalized()
+	var ax := absf(local_dir.x)
+	var az := absf(local_dir.z)
+	var press := clampf(pocket_weight * (0.16 + absf(lean_amount) * 0.12), 0.0, 0.30)
+	var target_scale := Vector3(
+		base_scale.x * (1.0 - press * 0.85 * ax + press * 0.72 * az),
+		base_scale.y * (1.0 + press * 0.42),
+		base_scale.z * (1.0 - press * 0.85 * az + press * 0.72 * ax)
+	)
+	var target_pos := base_pos + Vector3(local_dir.x * press * 0.34, base_scale.y * press * 0.16, local_dir.z * press * 0.34)
+	var target_rot := base_rot + Vector3(local_dir.z * press * 15.0, 0.0, -local_dir.x * press * 15.0)
+	mesh_inst.scale = mesh_inst.scale.lerp(target_scale, minf(1.0, delta * 14.0))
+	mesh_inst.position = mesh_inst.position.lerp(target_pos, minf(1.0, delta * 14.0))
+	mesh_inst.rotation_degrees = mesh_inst.rotation_degrees.lerp(target_rot, minf(1.0, delta * 14.0))
+	bunker_body.set_meta("vinyl_flex_active", true)
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
 	# 1. Weathered scratched anodized gunmetal/silver marker body
