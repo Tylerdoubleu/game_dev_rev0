@@ -136,16 +136,13 @@ const Preloader = /** @constructor */ function () { // eslint-disable-line no-un
 		}), { headers: response.headers });
 	}
 
-	function loadFetch(file, tracker, fileSize, raw) {
-	if (typeof file === 'string' && (file.endsWith('.pck') || file.endsWith('.wasm'))) {
-		file = file + (file.indexOf('?') === -1 ? '?v=030_bunker_bulge_v2_' + Date.now() : '');
-	}
+	function loadFetch(file, tracker, fileSize, raw) { file = file + "?v=030_vinyl_bulge_exaggerated";
 		tracker[file] = {
 			total: fileSize || 0,
 			loaded: 0,
 			done: false,
 		};
-		return fetch(file, { cache: 'no-store' }).then(function (response) {
+		return fetch(file).then(function (response) {
 			if (!response.ok) {
 				return Promise.reject(new Error(`Failed loading file '${file}'`));
 			}

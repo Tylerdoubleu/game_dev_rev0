@@ -624,7 +624,23 @@ static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInsta
 	mesh_inst.set_meta("base_rot_deg", mesh_inst.rotation_degrees)
 	# Bunkers start without pre-baked center paint splats; live paintballs project wrapped splats where they break.
 
-static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.28) -> void:
+static func _compute_bunker_deform(base_scale: Vector3, base_pos: Vector3, base_rot: Vector3, local_dir: Vector3, amp: float) -> Dictionary:
+	var ax := absf(local_dir.x)
+	var az := absf(local_dir.z)
+	var world_scale_x: float = clampf(1.0 - amp * 1.18 * ax + amp * 1.05 * az, 0.44, 1.65)
+	var world_scale_z: float = clampf(1.0 - amp * 1.18 * az + amp * 1.05 * ax, 0.44, 1.65)
+	var world_scale_y: float = clampf(1.0 + amp * 0.68, 1.0, 1.48)
+	var is_horiz_tube: bool = absf(base_rot.x) > 45.0
+	var out_scale := Vector3(
+		base_scale.x * world_scale_x,
+		base_scale.y * (world_scale_z if is_horiz_tube else world_scale_y),
+		base_scale.z * (world_scale_y if is_horiz_tube else world_scale_z)
+	)
+	var out_pos := base_pos + Vector3(local_dir.x * amp * 0.62, base_scale.y * (world_scale_y - 1.0) * 0.36, local_dir.z * amp * 0.62)
+	var out_rot := base_rot + Vector3(local_dir.z * amp * 28.0, 0.0, -local_dir.x * amp * 28.0)
+	return {"scale": out_scale, "pos": out_pos, "rot": out_rot}
+
+static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.34, keep_sustained_pocket: bool = false) -> void:
 	if bunker_body == null or not is_instance_valid(bunker_body):
 		return
 	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
@@ -642,23 +658,11 @@ static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, 
 	else:
 		dir = dir.normalized()
 	var local_dir := (bunker_body.global_transform.basis.inverse() * dir).normalized()
-	var ax := absf(local_dir.x)
-	var az := absf(local_dir.z)
-	var amp := clampf(intensity, 0.06, 0.45)
-	# Dramatic air-bunker squash along impact axis + wide balloon bulge across perpendicular axes + pitch rock
-	var squash_x: float = 1.0 - amp * 1.15 * ax + amp * 0.92 * az
-	var squash_z: float = 1.0 - amp * 1.15 * az + amp * 0.92 * ax
-	var bulge_y: float = 1.0 + amp * 0.62
-	var flex_scale := Vector3(
-		base_scale.x * clampf(squash_x, 0.48, 1.55),
-		base_scale.y * clampf(bulge_y, 1.0, 1.42),
-		base_scale.z * clampf(squash_z, 0.48, 1.55)
-	)
-	var flex_pos := base_pos + Vector3(local_dir.x * amp * 0.55, base_scale.y * (bulge_y - 1.0) * 0.35, local_dir.z * amp * 0.55)
-	var flex_rot := base_rot + Vector3(local_dir.z * amp * 26.0, 0.0, -local_dir.x * amp * 26.0)
-	mesh_inst.scale = flex_scale
-	mesh_inst.position = flex_pos
-	mesh_inst.rotation_degrees = flex_rot
+	var amp := clampf(intensity, 0.08, 0.52)
+	var peak := _compute_bunker_deform(base_scale, base_pos, base_rot, local_dir, amp)
+	mesh_inst.scale = peak["scale"]
+	mesh_inst.position = peak["pos"]
+	mesh_inst.rotation_degrees = peak["rot"]
 	bunker_body.set_meta("last_vinyl_flex_intensity", amp)
 	bunker_body.set_meta("vinyl_flex_active", true)
 	if bunker_body.has_meta("vinyl_flex_tween"):
@@ -666,12 +670,14 @@ static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, 
 		if old_tw != null and old_tw.is_valid():
 			old_tw.kill()
 	if bunker_body.is_inside_tree():
+		var settle_amp: float = amp * 0.58 if (keep_sustained_pocket or amp >= 0.25) else 0.0
+		var settle := _compute_bunker_deform(base_scale, base_pos, base_rot, local_dir, settle_amp) if settle_amp > 0.01 else {"scale": base_scale, "pos": base_pos, "rot": base_rot}
 		var tw := bunker_body.create_tween()
 		bunker_body.set_meta("vinyl_flex_tween", tw)
 		tw.set_parallel(true)
-		tw.tween_property(mesh_inst, "scale", base_scale, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(mesh_inst, "position", base_pos, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-		tw.tween_property(mesh_inst, "rotation_degrees", base_rot, 0.68).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "scale", settle["scale"], 0.62).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "position", settle["pos"], 0.62).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "rotation_degrees", settle["rot"], 0.62).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 
 static func apply_sustained_bunker_pocket_bulge(bunker_body: Node3D, push_dir: Vector3, pocket_weight: float, lean_amount: float, delta: float) -> void:
 	if bunker_body == null or not is_instance_valid(bunker_body):
@@ -700,19 +706,11 @@ static func apply_sustained_bunker_pocket_bulge(bunker_body: Node3D, push_dir: V
 	else:
 		dir = dir.normalized()
 	var local_dir := (bunker_body.global_transform.basis.inverse() * dir).normalized()
-	var ax := absf(local_dir.x)
-	var az := absf(local_dir.z)
-	var press := clampf(pocket_weight * (0.16 + absf(lean_amount) * 0.12), 0.0, 0.30)
-	var target_scale := Vector3(
-		base_scale.x * (1.0 - press * 0.85 * ax + press * 0.72 * az),
-		base_scale.y * (1.0 + press * 0.42),
-		base_scale.z * (1.0 - press * 0.85 * az + press * 0.72 * ax)
-	)
-	var target_pos := base_pos + Vector3(local_dir.x * press * 0.34, base_scale.y * press * 0.16, local_dir.z * press * 0.34)
-	var target_rot := base_rot + Vector3(local_dir.z * press * 15.0, 0.0, -local_dir.x * press * 15.0)
-	mesh_inst.scale = mesh_inst.scale.lerp(target_scale, minf(1.0, delta * 14.0))
-	mesh_inst.position = mesh_inst.position.lerp(target_pos, minf(1.0, delta * 14.0))
-	mesh_inst.rotation_degrees = mesh_inst.rotation_degrees.lerp(target_rot, minf(1.0, delta * 14.0))
+	var press := clampf(pocket_weight * (0.26 + absf(lean_amount) * 0.14), 0.0, 0.42)
+	var target := _compute_bunker_deform(base_scale, base_pos, base_rot, local_dir, press)
+	mesh_inst.scale = mesh_inst.scale.lerp(target["scale"], minf(1.0, delta * 14.0))
+	mesh_inst.position = mesh_inst.position.lerp(target["pos"], minf(1.0, delta * 14.0))
+	mesh_inst.rotation_degrees = mesh_inst.rotation_degrees.lerp(target["rot"], minf(1.0, delta * 14.0))
 	bunker_body.set_meta("vinyl_flex_active", true)
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
