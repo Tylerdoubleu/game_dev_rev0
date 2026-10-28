@@ -103,6 +103,7 @@ var _at_bunker_edge_side: float = 0.0
 var _manual_hand_override_in_pocket: bool = false
 var _auto_hand_switch_cooldown: float = 0.0
 var _locked_peek_hand: int = 0
+var _last_auto_hand_switch_pos: Vector3 = Vector3(999.0, 999.0, 999.0)
 var _last_hand_switch_pos: Vector3 = Vector3.ZERO
 var _sustained_back_escape_timer: float = 0.0
 
@@ -1070,9 +1071,9 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	#    which works even on curved cylinders where radial normal n is parallel to (pos - center).
 	var space_state := get_world_3d().direct_space_state
 	var probe_base := global_position + Vector3(0.0, 0.55, 0.0)
-	var probe_dir := (-n + fwd_look * 0.65).normalized()
-	var left_origin := probe_base - cam_right * LEAN_OFFSET_X
-	var right_origin := probe_base + cam_right * LEAN_OFFSET_X
+	var probe_dir := (-n + fwd_look * 0.22).normalized()
+	var left_origin := probe_base - tangent * LEAN_OFFSET_X
+	var right_origin := probe_base + tangent * LEAN_OFFSET_X
 
 	var q_left := PhysicsRayQueryParameters3D.create(left_origin, left_origin + probe_dir * (BUNKER_POCKET_REACH + 0.55))
 	q_left.exclude = [get_rid()]
@@ -1087,42 +1088,39 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var prev_hand := is_left_handed
 	var prev_edge_side := _at_bunker_edge_side
 	var actively_peeking: bool = (_locked_peek_hand != 0 or absf(current_lean) > 0.08)
-	# Compute camera-right offset from bunker center (works on Cans, Spools, Doritos & Walls) with a ±0.22m deadzone
-	var rel_offset: float = (global_position - col.global_position).dot(cam_right) if col != null else 0.0
-	if absf(rel_offset) <= 0.08 and col != null:
-		rel_offset = (global_position - col.global_position).dot(tangent)
-	var current_side_sign: float = -1.0 if rel_offset < -0.22 else (1.0 if rel_offset > 0.22 else 0.0)
-	if _active_bunker_node != col or (current_side_sign != 0.0 and prev_edge_side != 0.0 and current_side_sign != prev_edge_side):
-		_auto_hand_switch_cooldown = 0.0
-	if current_side_sign != 0.0:
-		_at_bunker_edge_side = current_side_sign
-	if not actively_peeking and _auto_hand_switch_cooldown <= 0.0:
-		if left_edge_open and not right_edge_open and rel_offset < -0.15:
+	var moved_since_switch: float = global_position.distance_to(_last_auto_hand_switch_pos)
+	var can_auto_switch: bool = (not actively_peeking) and (_auto_hand_switch_cooldown <= 0.0 or moved_since_switch > 0.35)
+	var rel_cam_x: float = (global_position - col.global_position).dot(cam_right) if col != null else 0.0
+	if absf(rel_cam_x) <= 0.04 and col != null:
+		rel_cam_x = (global_position - col.global_position).dot(tangent)
+
+	if can_auto_switch:
+		if left_edge_open and not right_edge_open and rel_cam_x <= 0.12:
 			_at_bunker_edge_side = -1.0
 			if prev_edge_side != -1.0:
 				_manual_hand_override_in_pocket = false
 			if not _manual_hand_override_in_pocket and not is_left_handed:
 				is_left_handed = true
 				_auto_hand_switch_cooldown = 0.28
-				_last_hand_switch_pos = global_position
-		elif right_edge_open and not left_edge_open and rel_offset > 0.15:
+				_last_auto_hand_switch_pos = global_position
+		elif right_edge_open and not left_edge_open and rel_cam_x >= -0.12:
 			_at_bunker_edge_side = 1.0
 			if prev_edge_side != 1.0:
 				_manual_hand_override_in_pocket = false
 			if not _manual_hand_override_in_pocket and is_left_handed:
 				is_left_handed = false
 				_auto_hand_switch_cooldown = 0.28
-				_last_hand_switch_pos = global_position
+				_last_auto_hand_switch_pos = global_position
 		elif col != null and not _manual_hand_override_in_pocket:
-			# Hysteresis deadzone (±0.22m) around bunker center so micro-movements or camera aim never flip-flop hands
-			if rel_offset < -0.22 and not is_left_handed:
+			# Wide ±0.24m center hysteresis deadzone so small aim/position changes never oscillate hands
+			if rel_cam_x < -0.24 and not is_left_handed:
 				is_left_handed = true
 				_auto_hand_switch_cooldown = 0.28
-				_last_hand_switch_pos = global_position
-			elif rel_offset > 0.22 and is_left_handed:
+				_last_auto_hand_switch_pos = global_position
+			elif rel_cam_x > 0.24 and is_left_handed:
 				is_left_handed = false
 				_auto_hand_switch_cooldown = 0.28
-				_last_hand_switch_pos = global_position
+				_last_auto_hand_switch_pos = global_position
 	if prev_hand != is_left_handed:
 		_emit_hud()
 
@@ -1137,12 +1135,12 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		velocity.x = tangent.x * tang_speed + n.x * damped_normal
 		velocity.z = tangent.z * tang_speed + n.z * damped_normal
 
-		if absf(tang_speed) > 0.35 and absf(input_vec.x) > 0.25 and not actively_peeking:
+		if absf(tang_speed) > 0.55 and absf(input_vec.x) > 0.35:
 			var side_sign: float = signf(tang_speed) # -1.0 = moving Left (A), +1.0 = moving Right (D)
-			if is_left_handed != (side_sign < 0.0) and _auto_hand_switch_cooldown <= 0.0:
+			if can_auto_switch and is_left_handed != (side_sign < 0.0):
 				is_left_handed = (side_sign < 0.0)
-				_auto_hand_switch_cooldown = 0.26
-				_last_hand_switch_pos = global_position
+				_auto_hand_switch_cooldown = 0.28
+				_last_auto_hand_switch_pos = global_position
 			_manual_hand_override_in_pocket = false
 			var moving_into_open_edge: bool = (left_edge_open if side_sign < 0.0 else right_edge_open)
 			if moving_into_open_edge:
