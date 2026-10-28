@@ -273,7 +273,13 @@ func _build_player_nodes() -> void:
 	squeegee_glove_mesh.visible = false
 	camera.add_child(squeegee_glove_mesh)
 
-func _on_bracket_changed(bracket: Resource) -> void:
+func _on_bracket_changed(bracket_or_id: Variant) -> void:
+	if bracket_or_id == null:
+		return
+	if bracket_or_id is String:
+		GearRuleEnforcer.set_active_bracket(String(bracket_or_id))
+		return
+	var bracket: Resource = bracket_or_id as Resource
 	if bracket == null:
 		return
 	hopper_paint = bracket.hopper_capacity
@@ -283,6 +289,12 @@ func _on_bracket_changed(bracket: Resource) -> void:
 		pod_rig.visible = false
 	pump_racked = true
 	woodsball_trigger_latched = false
+	var b_id := "speedball"
+	if bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
+		b_id = "woodsball"
+	elif bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
+		b_id = "pump"
+	GrittyArtThemeScript.apply_first_person_bracket_visual(marker_rig, hopper_mesh, hopper_lid_mesh, b_id)
 	status_banner_sent.emit("Switched Bracket: %s" % bracket.display_name, Color(0.4, 0.85, 1.0))
 	_emit_hud()
 
@@ -545,7 +557,17 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	else:
 		pod_rig.visible = false
 		hopper_lid_mesh.rotation.z = 0.0
-		hopper_lid_mesh.position.x = 0.0
+		hopper_lid_mesh.position.x = get_meta("hopper_lid_base_x", hopper_lid_mesh.position.x) if false else (0.062 if (GearRuleEnforcer.active_bracket != null and GearRuleEnforcer.active_bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL) else 0.0)
+	var pm_slide_1p := (marker_rig.get_node_or_null("FP_PumpAssembly/PumpSlideRoot") if marker_rig != null else null) as Node3D
+	if pm_slide_1p == null and marker_rig != null:
+		pm_slide_1p = marker_rig.get_node_or_null("Pump1PAssembly/PumpHandleSlide1P") as Node3D
+	if pm_slide_1p != null:
+		var target_pump_z := -0.25 if pump_racked else -0.14
+		pm_slide_1p.position.z = lerpf(pm_slide_1p.position.z, target_pump_z, minf(1.0, delta * 18.0))
+	var electro_bolt := (marker_rig.get_node_or_null("FP_SpeedballAssembly/ElectroBoltPin") if marker_rig != null else null) as Node3D
+	if electro_bolt != null:
+		var bolt_kick := clampf(1.0 - (time_since_last_shot / 0.075), 0.0, 1.0)
+		electro_bolt.position.z = lerpf(0.13, 0.175, bolt_kick)
 
 func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 	if is_reloading_pod:

@@ -414,38 +414,58 @@ func _build_marker_assemblies() -> void:
 	lid_disc.position = Vector3(0.0, 0.0, 0.03)
 	hopper_lid_pivot.add_child(lid_disc)
 
-	# 1. SPEEDBALL ASSEMBLY (2004 Stacked-Tube Intimidator/Autococker + 14" Barrel + 68/4500 Carbon HPA)
+	# 1. SPEEDBALL ASSEMBLY (2004 Stacked-Tube Bob Long Intimidator / Smart Parts Shocker + 14" Two-Piece Barrel + Drop-Forward 68/4500 Carbon HPA)
 	speedball_assembly = Node3D.new()
 	speedball_assembly.name = "SpeedballAssembly"
 	marker_assembly_pivot.add_child(speedball_assembly)
 
 	var upper_tube := _make_cylinder(0.019, 0.019, 0.23, _mat_anodized_marker)
+	upper_tube.name = "UpperBoltTube"
 	upper_tube.rotation.x = deg_to_rad(90.0)
-	upper_tube.position = Vector3(0.0, 0.055, -0.02)
+	upper_tube.position = Vector3(0.0, 0.058, -0.02)
 	speedball_assembly.add_child(upper_tube)
 
 	var lower_tube := _make_cylinder(0.018, 0.018, 0.21, _mat_anodized_marker)
+	lower_tube.name = "LowerRamTube"
 	lower_tube.rotation.x = deg_to_rad(90.0)
-	lower_tube.position = Vector3(0.0, 0.022, -0.02)
+	lower_tube.position = Vector3(0.0, 0.024, -0.02)
 	speedball_assembly.add_child(lower_tube)
 
-	var grip_frame := _make_box(Vector3(0.032, 0.11, 0.048), _mat_dark_metal)
+	var eye_cover_l := _make_box(Vector3(0.008, 0.028, 0.085), _mat_dark_metal)
+	eye_cover_l.position = Vector3(-0.019, 0.045, -0.04)
+	speedball_assembly.add_child(eye_cover_l)
+
+	var eye_cover_r := _make_box(Vector3(0.008, 0.028, 0.085), _mat_dark_metal)
+	eye_cover_r.position = Vector3(0.019, 0.045, -0.04)
+	speedball_assembly.add_child(eye_cover_r)
+
+	var grip_frame := _make_box(Vector3(0.030, 0.11, 0.046), _mat_dark_metal)
 	grip_frame.position = Vector3(0.0, -0.045, 0.02)
 	grip_frame.rotation.x = deg_to_rad(-16.0)
 	speedball_assembly.add_child(grip_frame)
 
-	var hpr_reg := _make_cylinder(0.018, 0.016, 0.105, _mat_anodized_marker)
-	hpr_reg.position = Vector3(0.0, -0.035, -0.105)
+	var trigger_guard := _make_box(Vector3(0.014, 0.068, 0.058), _mat_anodized_marker)
+	trigger_guard.position = Vector3(0.0, -0.038, -0.022)
+	speedball_assembly.add_child(trigger_guard)
+
+	var hpr_reg := _make_cylinder(0.019, 0.017, 0.11, _mat_anodized_marker)
+	hpr_reg.name = "HyperInlineReg"
+	hpr_reg.position = Vector3(0.0, -0.038, -0.108)
 	speedball_assembly.add_child(hpr_reg)
 
-	var barrel_back := _make_cylinder(0.015, 0.015, 0.16, _mat_anodized_marker)
+	var drop_forward := _make_box(Vector3(0.018, 0.032, 0.085), _mat_anodized_marker)
+	drop_forward.position = Vector3(0.0, -0.098, 0.055)
+	drop_forward.rotation.x = deg_to_rad(14.0)
+	speedball_assembly.add_child(drop_forward)
+
+	var barrel_back := _make_cylinder(0.016, 0.015, 0.16, _mat_anodized_marker)
 	barrel_back.rotation.x = deg_to_rad(90.0)
-	barrel_back.position = Vector3(0.0, 0.055, -0.19)
+	barrel_back.position = Vector3(0.0, 0.058, -0.19)
 	speedball_assembly.add_child(barrel_back)
 
-	var barrel_front := _make_cylinder(0.013, 0.013, 0.22, _mat_dark_metal)
+	var barrel_front := _make_cylinder(0.013, 0.013, 0.23, _mat_dark_metal)
 	barrel_front.rotation.x = deg_to_rad(90.0)
-	barrel_front.position = Vector3(0.0, 0.055, -0.36)
+	barrel_front.position = Vector3(0.0, 0.058, -0.37)
 	speedball_assembly.add_child(barrel_front)
 
 	# 68ci / 4500psi Carbon-Fiber HPA Tank mounted on bottom-line ASA
@@ -455,62 +475,121 @@ func _build_marker_assemblies() -> void:
 	hpa_bottle.position = Vector3(0.0, -0.095, 0.185)
 	speedball_assembly.add_child(hpa_bottle)
 
-	# 2. WOODSBALL ASSEMBLY (Tippmann A-5 Carbine + Cyclone Side-Feed + Shroud + Stock)
+	# 2. WOODSBALL ASSEMBLY (Tippmann A-5 / 98 Custom Tactical Carbine + Flatline Curved Barrel + VentShroud + Cyclone Side-Feed + Carbine Stock + Vertical Foregrip)
 	woodsball_assembly = Node3D.new()
 	woodsball_assembly.name = "WoodsballAssembly"
 	woodsball_assembly.visible = false
 	marker_assembly_pivot.add_child(woodsball_assembly)
 
-	var a5_receiver := _make_box(Vector3(0.046, 0.085, 0.28), _mat_olive_drab)
-	a5_receiver.position = Vector3(0.0, 0.03, -0.02)
+	var a5_receiver := _make_box(Vector3(0.048, 0.092, 0.29), _mat_olive_drab)
+	a5_receiver.name = "A5DieCastReceiver"
+	a5_receiver.position = Vector3(0.0, 0.032, -0.02)
 	woodsball_assembly.add_child(a5_receiver)
 
-	var a5_shroud := _make_cylinder(0.024, 0.024, 0.22, _mat_dark_metal)
+	var top_picatinny := _make_box(Vector3(0.026, 0.018, 0.22), _mat_dark_metal)
+	top_picatinny.position = Vector3(0.0, 0.086, -0.03)
+	woodsball_assembly.add_child(top_picatinny)
+
+	var a5_shroud := _make_cylinder(0.028, 0.028, 0.23, _mat_dark_metal)
+	a5_shroud.name = "TacticalBarrelShroud"
 	a5_shroud.rotation.x = deg_to_rad(90.0)
-	a5_shroud.position = Vector3(0.0, 0.04, -0.25)
+	a5_shroud.position = Vector3(0.0, 0.042, -0.25)
 	woodsball_assembly.add_child(a5_shroud)
 
-	var a5_stock := _make_box(Vector3(0.036, 0.075, 0.20), _mat_dark_metal)
-	a5_stock.position = Vector3(0.0, 0.01, 0.18)
-	woodsball_assembly.add_child(a5_stock)
+	var flatline_muzzle := _make_cylinder(0.017, 0.017, 0.12, _mat_olive_drab)
+	flatline_muzzle.rotation.x = deg_to_rad(90.0)
+	flatline_muzzle.position = Vector3(0.0, 0.045, -0.39)
+	woodsball_assembly.add_child(flatline_muzzle)
 
-	var cyclone_ratchet := _make_cylinder(0.038, 0.038, 0.055, _mat_dark_metal)
-	cyclone_ratchet.position = Vector3(0.048, 0.06, -0.03)
+	var front_sight := _make_box(Vector3(0.012, 0.038, 0.022), _mat_dark_metal)
+	front_sight.position = Vector3(0.0, 0.075, -0.33)
+	woodsball_assembly.add_child(front_sight)
+
+	var vert_foregrip := _make_cylinder(0.017, 0.015, 0.105, _mat_dark_metal)
+	vert_foregrip.position = Vector3(0.0, -0.045, -0.21)
+	woodsball_assembly.add_child(vert_foregrip)
+
+	var a5_grip := _make_box(Vector3(0.034, 0.105, 0.048), _mat_dark_metal)
+	a5_grip.position = Vector3(0.0, -0.042, 0.03)
+	a5_grip.rotation.x = deg_to_rad(-18.0)
+	woodsball_assembly.add_child(a5_grip)
+
+	var a5_stock_strut := _make_cylinder(0.016, 0.016, 0.19, _mat_dark_metal)
+	a5_stock_strut.rotation.x = deg_to_rad(90.0)
+	a5_stock_strut.position = Vector3(0.0, 0.025, 0.20)
+	woodsball_assembly.add_child(a5_stock_strut)
+
+	var a5_buttplate := _make_box(Vector3(0.038, 0.115, 0.028), _mat_olive_drab)
+	a5_buttplate.position = Vector3(0.0, 0.01, 0.295)
+	woodsball_assembly.add_child(a5_buttplate)
+
+	var cyclone_ratchet := _make_cylinder(0.044, 0.044, 0.062, _mat_dark_metal)
+	cyclone_ratchet.name = "CycloneFeedHousing"
+	cyclone_ratchet.position = Vector3(0.052, 0.062, -0.03)
 	woodsball_assembly.add_child(cyclone_ratchet)
 
-	# 3. STOCK-CLASS PUMP ASSEMBLY (Ribbed Pump Handle + 10-Round Horizontal Feed Tube + 12g CO2)
+	# 3. STOCK-CLASS PUMP ASSEMBLY (Phantom / Sniper II Slim Milled Body + Ribbed Pump Handle + Guide Rods + 10-Round Horizontal Feed Tube + Rear 12g CO2 Quick-Change)
 	pump_assembly = Node3D.new()
 	pump_assembly.name = "PumpAssembly"
 	pump_assembly.visible = false
 	marker_assembly_pivot.add_child(pump_assembly)
 
-	var pump_receiver := _make_cylinder(0.017, 0.017, 0.26, _mat_dark_metal)
+	var pump_receiver := _make_cylinder(0.016, 0.016, 0.26, _mat_dark_metal)
+	pump_receiver.name = "SlimPumpReceiver"
 	pump_receiver.rotation.x = deg_to_rad(90.0)
 	pump_receiver.position = Vector3(0.0, 0.04, -0.03)
 	pump_assembly.add_child(pump_receiver)
 
-	var ten_round_tube := _make_cylinder(0.013, 0.013, 0.22, _mat_pod_translucent)
+	var ten_round_tube := _make_cylinder(0.013, 0.013, 0.23, _mat_pod_translucent)
+	ten_round_tube.name = "TenRoundFeedTube"
 	ten_round_tube.rotation.x = deg_to_rad(90.0)
-	ten_round_tube.position = Vector3(0.0, 0.075, -0.04)
+	ten_round_tube.position = Vector3(0.0, 0.072, -0.04)
 	pump_assembly.add_child(ten_round_tube)
 
-	var pump_barrel := _make_cylinder(0.012, 0.012, 0.26, _mat_dark_metal)
+	var feed_plug := _make_cylinder(0.015, 0.015, 0.024, _mat_anodized_marker)
+	feed_plug.rotation.x = deg_to_rad(90.0)
+	feed_plug.position = Vector3(0.0, 0.072, 0.08)
+	pump_assembly.add_child(feed_plug)
+
+	var pump_barrel := _make_cylinder(0.011, 0.011, 0.28, _mat_dark_metal)
 	pump_barrel.rotation.x = deg_to_rad(90.0)
-	pump_barrel.position = Vector3(0.0, 0.04, -0.26)
+	pump_barrel.position = Vector3(0.0, 0.04, -0.28)
 	pump_assembly.add_child(pump_barrel)
+
+	var pump_grip := _make_box(Vector3(0.028, 0.105, 0.044), _mat_dark_metal)
+	pump_grip.position = Vector3(0.0, -0.038, 0.02)
+	pump_grip.rotation.x = deg_to_rad(-20.0)
+	pump_assembly.add_child(pump_grip)
+
+	var guide_rod_l := _make_cylinder(0.004, 0.004, 0.18, _mat_anodized_marker)
+	guide_rod_l.rotation.x = deg_to_rad(90.0)
+	guide_rod_l.position = Vector3(-0.014, 0.016, -0.15)
+	pump_assembly.add_child(guide_rod_l)
+
+	var guide_rod_r := _make_cylinder(0.004, 0.004, 0.18, _mat_anodized_marker)
+	guide_rod_r.rotation.x = deg_to_rad(90.0)
+	guide_rod_r.position = Vector3(0.014, 0.016, -0.15)
+	pump_assembly.add_child(guide_rod_r)
 
 	pump_handle_slide = Node3D.new()
 	pump_handle_slide.name = "PumpHandleSlide"
 	pump_handle_slide.position = Vector3(0.0, 0.008, -0.20)
 	pump_assembly.add_child(pump_handle_slide)
 
-	var ribbed_handle := _make_cylinder(0.025, 0.025, 0.11, _mat_anodized_marker)
+	var ribbed_handle := _make_cylinder(0.026, 0.026, 0.115, _mat_anodized_marker)
 	ribbed_handle.rotation.x = deg_to_rad(90.0)
 	pump_handle_slide.add_child(ribbed_handle)
 
-	var co2_cartridge := _make_cylinder(0.014, 0.011, 0.09, _mat_anodized_marker)
-	co2_cartridge.rotation.x = deg_to_rad(75.0)
-	co2_cartridge.position = Vector3(0.0, -0.055, 0.11)
+	for rib_i in range(3):
+		var rib := _make_cylinder(0.0285, 0.0285, 0.012, _mat_dark_metal)
+		rib.rotation.x = deg_to_rad(90.0)
+		rib.position = Vector3(0.0, 0.0, -0.032 + float(rib_i) * 0.032)
+		pump_handle_slide.add_child(rib)
+
+	var co2_cartridge := _make_cylinder(0.014, 0.011, 0.095, _mat_anodized_marker)
+	co2_cartridge.name = "Rear12GramCO2"
+	co2_cartridge.rotation.x = deg_to_rad(72.0)
+	co2_cartridge.position = Vector3(0.0, -0.048, 0.115)
 	pump_assembly.add_child(co2_cartridge)
 
 func set_team_visual(p_team: String) -> void:

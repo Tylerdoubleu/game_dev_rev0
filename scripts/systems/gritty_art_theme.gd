@@ -714,7 +714,10 @@ static func apply_sustained_bunker_pocket_bulge(bunker_body: Node3D, push_dir: V
 	bunker_body.set_meta("vinyl_flex_active", true)
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
-	# 1. Weathered scratched anodized gunmetal/silver marker body
+	# Hide legacy generic box mesh; we build 3 distinct bracket-specific 3D marker assemblies inside marker_rig
+	body_mesh.visible = false
+
+	# Shared materials
 	var metal_mat := StandardMaterial3D.new()
 	metal_mat.albedo_color = Color(0.50, 0.52, 0.55)
 	metal_mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
@@ -724,51 +727,49 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	metal_mat.normal_enabled = true
 	metal_mat.normal_scale = 0.95
 	metal_mat.normal_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_normal.png")
-	body_mesh.material_override = metal_mat
 
-	# Anodized tournament blue accent milling & clamping feedneck
+	var dark_metal_mat := StandardMaterial3D.new()
+	dark_metal_mat.albedo_color = Color(0.16, 0.17, 0.19)
+	dark_metal_mat.metallic = 0.82
+	dark_metal_mat.roughness = 0.34
+
 	var anno_blue_mat := StandardMaterial3D.new()
-	anno_blue_mat.albedo_color = Color(0.16, 0.34, 0.68)
-	anno_blue_mat.metallic = 0.90
-	anno_blue_mat.roughness = 0.24
+	anno_blue_mat.albedo_color = Color(0.14, 0.42, 0.88)
+	anno_blue_mat.metallic = 0.92
+	anno_blue_mat.roughness = 0.22
 
-	var feedneck := MeshInstance3D.new()
-	feedneck.name = "ClampingFeedneck"
-	var fn_cyl := CylinderMesh.new()
-	fn_cyl.top_radius = 0.020
-	fn_cyl.bottom_radius = 0.022
-	fn_cyl.height = 0.055
-	feedneck.mesh = fn_cyl
-	feedneck.position = Vector3(0.0, 0.058, 0.04)
-	feedneck.material_override = anno_blue_mat
-	marker_rig.add_child(feedneck)
+	var olive_drab_mat := StandardMaterial3D.new()
+	olive_drab_mat.albedo_color = Color(0.27, 0.33, 0.22)
+	olive_drab_mat.roughness = 0.68
+	olive_drab_mat.metallic = 0.25
 
-	# Foregrip Hyper-style inline regulator
-	var reg := MeshInstance3D.new()
-	reg.name = "InlineRegulator"
-	var reg_cyl := CylinderMesh.new()
-	reg_cyl.top_radius = 0.018
-	reg_cyl.bottom_radius = 0.020
-	reg_cyl.height = 0.11
-	reg.mesh = reg_cyl
-	reg.position = Vector3(0.0, -0.075, -0.14)
-	reg.material_override = anno_blue_mat
-	marker_rig.add_child(reg)
+	var brass_mat := StandardMaterial3D.new()
+	brass_mat.albedo_color = Color(0.82, 0.64, 0.24)
+	brass_mat.metallic = 0.88
+	brass_mat.roughness = 0.26
 
-	# 2. Two-piece ported competition barrel (anno back + matte carbon/gunmetal front tip)
-	var barrel := MeshInstance3D.new()
-	barrel.name = "MarkerBarrel"
-	var bcyl := CylinderMesh.new()
-	bcyl.top_radius = 0.015
-	bcyl.bottom_radius = 0.019
-	bcyl.height = 0.44
-	barrel.mesh = bcyl
-	barrel.rotation_degrees.x = 90.0
-	barrel.position = Vector3(0.0, 0.025, -0.39)
-	barrel.material_override = metal_mat
-	marker_rig.add_child(barrel)
+	var wood_grip_mat := StandardMaterial3D.new()
+	wood_grip_mat.albedo_color = Color(0.38, 0.23, 0.13)
+	wood_grip_mat.roughness = 0.62
 
-	# 3. Scuffed dark loader/hopper with wrapped paint smear
+	var carbon_mat := StandardMaterial3D.new()
+	var c_tex := load_texture_safe("res://assets/textures/carbon_hpa_tank.png")
+	if c_tex != null:
+		carbon_mat.albedo_texture = c_tex
+		carbon_mat.albedo_color = Color(1.0, 1.0, 1.0)
+	else:
+		carbon_mat.albedo_color = Color(0.15, 0.16, 0.18)
+	carbon_mat.metallic = 0.45
+	carbon_mat.roughness = 0.22
+	carbon_mat.clearcoat_enabled = true
+	carbon_mat.clearcoat = 0.85
+	carbon_mat.clearcoat_roughness = 0.12
+
+	var smoke_tube_mat := StandardMaterial3D.new()
+	smoke_tube_mat.albedo_color = Color(0.75, 0.80, 0.86, 0.55)
+	smoke_tube_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	smoke_tube_mat.roughness = 0.18
+
 	var hopper_mat := StandardMaterial3D.new()
 	hopper_mat.albedo_color = Color(0.20, 0.21, 0.23)
 	hopper_mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
@@ -777,6 +778,7 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	hopper_mat.clearcoat = 0.68
 	hopper_mat.clearcoat_roughness = 0.16
 	hopper_mesh.material_override = hopper_mat
+	hopper_mesh.scale = Vector3(0.88, 0.92, 1.35)
 
 	var yellow_smear := MeshInstance3D.new()
 	yellow_smear.name = "HopperPaintSmearYellow"
@@ -785,6 +787,7 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	ys_sphere.height = 0.1415
 	yellow_smear.mesh = ys_sphere
 	yellow_smear.position = hopper_mesh.position
+	yellow_smear.scale = hopper_mesh.scale
 	yellow_smear.material_override = create_oily_paint_material(NEON_YELLOW_PAINT, true)
 	marker_rig.add_child(yellow_smear)
 
@@ -793,7 +796,379 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	lid_mat.roughness = 0.32
 	hopper_lid_mesh.material_override = lid_mat
 
-	# 4. Visible Air Pressure Gauge near the grip (cylindrical bezel + white dial + red needle)
+	# =========================================================================
+	# 1. SPEEDBALL ELECTRO VIEWMODEL (2004 Stacked-Tube Intimidator / Ego + Halo B + 68/4500 HPA)
+	# =========================================================================
+	var sb_root := Node3D.new()
+	sb_root.name = "FP_SpeedballAssembly"
+	marker_rig.add_child(sb_root)
+
+	var upper_tube := MeshInstance3D.new()
+	upper_tube.name = "UpperBoltTube"
+	var ut_cyl := CylinderMesh.new()
+	ut_cyl.top_radius = 0.019
+	ut_cyl.bottom_radius = 0.019
+	ut_cyl.height = 0.25
+	upper_tube.mesh = ut_cyl
+	upper_tube.rotation_degrees.x = 90.0
+	upper_tube.position = Vector3(0.0, 0.028, 0.0)
+	upper_tube.material_override = anno_blue_mat
+	sb_root.add_child(upper_tube)
+
+	var lower_tube := MeshInstance3D.new()
+	lower_tube.name = "LowerRammerTube"
+	var lt_cyl := CylinderMesh.new()
+	lt_cyl.top_radius = 0.018
+	lt_cyl.bottom_radius = 0.018
+	lt_cyl.height = 0.23
+	lower_tube.mesh = lt_cyl
+	lower_tube.rotation_degrees.x = 90.0
+	lower_tube.position = Vector3(0.0, -0.006, 0.01)
+	lower_tube.material_override = metal_mat
+	sb_root.add_child(lower_tube)
+
+	var milled_web := MeshInstance3D.new()
+	var mw_box := BoxMesh.new()
+	mw_box.size = Vector3(0.028, 0.042, 0.19)
+	milled_web.mesh = mw_box
+	milled_web.position = Vector3(0.0, 0.01, 0.01)
+	milled_web.material_override = anno_blue_mat
+	sb_root.add_child(milled_web)
+
+	# Exposed reciprocating Delrin bolt at rear of upper tube
+	var bolt_pin := MeshInstance3D.new()
+	bolt_pin.name = "ElectroBoltPin"
+	var bp_cyl := CylinderMesh.new()
+	bp_cyl.top_radius = 0.015
+	bp_cyl.bottom_radius = 0.015
+	bp_cyl.height = 0.055
+	bolt_pin.mesh = bp_cyl
+	bolt_pin.rotation_degrees.x = 90.0
+	bolt_pin.position = Vector3(0.0, 0.028, 0.13)
+	bolt_pin.material_override = dark_metal_mat
+	sb_root.add_child(bolt_pin)
+
+	var feedneck := MeshInstance3D.new()
+	feedneck.name = "ClampingFeedneck"
+	var fn_cyl := CylinderMesh.new()
+	fn_cyl.top_radius = 0.020
+	fn_cyl.bottom_radius = 0.022
+	fn_cyl.height = 0.055
+	feedneck.mesh = fn_cyl
+	feedneck.position = Vector3(0.0, 0.062, 0.04)
+	feedneck.material_override = anno_blue_mat
+	sb_root.add_child(feedneck)
+
+	# Hyper2 vertical inline regulator + braided macroline
+	var reg := MeshInstance3D.new()
+	reg.name = "InlineRegulator"
+	var reg_cyl := CylinderMesh.new()
+	reg_cyl.top_radius = 0.018
+	reg_cyl.bottom_radius = 0.020
+	reg_cyl.height = 0.115
+	reg.mesh = reg_cyl
+	reg.position = Vector3(0.0, -0.072, -0.095)
+	reg.material_override = anno_blue_mat
+	sb_root.add_child(reg)
+
+	# Double-trigger competition frame + glowing LED indicator
+	var grip_frame := MeshInstance3D.new()
+	var gf_box := BoxMesh.new()
+	gf_box.size = Vector3(0.032, 0.115, 0.048)
+	grip_frame.mesh = gf_box
+	grip_frame.position = Vector3(0.0, -0.068, 0.055)
+	grip_frame.rotation_degrees.x = -16.0
+	grip_frame.material_override = dark_metal_mat
+	sb_root.add_child(grip_frame)
+
+	var trigger_guard := MeshInstance3D.new()
+	var tg_box := BoxMesh.new()
+	tg_box.size = Vector3(0.014, 0.075, 0.045)
+	trigger_guard.mesh = tg_box
+	trigger_guard.position = Vector3(0.0, -0.062, 0.005)
+	trigger_guard.material_override = anno_blue_mat
+	sb_root.add_child(trigger_guard)
+
+	var led_dot := MeshInstance3D.new()
+	var led_box := BoxMesh.new()
+	led_box.size = Vector3(0.035, 0.008, 0.008)
+	led_dot.mesh = led_box
+	led_dot.position = Vector3(0.0, -0.035, 0.06)
+	var led_mat := StandardMaterial3D.new()
+	led_mat.albedo_color = Color(0.2, 1.0, 0.35)
+	led_mat.emission_enabled = true
+	led_mat.emission = Color(0.2, 1.0, 0.35)
+	led_mat.emission_energy_multiplier = 2.5
+	led_dot.material_override = led_mat
+	sb_root.add_child(led_dot)
+
+	# Two-piece 14" Ultralite ported barrel (anodized blue back + matte carbon tip)
+	var barrel_back := MeshInstance3D.new()
+	barrel_back.name = "MarkerBarrel"
+	var bb_cyl := CylinderMesh.new()
+	bb_cyl.top_radius = 0.017
+	bb_cyl.bottom_radius = 0.019
+	bb_cyl.height = 0.18
+	barrel_back.mesh = bb_cyl
+	barrel_back.rotation_degrees.x = 90.0
+	barrel_back.position = Vector3(0.0, 0.028, -0.20)
+	barrel_back.material_override = anno_blue_mat
+	sb_root.add_child(barrel_back)
+
+	var barrel_tip := MeshInstance3D.new()
+	barrel_tip.name = "PortedCarbonTip"
+	var bt_cyl := CylinderMesh.new()
+	bt_cyl.top_radius = 0.014
+	bt_cyl.bottom_radius = 0.015
+	bt_cyl.height = 0.26
+	barrel_tip.mesh = bt_cyl
+	barrel_tip.rotation_degrees.x = 90.0
+	barrel_tip.position = Vector3(0.0, 0.028, -0.41)
+	barrel_tip.material_override = dark_metal_mat
+	sb_root.add_child(barrel_tip)
+
+	# 68ci / 4500psi Carbon-Fiber HPA Tank mounted on bottom-line ASA
+	var hpa_tank := MeshInstance3D.new()
+	hpa_tank.name = "CarbonHPATank68_4500"
+	var hpa_cap := CapsuleMesh.new()
+	hpa_cap.radius = 0.052
+	hpa_cap.height = 0.24
+	hpa_tank.mesh = hpa_cap
+	hpa_tank.rotation_degrees.x = 90.0
+	hpa_tank.position = Vector3(0.0, -0.115, 0.22)
+	hpa_tank.material_override = carbon_mat
+	sb_root.add_child(hpa_tank)
+
+	# =========================================================================
+	# 2. WOODSBALL MECHANICAL VIEWMODEL (Tippmann A-5 Carbine + Cyclone Side-Feed + Shroud + Stock)
+	# =========================================================================
+	var wb_root := Node3D.new()
+	wb_root.name = "FP_WoodsballAssembly"
+	wb_root.visible = false
+	marker_rig.add_child(wb_root)
+
+	var a5_body := MeshInstance3D.new()
+	a5_body.name = "A5CastReceiver"
+	var a5_box := BoxMesh.new()
+	a5_box.size = Vector3(0.048, 0.088, 0.30)
+	a5_body.mesh = a5_box
+	a5_body.position = Vector3(0.0, 0.008, 0.01)
+	a5_body.material_override = olive_drab_mat
+	wb_root.add_child(a5_body)
+
+	# Raised Picatinny top rail + Front & Rear Ghost-Ring Iron Sights (clear center sightline!)
+	var pic_rail := MeshInstance3D.new()
+	pic_rail.name = "PicatinnyTopRail"
+	var pr_box := BoxMesh.new()
+	pr_box.size = Vector3(0.024, 0.014, 0.28)
+	pic_rail.mesh = pr_box
+	pic_rail.position = Vector3(0.0, 0.058, 0.0)
+	pic_rail.material_override = dark_metal_mat
+	wb_root.add_child(pic_rail)
+
+	var rear_sight := MeshInstance3D.new()
+	var rs_box := BoxMesh.new()
+	rs_box.size = Vector3(0.026, 0.026, 0.018)
+	rear_sight.mesh = rs_box
+	rear_sight.position = Vector3(0.0, 0.076, 0.11)
+	rear_sight.material_override = dark_metal_mat
+	wb_root.add_child(rear_sight)
+
+	var front_sight := MeshInstance3D.new()
+	var fs_box := BoxMesh.new()
+	fs_box.size = Vector3(0.018, 0.030, 0.016)
+	front_sight.mesh = fs_box
+	front_sight.position = Vector3(0.0, 0.076, -0.34)
+	front_sight.material_override = dark_metal_mat
+	wb_root.add_child(front_sight)
+
+	# Ventilated Cylindrical Forend Barrel Shroud + Heavy Muzzle Brake + Vertical Foregrip
+	var shroud := MeshInstance3D.new()
+	shroud.name = "VentilatedShroud"
+	var sh_cyl := CylinderMesh.new()
+	sh_cyl.top_radius = 0.028
+	sh_cyl.bottom_radius = 0.028
+	sh_cyl.height = 0.24
+	shroud.mesh = sh_cyl
+	shroud.rotation_degrees.x = 90.0
+	shroud.position = Vector3(0.0, 0.018, -0.25)
+	shroud.material_override = dark_metal_mat
+	wb_root.add_child(shroud)
+
+	var wb_barrel := MeshInstance3D.new()
+	var wbb_cyl := CylinderMesh.new()
+	wbb_cyl.top_radius = 0.015
+	wbb_cyl.bottom_radius = 0.015
+	wbb_cyl.height = 0.18
+	wb_barrel.mesh = wbb_cyl
+	wb_barrel.rotation_degrees.x = 90.0
+	wb_barrel.position = Vector3(0.0, 0.018, -0.42)
+	wb_barrel.material_override = metal_mat
+	wb_root.add_child(wb_barrel)
+
+	var v_foregrip := MeshInstance3D.new()
+	v_foregrip.name = "VerticalForegrip"
+	var vf_cyl := CylinderMesh.new()
+	vf_cyl.top_radius = 0.016
+	vf_cyl.bottom_radius = 0.018
+	vf_cyl.height = 0.105
+	v_foregrip.mesh = vf_cyl
+	v_foregrip.position = Vector3(0.0, -0.055, -0.22)
+	v_foregrip.material_override = olive_drab_mat
+	wb_root.add_child(v_foregrip)
+
+	# Cyclone Side-Feed Ratchet Turbine mounted on right side of receiver
+	var cyclone_ratchet := MeshInstance3D.new()
+	cyclone_ratchet.name = "CycloneRatchetHousing"
+	var cr_cyl := CylinderMesh.new()
+	cr_cyl.top_radius = 0.040
+	cr_cyl.bottom_radius = 0.040
+	cr_cyl.height = 0.062
+	cyclone_ratchet.mesh = cr_cyl
+	cyclone_ratchet.position = Vector3(0.055, 0.032, 0.02)
+	cyclone_ratchet.material_override = dark_metal_mat
+	wb_root.add_child(cyclone_ratchet)
+
+	# Collapsible Rear Carbine Stock
+	var stock_tube := MeshInstance3D.new()
+	stock_tube.name = "CollapsibleCarbineStock"
+	var st_box := BoxMesh.new()
+	st_box.size = Vector3(0.034, 0.065, 0.22)
+	stock_tube.mesh = st_box
+	stock_tube.position = Vector3(0.0, -0.005, 0.24)
+	stock_tube.material_override = dark_metal_mat
+	wb_root.add_child(stock_tube)
+
+	# =========================================================================
+	# 3. STOCK-CLASS PUMP VIEWMODEL (Phantom / CCM Sniper Pump + 10-Round Tube + Sliding Pump + 12g CO2)
+	# =========================================================================
+	var pump_root := Node3D.new()
+	pump_root.name = "FP_PumpAssembly"
+	pump_root.visible = false
+	marker_rig.add_child(pump_root)
+
+	var pump_rec := MeshInstance3D.new()
+	pump_rec.name = "StockPumpReceiver"
+	var pr_cyl := CylinderMesh.new()
+	pr_cyl.top_radius = 0.017
+	pr_cyl.bottom_radius = 0.017
+	pr_cyl.height = 0.27
+	pump_rec.mesh = pr_cyl
+	pump_rec.rotation_degrees.x = 90.0
+	pump_rec.position = Vector3(0.0, 0.012, 0.01)
+	pump_rec.material_override = dark_metal_mat
+	pump_root.add_child(pump_rec)
+
+	# Horizontal 10-Round Spring-Feed Tube mounted sleekly along the top (NO bulky hopper!)
+	var ten_round_tube := MeshInstance3D.new()
+	ten_round_tube.name = "TenRoundFeedTube"
+	var tr_cyl := CylinderMesh.new()
+	tr_cyl.top_radius = 0.014
+	tr_cyl.bottom_radius = 0.014
+	tr_cyl.height = 0.24
+	ten_round_tube.mesh = tr_cyl
+	ten_round_tube.rotation_degrees.x = 90.0
+	ten_round_tube.position = Vector3(0.0, 0.048, -0.02)
+	ten_round_tube.material_override = smoke_tube_mat
+	pump_root.add_child(ten_round_tube)
+
+	var brass_feed_ring := MeshInstance3D.new()
+	var bfr_cyl := CylinderMesh.new()
+	bfr_cyl.top_radius = 0.016
+	bfr_cyl.bottom_radius = 0.016
+	bfr_cyl.height = 0.032
+	brass_feed_ring.mesh = bfr_cyl
+	brass_feed_ring.rotation_degrees.x = 90.0
+	brass_feed_ring.position = Vector3(0.0, 0.048, 0.02)
+	brass_feed_ring.material_override = brass_mat
+	pump_root.add_child(brass_feed_ring)
+
+	var brass_cap := MeshInstance3D.new()
+	brass_cap.name = "BrassFeedCap"
+	var bc_cyl := CylinderMesh.new()
+	bc_cyl.top_radius = 0.016
+	bc_cyl.bottom_radius = 0.016
+	bc_cyl.height = 0.022
+	brass_cap.mesh = bc_cyl
+	brass_cap.rotation_degrees.x = 90.0
+	brass_cap.position = Vector3(0.0, 0.048, 0.105)
+	brass_cap.material_override = brass_mat
+	pump_root.add_child(brass_cap)
+
+	# Long precision sniper barrel + front brass bead sight
+	var sniper_barrel := MeshInstance3D.new()
+	sniper_barrel.name = "SniperPumpBarrel"
+	var sb_cyl := CylinderMesh.new()
+	sb_cyl.top_radius = 0.012
+	sb_cyl.bottom_radius = 0.014
+	sb_cyl.height = 0.34
+	sniper_barrel.mesh = sb_cyl
+	sniper_barrel.rotation_degrees.x = 90.0
+	sniper_barrel.position = Vector3(0.0, 0.012, -0.29)
+	sniper_barrel.material_override = dark_metal_mat
+	pump_root.add_child(sniper_barrel)
+
+	var front_bead := MeshInstance3D.new()
+	var fb_sph := SphereMesh.new()
+	fb_sph.radius = 0.005
+	fb_sph.height = 0.010
+	front_bead.mesh = fb_sph
+	front_bead.position = Vector3(0.0, 0.028, -0.44)
+	front_bead.material_override = brass_mat
+	pump_root.add_child(front_bead)
+
+	# Dual Stainless Guide Rods + Animated Ribbed Under-Barrel Pump Handle
+	for rod_x in [-0.012, 0.012]:
+		var guide_rod := MeshInstance3D.new()
+		var gr_cyl := CylinderMesh.new()
+		gr_cyl.top_radius = 0.0035
+		gr_cyl.bottom_radius = 0.0035
+		gr_cyl.height = 0.22
+		guide_rod.mesh = gr_cyl
+		guide_rod.rotation_degrees.x = 90.0
+		guide_rod.position = Vector3(rod_x, -0.014, -0.21)
+		guide_rod.material_override = metal_mat
+		pump_root.add_child(guide_rod)
+
+	var pump_slide := Node3D.new()
+	pump_slide.name = "PumpSlideRoot"
+	pump_slide.position = Vector3(0.0, -0.018, -0.25)
+	pump_root.add_child(pump_slide)
+
+	var ribbed_pump := MeshInstance3D.new()
+	ribbed_pump.name = "RibbedPumpGrip"
+	var rp_cyl := CylinderMesh.new()
+	rp_cyl.top_radius = 0.025
+	rp_cyl.bottom_radius = 0.025
+	rp_cyl.height = 0.12
+	ribbed_pump.mesh = rp_cyl
+	ribbed_pump.rotation_degrees.x = 90.0
+	ribbed_pump.material_override = wood_grip_mat
+	pump_slide.add_child(ribbed_pump)
+
+	# Classic 45-degree Walnut Grip Frame + Rear 12-gram CO2 Quick-Change Cartridge
+	var pump_grip := MeshInstance3D.new()
+	var pg_box := BoxMesh.new()
+	pg_box.size = Vector3(0.028, 0.11, 0.044)
+	pump_grip.mesh = pg_box
+	pump_grip.position = Vector3(0.0, -0.062, 0.06)
+	pump_grip.rotation_degrees.x = -18.0
+	pump_grip.material_override = wood_grip_mat
+	pump_root.add_child(pump_grip)
+
+	var co2_cart := MeshInstance3D.new()
+	co2_cart.name = "TwelveGramCO2"
+	var co2_cyl := CylinderMesh.new()
+	co2_cyl.top_radius = 0.014
+	co2_cyl.bottom_radius = 0.011
+	co2_cyl.height = 0.105
+	co2_cart.mesh = co2_cyl
+	co2_cart.rotation_degrees.x = 76.0
+	co2_cart.position = Vector3(0.0, -0.032, 0.165)
+	co2_cart.material_override = brass_mat
+	pump_root.add_child(co2_cart)
+
+	# 4. Visible Air Pressure Gauge near the grip (shown on Speedball & Woodsball HPA/CO2 setups)
 	var gauge_root := Node3D.new()
 	gauge_root.name = "MarkerPressureGauge"
 	gauge_root.position = Vector3(-0.042, -0.025, 0.08)
@@ -847,6 +1222,47 @@ static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInsta
 	glove_mat.roughness = 0.78
 	glove.material_override = glove_mat
 	marker_rig.add_child(glove)
+
+static func apply_first_person_bracket_visual(marker_rig: Node3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D, bracket_id: String) -> void:
+	set_first_person_bracket_visual(marker_rig, hopper_mesh, hopper_lid_mesh, bracket_id)
+
+static func set_first_person_bracket_visual(marker_rig: Node3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D, bracket_id: String) -> void:
+	if marker_rig == null:
+		return
+	var b_id := bracket_id.to_lower()
+	var sb := marker_rig.get_node_or_null("FP_SpeedballAssembly") as Node3D
+	var wb := marker_rig.get_node_or_null("FP_WoodsballAssembly") as Node3D
+	var pm := marker_rig.get_node_or_null("FP_PumpAssembly") as Node3D
+	var smear := marker_rig.get_node_or_null("HopperPaintSmearYellow") as Node3D
+	var gauge := marker_rig.get_node_or_null("MarkerPressureGauge") as Node3D
+
+	if sb != null:
+		sb.visible = (b_id == "speedball")
+	if wb != null:
+		wb.visible = (b_id == "woodsball")
+	if pm != null:
+		pm.visible = (b_id == "pump")
+	if gauge != null:
+		gauge.visible = (b_id != "pump")
+
+	var show_hopper := (b_id != "pump")
+	if hopper_mesh != null:
+		hopper_mesh.visible = show_hopper
+		if b_id == "woodsball":
+			# Cyclone side-feed hopper offset to the right of the A-5 receiver so center iron sights stay clear!
+			hopper_mesh.position = Vector3(0.062, 0.095, 0.02)
+			hopper_mesh.scale = Vector3(0.95, 0.82, 1.12)
+		else:
+			# Speedball centered Halo B egg loader on top of clamping feedneck
+			hopper_mesh.position = Vector3(0.0, 0.115, 0.04)
+			hopper_mesh.scale = Vector3(0.88, 0.92, 1.35)
+	if smear != null and hopper_mesh != null:
+		smear.visible = show_hopper
+		smear.position = hopper_mesh.position
+		smear.scale = hopper_mesh.scale
+	if hopper_lid_mesh != null and hopper_mesh != null:
+		hopper_lid_mesh.visible = show_hopper
+		hopper_lid_mesh.position = hopper_mesh.position + Vector3(0.0, 0.062, 0.02)
 
 static func spawn_muzzle_gas_puff(scene_root: Node, muzzle_pos: Vector3, forward_dir: Vector3) -> void:
 	if scene_root == null:
