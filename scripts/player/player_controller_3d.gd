@@ -94,6 +94,7 @@ var active_bunker_name: String = ""
 var _active_bunker_node: Node3D = null
 var _bunker_slam_flex_cooldown: float = 0.0
 var _bunker_contact_latched: bool = false
+var _latched_bunker_push_dir: Vector3 = Vector3.ZERO
 var active_bunker_normal: Vector3 = Vector3.ZERO
 var active_bunker_dist: float = 99.0
 var lean_exposure_scale: float = 1.0
@@ -957,8 +958,8 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 			var hit_pos: Vector3 = res["position"]
 			var dist: float = Vector2(hit_pos.x - origin.x, hit_pos.z - origin.z).length()
 			# Slightly favor the bunker face in front of look/movement when equidistant, but keep full 360 lock
-			var align_bonus: float = maxf(0.0, d.dot(fwd)) * 0.15
-			var score: float = dist - align_bonus
+			var sticky_bonus: float = 0.28 if (_active_bunker_node != null and res.get("collider") == _active_bunker_node) else 0.0
+			var score: float = dist - sticky_bonus
 			if score < best_score:
 				best_score = score
 				best_hit = res
@@ -1096,10 +1097,13 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		_emit_hud()
 
 	if move_dir.length() > 0.08 and slide_timer <= 0.0 and dive_timer <= 0.0:
-		# Project movement cleanly along the bunker tangent rail; damp backward S movement strongly so Shift+Look/Move is the primary escape
-		var tang_speed: float = velocity.dot(tangent) * 0.72
+		# Project movement cleanly along the bunker tangent rail; pressing W straight into the bunker holds still without sliding or jiggling
+		var pressing_into_bunker: bool = (input_vec.y < -0.1 and absf(input_vec.x) < 0.15 and move_dir.dot(-n) > 0.55 and dist <= BUNKER_POCKET_IDEAL_DIST + 0.28)
+		var tang_speed: float = 0.0 if pressing_into_bunker else velocity.dot(tangent) * 0.72
 		var normal_speed: float = velocity.dot(n)
-		var damped_normal: float = normal_speed * 0.16 if normal_speed > 0.0 else (0.0 if dist <= BUNKER_POCKET_IDEAL_DIST + 0.08 else normal_speed * 0.35)
+		var damped_normal: float = 0.0
+		if not pressing_into_bunker:
+			damped_normal = normal_speed * 0.16 if normal_speed > 0.0 else (n.dot(Vector3(velocity.x, 0.0, velocity.z)) * 0.25 if dist > BUNKER_POCKET_IDEAL_DIST + 0.18 else 0.0)
 		velocity.x = tangent.x * tang_speed + n.x * damped_normal
 		velocity.z = tangent.z * tang_speed + n.z * damped_normal
 
@@ -1137,19 +1141,19 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		_bunker_contact_latched = false
 	_active_bunker_node = col
 
-	# Trigger exaggerated vinyl impact bulge ONLY once when entering the bunker pocket (never repeat when pressing W inside the pocket!)
-	var approach_speed: float = maxf(0.0, -velocity.dot(n))
-	var just_entered_pocket: bool = (prev_weight <= 0.25 and bunker_pocket_weight > 0.25) or switched_bunker
-	var just_contacted_vinyl: bool = (dist < 0.85 and not _bunker_contact_latched)
-	if just_entered_pocket or just_contacted_vinyl:
+	# Trigger exaggerated vinyl impact bulge ONLY once when first latching into a bunker pocket (never repeat when pressing W inside the pocket!)
+	if not _bunker_contact_latched and ((prev_weight <= 0.25 and bunker_pocket_weight > 0.25) or switched_bunker):
 		_bunker_contact_latched = true
+		_latched_bunker_push_dir = -n
 		if col != null and _bunker_slam_flex_cooldown <= 0.0:
 			_bunker_slam_flex_cooldown = 0.55
-			var flex_amp: float = 0.42 if (slide_timer > 0.0 or dive_timer > 0.0 or approach_speed > 5.5) else 0.34
-			GrittyArtThemeScript.trigger_bunker_vinyl_flex(col, -n, flex_amp)
+			var flex_amp: float = 0.42 if (slide_timer > 0.0 or dive_timer > 0.0) else 0.34
+			GrittyArtThemeScript.trigger_bunker_vinyl_flex(col, _latched_bunker_push_dir, flex_amp)
 	elif col != null and bunker_pocket_weight > 0.15:
-		# Steady sustained pocket bulge while tucked (no distance-based W jiggle)
-		GrittyArtThemeScript.apply_sustained_bunker_pocket_bulge(col, -n, bunker_pocket_weight, current_lean, delta)
+		if _latched_bunker_push_dir.length_squared() < 0.001:
+			_latched_bunker_push_dir = -n
+		# Steady sustained pocket bulge along locked entry vector (zero W jiggle)
+		GrittyArtThemeScript.apply_sustained_bunker_pocket_bulge(col, _latched_bunker_push_dir, bunker_pocket_weight, current_lean, delta)
 
 	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
 		status_banner_sent.emit("LOCKED IN COVER: %s — [E] Peek (%s Hand) | [X] Swap Hand | [Q] Crouch | [C] Prone | [Shift] Break Out" % [active_bunker_name, "LEFT" if is_left_handed else "RIGHT"], Color(0.35, 1.0, 0.58))
