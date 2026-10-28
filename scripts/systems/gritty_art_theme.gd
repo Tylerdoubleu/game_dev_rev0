@@ -643,7 +643,7 @@ static func _compute_bunker_deform(base_scale: Vector3, base_pos: Vector3, base_
 static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.34, keep_sustained_pocket: bool = false) -> void:
 	if bunker_body == null or not is_instance_valid(bunker_body):
 		return
-	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
+	if bool(bunker_body.get_meta("is_rigid_cover", false)) or bool(bunker_body.get_meta("rigid_cover", false)) or String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name).begins_with("Woods_") or String(bunker_body.name).begins_with("Tower_") or String(bunker_body.name).begins_with("Heli_") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
 		return
 	var mesh_inst := bunker_body.get_node_or_null("BunkerMesh") as MeshInstance3D
 	if mesh_inst == null:
@@ -682,7 +682,7 @@ static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, 
 static func apply_sustained_bunker_pocket_bulge(bunker_body: Node3D, push_dir: Vector3, pocket_weight: float, lean_amount: float, delta: float) -> void:
 	if bunker_body == null or not is_instance_valid(bunker_body):
 		return
-	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
+	if bool(bunker_body.get_meta("is_rigid_cover", false)) or bool(bunker_body.get_meta("rigid_cover", false)) or String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name).begins_with("Woods_") or String(bunker_body.name).begins_with("Tower_") or String(bunker_body.name).begins_with("Heli_") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
 		return
 	var mesh_inst := bunker_body.get_node_or_null("BunkerMesh") as MeshInstance3D
 	if mesh_inst == null:
@@ -1340,3 +1340,354 @@ static func spawn_paint_mist_burst(scene_root: Node, pos: Vector3, normal: Vecto
 			burst_root.queue_free()
 	)
 	return burst_root
+
+
+static func build_woodsball_crash_site_map(parent: Node3D) -> Node3D:
+	var root := Node3D.new()
+	root.name = "WoodsballCrashSiteRoot"
+	parent.add_child(root)
+
+	var wood_mat := create_wood_spool_material()
+
+	var dark_timber_mat := StandardMaterial3D.new()
+	dark_timber_mat.albedo_color = Color(0.32, 0.22, 0.14)
+	dark_timber_mat.albedo_texture = load_texture_safe("res://assets/textures/wood_spool_albedo.png")
+	dark_timber_mat.roughness = 0.88
+
+	var heli_olive_mat := StandardMaterial3D.new()
+	heli_olive_mat.albedo_color = Color(0.22, 0.27, 0.19)
+	heli_olive_mat.albedo_texture = load_texture_safe("res://assets/textures/vinyl_scuffed_albedo.png")
+	heli_olive_mat.metallic = 0.55
+	heli_olive_mat.roughness = 0.62
+
+	var charred_metal_mat := StandardMaterial3D.new()
+	charred_metal_mat.albedo_color = Color(0.14, 0.15, 0.16)
+	charred_metal_mat.metallic = 0.78
+	charred_metal_mat.roughness = 0.48
+
+	var camo_net_mat := StandardMaterial3D.new()
+	camo_net_mat.albedo_color = Color(0.18, 0.26, 0.15, 0.76)
+	camo_net_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	camo_net_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	camo_net_mat.roughness = 0.92
+
+	# =========================================================================
+	# 1. CENTER-50 DOWNED BLACKHAWK / HUEY HELICOPTER CRASH SITE
+	# =========================================================================
+	# Main Fuselage Cabin (angled across the 50-yard line so Z = +1.85m Flag Station sits right outside the open cargo door)
+	var heli_cabin := _spawn_rigid_cover_box(
+		root,
+		"Heli_CrashFuselage_Center50",
+		Vector3(0.0, 1.15, -0.35),
+		Vector3(8.4, 2.35, 2.15),
+		Vector3(-6.0, 10.0, 0.0),
+		heli_olive_mat
+	)
+
+	# Cockpit Nose Cone (+X side of fuselage)
+	_spawn_rigid_cover_box(
+		root,
+		"Heli_CockpitNose",
+		Vector3(4.8, 0.92, -1.05),
+		Vector3(2.6, 1.85, 1.95),
+		Vector3(0.0, 10.0, -8.0),
+		charred_metal_mat
+	)
+
+	# Broken Tail Boom (stretching toward -X / -Z with rotor pylon cover)
+	_spawn_rigid_cover_box(
+		root,
+		"Heli_BrokenTailBoom",
+		Vector3(-5.8, 0.85, 0.95),
+		Vector3(5.6, 1.55, 1.25),
+		Vector3(4.0, -18.0, 5.0),
+		heli_olive_mat
+	)
+
+	_spawn_rigid_cover_box(
+		root,
+		"Heli_TailRotorPylon",
+		Vector3(-8.5, 1.35, 1.85),
+		Vector3(1.5, 2.65, 0.85),
+		Vector3(0.0, -18.0, 0.0),
+		charred_metal_mat
+	)
+
+	#Bent Main Rotor Mast & 4 Twisted Rotor Blades overhead
+	var rotor_hub := MeshInstance3D.new()
+	rotor_hub.name = "HeliRotorHub"
+	var rhub_cyl := CylinderMesh.new()
+	rhub_cyl.top_radius = 0.32
+	rhub_cyl.bottom_radius = 0.38
+	rhub_cyl.height = 0.95
+	rotor_hub.mesh = rhub_cyl
+	rotor_hub.position = Vector3(0.0, 2.85, 0.0)
+	rotor_hub.rotation_degrees = Vector3(8.0, 22.0, -11.0)
+	rotor_hub.material_override = charred_metal_mat
+	root.add_child(rotor_hub)
+
+	for b_i in range(4):
+		var blade := MeshInstance3D.new()
+		var bbox := BoxMesh.new()
+		bbox.size = Vector3(6.8, 0.06, 0.34)
+		blade.mesh = bbox
+		blade.position = Vector3(0.0, 3.22, 0.0)
+		blade.rotation_degrees = Vector3(-6.0 + float(b_i % 2) * 11.0, 22.0 + float(b_i) * 90.0, -8.0)
+		blade.material_override = charred_metal_mat
+		root.add_child(blade)
+
+	# =========================================================================
+	# 2. FOUR ELEVATED WOODEN SNIPER TOWERS WITH PLAYABLE ASSAULT RAMPS & CAMO NETTING
+	# =========================================================================
+	# Two midfield flank watchtowers (West X=-24m, East X=+24m) and two home/opfor fortresses (Z=+28m, Z=-28m)
+	_build_wooden_assault_tower(root, "Tower_WestFlank", Vector3(-25.0, 0.0, 0.0), 0.0, wood_mat, dark_timber_mat, camo_net_mat, true)
+	_build_wooden_assault_tower(root, "Tower_EastFlank", Vector3(25.0, 0.0, 0.0), 180.0, wood_mat, dark_timber_mat, camo_net_mat, true)
+	_build_wooden_assault_tower(root, "Tower_SouthRidge", Vector3(-11.5, 0.0, 24.0), 90.0, wood_mat, dark_timber_mat, camo_net_mat, false)
+	_build_wooden_assault_tower(root, "Tower_NorthRidge", Vector3(11.5, 0.0, -24.0), -90.0, wood_mat, dark_timber_mat, camo_net_mat, false)
+
+	# =========================================================================
+	# 3. RIGID TIMBER LOG BARRICADES, STACKED WOODEN SPOOLS & CAMO NET BUNKERS
+	# =========================================================================
+	for side in [-1.0, 1.0]:
+		var prefix: String = "Home_" if side > 0.0 else "OpFor_"
+		# Breakout Gate & Back Center (Rigid Timber Bunkers at exact tactical coordinates so Breakout & Flag Hang work!)
+		_spawn_rigid_cover_box(root, prefix + "BreakoutGate", Vector3(0.0, 1.15, 48.0 * side), Vector3(3.8, 2.3, 1.2), Vector3.ZERO, dark_timber_mat)
+		_spawn_rigid_cover_box(root, prefix + "BackCenter", Vector3(0.0, 1.10, 38.0 * side), Vector3(3.2, 2.2, 1.4), Vector3.ZERO, wood_mat)
+
+		# Breakout Spools & Timber Bolsters
+		_spawn_woods_spool_cluster(root, prefix + "BreakoutCan_L", Vector3(-2.6, 0.0, 41.8 * side), true, wood_mat)
+		_spawn_woods_spool_cluster(root, prefix + "BreakoutCan_R", Vector3(-1.8, 0.0, 36.2 * side), true, wood_mat)
+		_spawn_rigid_cover_box(root, prefix + "BreakoutBolster", Vector3(-0.3, 0.55, 35.0 * side), Vector3(1.0, 1.1, 3.4), Vector3.ZERO, dark_timber_mat)
+
+		# Mid-Back Timber Bunkers & Log Walls
+		_spawn_rigid_cover_box(root, prefix + "BackBrick_L", Vector3(-11.0, 1.05, 31.0 * side), Vector3(2.8, 2.1, 1.5), Vector3(0.0, 12.0 * side, 0.0), wood_mat)
+		_spawn_rigid_cover_box(root, prefix + "BackBrick_R", Vector3(11.0, 1.05, 31.0 * side), Vector3(2.8, 2.1, 1.5), Vector3(0.0, -12.0 * side, 0.0), wood_mat)
+		_spawn_woods_spool_cluster(root, prefix + "OuterTower_L", Vector3(-22.0, 0.0, 31.0 * side), true, wood_mat)
+		_spawn_woods_spool_cluster(root, prefix + "OuterTower_R", Vector3(22.0, 0.0, 31.0 * side), true, wood_mat)
+
+		# Midfield Rigid Timber Trenches & Spool Stacks (Z = 16m..19m)
+		_spawn_rigid_cover_box(root, prefix + "CenterAztec", Vector3(0.0, 1.15, 19.0 * side), Vector3(3.0, 2.3, 1.6), Vector3.ZERO, dark_timber_mat)
+		_spawn_woods_spool_cluster(root, prefix + "MidCan_L", Vector3(-8.5, 0.0, 17.5 * side), true, wood_mat)
+		_spawn_woods_spool_cluster(root, prefix + "MidCan_R", Vector3(8.5, 0.0, 17.5 * side), true, wood_mat)
+		_spawn_rigid_cover_box(root, prefix + "WideTemple_L", Vector3(-18.5, 1.05, 16.5 * side), Vector3(2.6, 2.1, 1.8), Vector3(0.0, -18.0 * side, 0.0), wood_mat)
+		_spawn_rigid_cover_box(root, prefix + "WideTemple_R", Vector3(18.5, 1.05, 16.5 * side), Vector3(2.6, 2.1, 1.8), Vector3(0.0, 18.0 * side, 0.0), wood_mat)
+
+		# 40-Yard Crash-Perimeter Avionics Crates & Spools (Z = 9m)
+		_spawn_rigid_cover_box(root, prefix + "40_Pin_L", Vector3(-6.2, 0.95, 9.2 * side), Vector3(1.9, 1.9, 1.9), Vector3(0.0, 24.0, 0.0), heli_olive_mat)
+		_spawn_rigid_cover_box(root, prefix + "40_Pin_R", Vector3(6.2, 0.95, 9.2 * side), Vector3(1.9, 1.9, 1.9), Vector3(0.0, -18.0, 0.0), heli_olive_mat)
+		_spawn_woods_spool_cluster(root, prefix + "40_Wedge_L", Vector3(-14.5, 0.0, 9.5 * side), true, wood_mat)
+		_spawn_woods_spool_cluster(root, prefix + "40_Wedge_R", Vector3(14.5, 0.0, 9.5 * side), true, wood_mat)
+
+		# Far Right Flank (Timber Dorito Highway) & Far Left Flank (Woodland Trench)
+		_spawn_rigid_cover_box(root, prefix + "Dorito_Corner", Vector3(32.0, 1.1, 35.0 * side), Vector3(2.6, 2.2, 2.2), Vector3(0.0, 35.0, 0.0), dark_timber_mat)
+		_spawn_woods_spool_cluster(root, prefix + "Dorito_1", Vector3(34.5, 0.0, 23.0 * side), true, wood_mat)
+		_spawn_rigid_cover_box(root, prefix + "Dorito_2", Vector3(36.5, 1.05, 11.5 * side), Vector3(2.5, 2.1, 2.2), Vector3(0.0, 25.0, 0.0), wood_mat)
+
+		_spawn_rigid_cover_box(root, prefix + "Snake_Corner", Vector3(-33.0, 1.1, 35.0 * side), Vector3(2.8, 2.2, 2.0), Vector3.ZERO, dark_timber_mat)
+		_spawn_woods_spool_cluster(root, prefix + "Snake_GodCan", Vector3(-28.5, 0.0, 24.5 * side), true, wood_mat)
+
+		# Overhead Camo Netting Canopies strung between tall timber poles
+		_build_camo_net_canopy(root, Vector3(-15.0, 4.6, 22.0 * side), Vector3(10.0, 0.08, 7.5), camo_net_mat, dark_timber_mat)
+		_build_camo_net_canopy(root, Vector3(15.0, 4.6, 22.0 * side), Vector3(10.0, 0.08, 7.5), camo_net_mat, dark_timber_mat)
+
+	# 50-Yard Line Timber & Spool Bunkers flanking the Helicopter Crash
+	_spawn_woods_spool_cluster(root, "Bunker_50_MiniWin_Left", Vector3(-11.0, 0.0, 0.0), true, wood_mat)
+	_spawn_woods_spool_cluster(root, "Bunker_50_MiniWin_Right", Vector3(11.0, 0.0, 0.0), true, wood_mat)
+	_spawn_rigid_cover_box(root, "Bunker_50_Insert_Left", Vector3(-17.5, 1.1, 0.0), Vector3(2.4, 2.2, 1.8), Vector3(0.0, 15.0, 0.0), dark_timber_mat)
+	_spawn_rigid_cover_box(root, "Bunker_50_Insert_Right", Vector3(17.5, 1.1, 0.0), Vector3(2.4, 2.2, 1.8), Vector3(0.0, -15.0, 0.0), dark_timber_mat)
+	_spawn_woods_spool_cluster(root, "Bunker_50_GiantDorito", Vector3(38.0, 0.0, 0.0), true, wood_mat)
+
+	# Far-Left Woodland Log Trench (Snake equivalent with rigid logs & knuckle barricades)
+	_spawn_rigid_cover_box(root, "Snake_Beam_Home1", Vector3(-35.0, 0.48, 15.0), Vector3(1.1, 0.96, 9.5), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(root, "Snake_Beam_Home2", Vector3(-37.2, 0.48, 5.5), Vector3(1.1, 0.96, 9.5), Vector3.ZERO, wood_mat)
+	_spawn_rigid_cover_box(root, "Snake_Beam_OpFor2", Vector3(-37.2, 0.48, -5.5), Vector3(1.1, 0.96, 9.5), Vector3.ZERO, wood_mat)
+	_spawn_rigid_cover_box(root, "Snake_Beam_OpFor1", Vector3(-35.0, 0.48, -15.0), Vector3(1.1, 0.96, 9.5), Vector3.ZERO, dark_timber_mat)
+
+	_spawn_rigid_cover_box(root, "Snake_Knuckle_HomeEntry", Vector3(-35.0, 0.75, 20.0), Vector3(2.6, 1.5, 1.3), Vector3.ZERO, wood_mat)
+	_spawn_rigid_cover_box(root, "Snake_Knuckle_HomeMid", Vector3(-36.1, 0.75, 10.2), Vector3(2.8, 1.5, 1.3), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(root, "Snake_Knuckle_Center50", Vector3(-37.2, 0.85, 0.0), Vector3(3.0, 1.7, 1.5), Vector3.ZERO, wood_mat)
+	_spawn_rigid_cover_box(root, "Snake_Knuckle_OpForMid", Vector3(-36.1, 0.75, -10.2), Vector3(2.8, 1.5, 1.3), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(root, "Snake_Knuckle_OpForEntry", Vector3(-35.0, 0.75, -20.0), Vector3(2.6, 1.5, 1.3), Vector3.ZERO, wood_mat)
+
+	# Woodland Perimeter Pine Trees outside the netting/sidelines for authentic woodsball atmosphere
+	_build_perimeter_pine_trees(root, dark_timber_mat, camo_net_mat)
+
+	return root
+
+static func _spawn_rigid_cover_box(parent: Node3D, b_name: String, pos: Vector3, size: Vector3, rot_deg: Vector3, mat: Material) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.name = b_name
+	body.position = pos
+	body.rotation_degrees = rot_deg
+	body.set_meta("is_rigid_cover", true)
+	body.set_meta("rigid_cover", true)
+	body.set_meta("is_cover_bunker", true)
+
+	var col := CollisionShape3D.new()
+	col.name = "CollisionShape3D"
+	var shape := BoxShape3D.new()
+	shape.size = size
+	col.shape = shape
+	body.add_child(col)
+
+	var mesh := MeshInstance3D.new()
+	mesh.name = "BunkerMesh"
+	var bm := BoxMesh.new()
+	bm.size = size
+	mesh.mesh = bm
+	mesh.material_override = mat
+	body.add_child(mesh)
+	parent.add_child(body)
+	return body
+
+static func _spawn_woods_spool_cluster(parent: Node3D, s_name: String, pos: Vector3, stacked: bool, mat: Material) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.name = s_name
+	body.position = pos
+	body.set_meta("is_rigid_cover", true)
+	body.set_meta("rigid_cover", true)
+	body.set_meta("is_cover_bunker", true)
+	parent.add_child(body)
+	_add_single_wood_spool_meshes(body, Vector3.ZERO, 0.92, 0.88, mat)
+	if stacked:
+		_add_single_wood_spool_meshes(body, Vector3(0.0, 0.88, 0.0), 0.84, 0.84, mat)
+	return body
+
+static func _build_wooden_assault_tower(parent: Node3D, t_name: String, base_pos: Vector3, yaw_deg: float, wood_mat: Material, dark_timber_mat: Material, camo_mat: Material, dual_ramps: bool) -> void:
+	var tower_root := Node3D.new()
+	tower_root.name = t_name
+	tower_root.position = base_pos
+	tower_root.rotation_degrees.y = yaw_deg
+	parent.add_child(tower_root)
+
+	var deck_h: float = 2.85
+	var deck_w: float = 5.2
+	var deck_d: float = 4.6
+
+	# 4 Heavy Corner Timber Support Posts
+	var post_idx := 0
+	for px in [-2.35, 2.35]:
+		for pz in [-2.05, 2.05]:
+			post_idx += 1
+			_spawn_rigid_cover_box(
+				tower_root,
+				"%s_Post_%d" % [t_name, post_idx],
+				Vector3(px, (deck_h + 2.4) * 0.5, pz),
+				Vector3(0.36, deck_h + 2.4, 0.36),
+				Vector3.ZERO,
+				dark_timber_mat
+			)
+
+	# Elevated Wooden Deck Platform (Walkable floor at Y = 2.85m)
+	var deck_body := StaticBody3D.new()
+	deck_body.name = "WalkableFloor_%s_Deck" % t_name
+	deck_body.position = Vector3(0.0, deck_h, 0.0)
+	var dcol := CollisionShape3D.new()
+	var dbox := BoxShape3D.new()
+	dbox.size = Vector3(deck_w, 0.28, deck_d)
+	dcol.shape = dbox
+	deck_body.add_child(dcol)
+	var dmesh := MeshInstance3D.new()
+	var dbm := BoxMesh.new()
+	dbm.size = Vector3(deck_w, 0.28, deck_d)
+	dmesh.mesh = dbm
+	dmesh.material_override = wood_mat
+	deck_body.add_child(dmesh)
+	tower_root.add_child(deck_body)
+
+	# Waist/Chest-High Sniper Parapet Walls on the Tower Deck (Rigid cover with PB-16 pocket physics on the tower!)
+	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Front" % t_name, Vector3(0.0, deck_h + 0.68, -2.05), Vector3(2.8, 1.15, 0.32), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Back" % t_name, Vector3(0.0, deck_h + 0.68, 2.05), Vector3(2.8, 1.15, 0.32), Vector3.ZERO, dark_timber_mat)
+	if not dual_ramps:
+		_spawn_rigid_cover_box(tower_root, "%s_Parapet_Left" % t_name, Vector3(-2.05, deck_h + 0.68, 0.0), Vector3(0.32, 1.15, 2.8), Vector3.ZERO, dark_timber_mat)
+
+	# Overhead Camo Netting Roof above the sniper tower
+	var roof := MeshInstance3D.new()
+	var rbm := BoxMesh.new()
+	rbm.size = Vector3(deck_w + 0.8, 0.08, deck_d + 0.8)
+	roof.mesh = rbm
+	roof.position = Vector3(0.0, deck_h + 2.45, 0.0)
+	roof.material_override = camo_mat
+	tower_root.add_child(roof)
+
+	# Walkable Assault Ramp(s) (21.0 deg slope, 7.6m long, 2.0m wide) connecting ground Y=0 flush to deck Y=2.72m
+	var ramp_len: float = 7.6
+	var ramp_angle_deg: float = 21.0
+	_build_walkable_ramp(tower_root, "WalkableRamp_%s_South" % t_name, Vector3(1.25, 1.28, 2.20 + 3.45), Vector3(2.0, 0.24, ramp_len), Vector3(ramp_angle_deg, 0.0, 0.0), wood_mat)
+	if dual_ramps:
+		_build_walkable_ramp(tower_root, "WalkableRamp_%s_North" % t_name, Vector3(-1.25, 1.28, -2.20 - 3.45), Vector3(2.0, 0.24, ramp_len), Vector3(-ramp_angle_deg, 0.0, 0.0), wood_mat)
+
+static func _build_walkable_ramp(parent: Node3D, r_name: String, pos: Vector3, size: Vector3, rot_deg: Vector3, mat: Material) -> void:
+	var rbody := StaticBody3D.new()
+	rbody.name = r_name
+	rbody.position = pos
+	rbody.rotation_degrees = rot_deg
+	var rcol := CollisionShape3D.new()
+	var rbox := BoxShape3D.new()
+	rbox.size = size
+	rcol.shape = rbox
+	rbody.add_child(rcol)
+	var rmesh := MeshInstance3D.new()
+	var rbm := BoxMesh.new()
+	rbm.size = size
+	rmesh.mesh = rbm
+	rmesh.material_override = mat
+	rbody.add_child(rmesh)
+	parent.add_child(rbody)
+
+static func _build_camo_net_canopy(parent: Node3D, pos: Vector3, size: Vector3, camo_mat: Material, pole_mat: Material) -> void:
+	var canopy := MeshInstance3D.new()
+	var cbm := BoxMesh.new()
+	cbm.size = size
+	canopy.mesh = cbm
+	canopy.position = pos
+	canopy.rotation_degrees = Vector3(3.0, 8.0, -2.0)
+	canopy.material_override = camo_mat
+	parent.add_child(canopy)
+
+	for sx in [-size.x * 0.46, size.x * 0.46]:
+		for sz in [-size.z * 0.46, size.z * 0.46]:
+			var pole := MeshInstance3D.new()
+			var pcyl := CylinderMesh.new()
+			pcyl.top_radius = 0.09
+			pcyl.bottom_radius = 0.12
+			pcyl.height = pos.y
+			pole.mesh = pcyl
+			pole.position = Vector3(pos.x + sx, pos.y * 0.5, pos.z + sz)
+			pole.material_override = pole_mat
+			parent.add_child(pole)
+
+static func _build_perimeter_pine_trees(parent: Node3D, trunk_mat: Material, foliage_mat: Material) -> void:
+	var tree_mat := StandardMaterial3D.new()
+	tree_mat.albedo_color = Color(0.14, 0.24, 0.13)
+	tree_mat.roughness = 0.90
+
+	var tree_coords := [
+		Vector3(-50.0, 0.0, -45.0), Vector3(-50.0, 0.0, -18.0), Vector3(-50.0, 0.0, 18.0), Vector3(-50.0, 0.0, 45.0),
+		Vector3(50.0, 0.0, -45.0), Vector3(50.0, 0.0, -18.0), Vector3(50.0, 0.0, 18.0), Vector3(50.0, 0.0, 45.0),
+		Vector3(-28.0, 0.0, -61.0), Vector3(28.0, 0.0, -61.0), Vector3(-28.0, 0.0, 61.0), Vector3(28.0, 0.0, 61.0)
+	]
+	for tc in tree_coords:
+		var tnode := Node3D.new()
+		tnode.position = tc
+		parent.add_child(tnode)
+		var trunk := MeshInstance3D.new()
+		var tcyl := CylinderMesh.new()
+		tcyl.top_radius = 0.22
+		tcyl.bottom_radius = 0.36
+		tcyl.height = 5.5
+		trunk.mesh = tcyl
+		trunk.position = Vector3(0.0, 2.75, 0.0)
+		trunk.material_override = trunk_mat
+		tnode.add_child(trunk)
+
+		for tier in range(3):
+			var cone := MeshInstance3D.new()
+			var ccyl := CylinderMesh.new()
+			ccyl.top_radius = 0.15
+			ccyl.bottom_radius = 2.6 - float(tier) * 0.55
+			ccyl.height = 3.6
+			cone.mesh = ccyl
+			cone.position = Vector3(0.0, 4.2 + float(tier) * 2.1, 0.0)
+			cone.material_override = tree_mat
+			tnode.add_child(cone)

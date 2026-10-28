@@ -136,6 +136,9 @@ func _ready() -> void:
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
 
 func _build_player_nodes() -> void:
+	floor_max_angle = deg_to_rad(50.0)
+	floor_snap_length = 0.28
+	floor_stop_on_slope = true
 	var col := CollisionShape3D.new()
 	col.name = "Hitbox_Torso"
 	var capsule := CapsuleShape3D.new()
@@ -957,10 +960,13 @@ func _handle_local_elimination(killer_name: String) -> void:
 func _is_cover_bunker_collider(col: Object) -> bool:
 	if col == null or not (col is StaticBody3D):
 		return false
-	var n: String = String(col.name)
-	if n == "TurfFloor" or n.begins_with("SafetyNet") or n.begins_with("RemotePlayer") or n.begins_with("OpFor_Snake50") or n.begins_with("OpFor_SnakeCorner") or n.begins_with("OpFor_CenterAztec") or n.begins_with("OpFor_Dorito2") or n.begins_with("OpFor_BackCenter"):
+	var sbody := col as StaticBody3D
+	var n: String = String(sbody.name)
+	if n == "TurfFloor" or n.begins_with("Walkable") or n.begins_with("Ramp_") or n.begins_with("TowerFloor_") or n.begins_with("SafetyNet") or n.begins_with("RemotePlayer") or n.begins_with("OpFor_Snake50") or n.begins_with("OpFor_SnakeCorner") or n.begins_with("OpFor_CenterAztec") or n.begins_with("OpFor_Dorito2") or n.begins_with("OpFor_BackCenter"):
 		return false
-	return n.begins_with("Bunker_") or n.begins_with("Home_") or n.begins_with("OpFor_") or n.begins_with("Snake_") or n.begins_with("Spool")
+	if bool(sbody.get_meta("is_rigid_cover", false)) or bool(sbody.get_meta("rigid_cover", false)) or bool(sbody.get_meta("is_cover_bunker", false)):
+		return true
+	return n.begins_with("Bunker_") or n.begins_with("Home_") or n.begins_with("OpFor_") or n.begins_with("Snake_") or n.begins_with("Spool") or n.begins_with("WoodSpool") or n.begins_with("Heli_") or n.begins_with("Tower_") or n.begins_with("Woods_")
 
 func _probe_nearest_bunker_cover() -> Dictionary:
 	var w3d := get_world_3d()

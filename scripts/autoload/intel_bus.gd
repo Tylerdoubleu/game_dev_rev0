@@ -27,7 +27,21 @@ const BUNKER_CALLOUT_MAP := {
 	"Snake_Knuckle_HomeMid": "SNAKE GOD POCKET",
 	"Snake_Knuckle_Center50": "SNAKE 50 KNUCKLE",
 	"Snake_Knuckle_OpForMid": "OPFOR SNAKE POCKET",
-	"Snake_Knuckle_OpForEntry": "OPFOR SNAKE ENTRY"
+	"Snake_Knuckle_OpForEntry": "OPFOR SNAKE ENTRY",
+	"Heli_CrashFuselage_Center50": "HELI CRASH FUSELAGE (50)",
+	"Heli_CockpitNose": "HELI COCKPIT NOSE (50)",
+	"Heli_BrokenTailBoom": "HELI TAIL BOOM (50)",
+	"Heli_TailRotorPylon": "HELI TAIL ROTOR PYLON",
+	"Tower_WestFlank_Parapet_Front": "WEST WATCHTOWER (NORTH RAIL)",
+	"Tower_WestFlank_Parapet_Back": "WEST WATCHTOWER (SOUTH RAIL)",
+	"Tower_EastFlank_Parapet_Front": "EAST WATCHTOWER (SOUTH RAIL)",
+	"Tower_EastFlank_Parapet_Back": "EAST WATCHTOWER (NORTH RAIL)",
+	"Tower_SouthRidge_Parapet_Front": "HOME RIDGE TOWER DECK",
+	"Tower_SouthRidge_Parapet_Back": "HOME RIDGE TOWER DECK",
+	"Tower_SouthRidge_Parapet_Left": "HOME RIDGE TOWER DECK",
+	"Tower_NorthRidge_Parapet_Front": "OPFOR RIDGE TOWER DECK",
+	"Tower_NorthRidge_Parapet_Back": "OPFOR RIDGE TOWER DECK",
+	"Tower_NorthRidge_Parapet_Left": "OPFOR RIDGE TOWER DECK"
 }
 
 func format_bunker_callout(raw_name: String, world_pos: Vector3 = Vector3.ZERO) -> String:

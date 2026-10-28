@@ -18,6 +18,7 @@ const GrittyArtTheme = preload("res://scripts/systems/gritty_art_theme.gd")
 signal lobby_state_changed(state_dict: Dictionary)
 signal connection_status_changed(status_text: String, is_online: bool)
 signal match_started_signal(room_id: String, bracket_id: String, fill_bots: bool)
+signal map_changed(map_id: String)
 signal remote_player_hit_local(shooter_name: String)
 signal local_player_scored_kill(victim_name: String)
 signal match_over_networked(loser_name: String, winner_name: String)
@@ -37,6 +38,8 @@ var local_team: String = "ALPHA"
 var local_bracket: String = "speedball"
 var local_ready: bool = true
 var fill_bots_enabled: bool = false
+var selected_map: String = "speedball"
+var active_map: String = "speedball"
 var match_active: bool = true
 
 ## Connected human players: peer_id (int) -> Dictionary { name, team, bracket, ready, room }
@@ -158,6 +161,10 @@ func _parse_query_string(query: String) -> void:
 				GearRuleEnforcer.set_active_bracket(local_bracket)
 			elif key in ["bots", "npc", "npcs"] and not val.is_empty():
 				fill_bots_enabled = val.to_lower() in ["1", "true", "on", "yes"]
+			elif key in ["map", "arena"] and not val.is_empty():
+				var m := val.to_lower()
+				selected_map = "woodsball_crash" if m in ["woodsball_crash", "woodsball", "woods", "crash", "crash_site", "heli"] else "speedball"
+				active_map = selected_map
 			elif key in ["server", "ws", "edgegap"] and not val.is_empty():
 				current_ws_url = normalize_ws_url(val)
 			elif key in ["bots", "npcs", "npc"] and not val.is_empty():
@@ -237,11 +244,37 @@ func get_lobby_state_snapshot() -> Dictionary:
 	return {
 		"room": active_room,
 		"bracket": local_bracket,
+		"map": selected_map,
+		"selected_map": selected_map,
 		"fill_bots": fill_bots_enabled,
 		"match_active": match_active,
 		"ws_url": current_ws_url,
 		"players": players.duplicate(true)
 	}
+
+func select_map(map_id: String) -> void:
+	var m := map_id.strip_edges().to_lower()
+	var norm := "woodsball_crash" if m in ["woodsball_crash", "woodsball", "woods", "crash", "crash_site", "heli"] else "speedball"
+	selected_map = norm
+	active_map = norm
+	lobby_state_changed.emit(get_lobby_state_snapshot())
+	map_changed.emit(selected_map)
+	if is_online_client():
+		rpc_set_map.rpc(selected_map)
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_set_map(map_id: String) -> void:
+	var m := map_id.strip_edges().to_lower()
+	var norm := "woodsball_crash" if m in ["woodsball_crash", "woodsball", "woods", "crash", "crash_site", "heli"] else "speedball"
+	var changed := (selected_map != norm)
+	selected_map = norm
+	active_map = norm
+	if is_dedicated_server:
+		_broadcast_lobby_state_from_server()
+	else:
+		lobby_state_changed.emit(get_lobby_state_snapshot())
+		if changed:
+			map_changed.emit(selected_map)
 
 func _on_connected_to_server() -> void:
 	is_connecting = false
@@ -360,6 +393,12 @@ func sync_lobby_state(state_dict: Dictionary) -> void:
 	# Keep local fill_bots_enabled choice (default OFF); only menu selection or match start changes it.
 	if state_dict.has("match_active"):
 		match_active = bool(state_dict["match_active"])
+	if state_dict.has("selected_map"):
+		var srv_map := String(state_dict["selected_map"])
+		if srv_map != selected_map:
+			selected_map = srv_map
+			active_map = srv_map
+			map_changed.emit(selected_map)
 	var existing_ids := remote_player_nodes.keys()
 	for pid in existing_ids:
 		if not players.has(pid):
@@ -399,7 +438,7 @@ func notify_match_start(room_id: String, bracket_id: String, fill_bots: bool) ->
 	match_started_signal.emit(room_id, bracket_id, fill_bots)
 
 func copy_invite_link() -> String:
-	var invite_url := "http://127.0.0.1:8080/?room=%s&bracket=%s" % [active_room.uri_encode(), local_bracket.uri_encode()]
+	var invite_url := "http://127.0.0.1:8080/?room=%s&bracket=%s&map=%s" % [active_room.uri_encode(), local_bracket.uri_encode(), selected_map.uri_encode()]
 	if OS.has_feature("web"):
 		var js_code := """
 		(function() {

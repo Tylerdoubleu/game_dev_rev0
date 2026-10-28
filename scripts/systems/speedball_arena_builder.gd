@@ -30,6 +30,10 @@ var fill_bots_check: CheckBox
 var copy_link_btn: Button
 var npc_presence_on_btn: Button
 var npc_presence_off_btn: Button
+var map_speedball_btn: Button
+var map_woodsball_btn: Button
+var speedball_bunkers_root: Node3D
+var woodsball_map_root: Node3D
 var scoreboard_canvas: CanvasLayer
 var scoreboard_body_label: Label
 var death_respawn_canvas: CanvasLayer
@@ -68,6 +72,10 @@ func _ready() -> void:
 	NetworkLobby.match_started_signal.connect(_on_network_match_started)
 	if NetworkLobby.has_signal("flag_event_received"):
 		NetworkLobby.flag_event_received.connect(_on_network_flag_event)
+	if NetworkLobby.has_signal("map_changed"):
+		NetworkLobby.map_changed.connect(switch_arena_map)
+	if NetworkLobby.selected_map == "woodsball_crash":
+		switch_arena_map("woodsball_crash")
 	if GameManager.has_signal("breakout_countdown_updated"):
 		GameManager.breakout_countdown_updated.connect(_on_breakout_countdown_updated)
 	GameManager.register_round_start(5)
@@ -192,6 +200,46 @@ func _build_speedball_bunkers() -> void:
 	_spawn_bunker("Snake_Knuckle_Center50", Vector3(-37.2, 0.0, 0.0), Vector3(3.0, 1.65, 1.5), red_vinyl)
 	_spawn_bunker("Snake_Knuckle_OpForMid", Vector3(-36.1, 0.0, -10.2), Vector3(2.8, 1.45, 1.3), yellow_vinyl)
 	_spawn_bunker("Snake_Knuckle_OpForEntry", Vector3(-35.0, 0.0, -20.0), Vector3(2.6, 1.45, 1.3), dark_vinyl)
+
+func _clear_speedball_bunkers() -> void:
+	var to_remove: Array[Node] = []
+	for child in get_children():
+		if child is StaticBody3D:
+			var cname := String(child.name)
+			if cname.begins_with("Bunker_") or cname.begins_with("Home_") or cname.begins_with("OpFor_") or cname.begins_with("Snake_") or cname.begins_with("WoodSpool_"):
+				if not (cname in ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]):
+					to_remove.append(child)
+	for n in to_remove:
+		remove_child(n)
+		n.queue_free()
+
+func switch_arena_map(map_id: String) -> void:
+	var is_woods := (map_id == "woodsball_crash" or map_id == "woods" or map_id == "woodsball" or map_id == "crash_site")
+	_clear_speedball_bunkers()
+	if woodsball_map_root != null and is_instance_valid(woodsball_map_root):
+		remove_child(woodsball_map_root)
+		woodsball_map_root.queue_free()
+		woodsball_map_root = null
+	var props_root := get_node_or_null("GrittyStadiumProps") as Node3D
+	if props_root != null:
+		for c in props_root.get_children():
+			if String(c.name).begins_with("WoodSpool_") and c is Node3D:
+				(c as Node3D).visible = not is_woods
+				for sub in c.get_children():
+					if sub is CollisionShape3D:
+						(sub as CollisionShape3D).disabled = is_woods
+	if is_woods:
+		woodsball_map_root = GrittyArtThemeScript.build_woodsball_crash_site_map(self)
+		if center_flag_node != null and GameManager.flag_state == "CENTER_50":
+			center_flag_node.position = Vector3(0.0, 0.0, 1.85)
+	else:
+		_build_speedball_bunkers()
+		GrittyArtThemeScript._build_wooden_cable_spools(self)
+		if center_flag_node != null and GameManager.flag_state == "CENTER_50":
+			center_flag_node.position = Vector3(0.0, 0.0, 1.35)
+	_refresh_lobby_button_highlights()
+	if player != null and player.has_method("respawn_at_team_gate"):
+		player.call("respawn_at_team_gate", NetworkLobby.local_team)
 
 func _spawn_bunker(bunker_name: String, pos: Vector3, size: Vector3, color: Color) -> void:
 	var body := StaticBody3D.new()
@@ -553,6 +601,30 @@ func _build_tournament_lobby_overlay() -> void:
 	bracket_pump_btn.pressed.connect(func() -> void: _select_bracket("pump"))
 	row_bracket.add_child(bracket_pump_btn)
 
+	# Row 4.5: Arena Map Selector (Speedball Inflatable Turf vs. Woodsball Blackhawk Crash Site)
+	var row_map := HBoxContainer.new()
+	row_map.add_theme_constant_override("separation", 10)
+	vbox.add_child(row_map)
+
+	var lbl_map := Label.new()
+	lbl_map.text = "ARENA MAP:"
+	lbl_map.custom_minimum_size = Vector2(95, 0)
+	row_map.add_child(lbl_map)
+
+	map_speedball_btn = Button.new()
+	map_speedball_btn.name = "MapSpeedballButton"
+	map_speedball_btn.text = "MAP 1: NPPL SPEEDBALL (INFLATABLE)"
+	map_speedball_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_speedball_btn.pressed.connect(func() -> void: _select_arena_map("speedball"))
+	row_map.add_child(map_speedball_btn)
+
+	map_woodsball_btn = Button.new()
+	map_woodsball_btn.name = "MapWoodsballButton"
+	map_woodsball_btn.text = "MAP 2: WOODSBALL HELI CRASH (TOWERS & RAMPS)"
+	map_woodsball_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_woodsball_btn.pressed.connect(func() -> void: _select_arena_map("woodsball_crash"))
+	row_map.add_child(map_woodsball_btn)
+
 	# Row 5: NPC Presence Selector (Selectable in Opening Menu)
 	var row_npc := HBoxContainer.new()
 	row_npc.add_theme_constant_override("separation", 10)
@@ -665,6 +737,15 @@ func _refresh_lobby_button_highlights() -> void:
 	if npc_presence_on_btn != null and npc_presence_off_btn != null:
 		npc_presence_on_btn.modulate = Color(0.35, 1.0, 0.55) if NetworkLobby.fill_bots_enabled else Color(0.72, 0.72, 0.72)
 		npc_presence_off_btn.modulate = Color(1.0, 0.75, 0.35) if not NetworkLobby.fill_bots_enabled else Color(0.72, 0.72, 0.72)
+	if map_speedball_btn != null and map_woodsball_btn != null:
+		var is_woods := (NetworkLobby.selected_map == "woodsball_crash")
+		map_speedball_btn.modulate = Color(0.35, 1.0, 0.55) if not is_woods else Color(0.72, 0.72, 0.72)
+		map_woodsball_btn.modulate = Color(0.35, 1.0, 0.55) if is_woods else Color(0.72, 0.72, 0.72)
+
+func _select_arena_map(map_id: String) -> void:
+	NetworkLobby.select_map(map_id)
+	var map_label := "WOODSBALL HELI CRASH (TOWERS & SPOOLS)" if NetworkLobby.selected_map == "woodsball_crash" else "NPPL SPEEDBALL STADIUM"
+	_on_status_banner("ARENA MAP SELECTED: %s" % map_label, Color(0.45, 1.0, 0.60))
 
 func _on_connect_ws_pressed() -> void:
 	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"

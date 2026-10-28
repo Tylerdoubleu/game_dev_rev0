@@ -193,6 +193,37 @@ func _process(_delta: float) -> bool:
 	enforcer.set_active_bracket("speedball")
 	assert(player.marker_rig.get_node("FP_SpeedballAssembly").visible == true and player.hopper_mesh.visible == true and absf(player.hopper_mesh.position.x) < 0.005, "Speedball bracket must restore centered Halo B loader and FP_SpeedballAssembly")
 	print("[PASS] Distinct 1P & 3P marker models verified for [1] Speedball Electro, [2] Woodsball A-5, and [3] Stock-Class Pump")
-	print("=== All Prototype v0.2.2 Art, Realism, Scoreboard [M], +1 Pod/Kill & First-to-10-Deaths Checks PASSED ===")
+
+	# 9. Verify v0.4 Map #2 ("woodsball_crash"): Lobby Map Selector, Helicopter Crash Site, Ramps & Sniper Towers, and Rigid Cover (Pocket Physics ON, Inflatable Vinyl Flex OFF)
+	lobby.call("select_map", "woodsball_crash")
+	assert(lobby.get("selected_map") == "woodsball_crash", "NetworkLobby.select_map('woodsball_crash') must update selected_map")
+	var woods_root := arena.get_node_or_null("WoodsballCrashSiteRoot") as Node3D
+	assert(woods_root != null, "Switching to woodsball_crash must spawn WoodsballCrashSiteRoot")
+	var heli_fuselage := woods_root.get_node_or_null("Heli_CrashFuselage_Center50") as StaticBody3D
+	var west_tower := woods_root.get_node_or_null("Tower_WestFlank") as Node3D
+	assert(heli_fuselage != null and west_tower != null, "Woodsball Crash Site must contain Heli_CrashFuselage_Center50 and Tower_WestFlank with ramps")
+	assert(bool(heli_fuselage.get_meta("is_rigid_cover", false)) == true, "Helicopter crash fuselage must be flagged as rigid cover")
+	# Place player against a rigid timber bunker in Woodsball Crash Site and verify PB-16 Pocket Physics engages while vinyl_flex_active stays false
+	var woods_back_center := woods_root.get_node_or_null("Home_BackCenter") as StaticBody3D
+	assert(woods_back_center != null and bool(woods_back_center.get_meta("is_rigid_cover", false)), "Woodsball Home_BackCenter must be rigid timber cover")
+	player.set("bunker_pocket_weight", 0.0)
+	player.global_position = Vector3(0.0, 0.1, 39.25)
+	player.rotation.y = 0.0
+	for _i in range(6):
+		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Rigid Woodsball cover must still engage PB-16 player cover pocket physics")
+	assert(not bool(woods_back_center.get_meta("vinyl_flex_active", false)), "Rigid Woodsball cover must NOT trigger inflatable vinyl bunker flex")
+	# Also test elevated pocket physics on the West Flank Sniper Tower deck (Y = 2.85m) behind Tower_WestFlank_Parapet_Back
+	player.set("bunker_pocket_weight", 0.0)
+	player.global_position = Vector3(-25.0, 3.0, 1.35)
+	player.rotation.y = PI # Facing +Z toward Tower_WestFlank_Parapet_Back at Z = +2.05
+	for _i in range(6):
+		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Elevated Sniper Tower parapet must engage PB-16 player cover pocket physics at Y=3.0m")
+	# Switch back to speedball and confirm clean restore
+	lobby.call("select_map", "speedball")
+	assert(arena.get_node_or_null("WoodsballCrashSiteRoot") == null and arena.get_node_or_null("Bunker_Center50_W") != null, "Switching back to speedball must restore inflatable speedball bunkers")
+	print("[PASS] Map #2 (Woodsball Heli Crash Site): Lobby Map Selector, Center-50 Helicopter Crash, 4 Ramp Sniper Towers, and Rigid Pocket Physics (Zero Vinyl Flex) verified")
+	print("=== All Prototype v0.4.2 Art, Realism, Scoreboard [M], +1 Pod/Kill & First-to-10-Deaths Checks PASSED ===")
 	quit(0)
 	return true
