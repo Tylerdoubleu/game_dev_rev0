@@ -619,7 +619,45 @@ static func decorate_bunker_mesh(bunker_body: StaticBody3D, mesh_inst: MeshInsta
 				cshape_node.shape = conv
 			break
 
+	mesh_inst.set_meta("base_scale", mesh_inst.scale)
+	mesh_inst.set_meta("base_pos", mesh_inst.position)
 	# Bunkers start without pre-baked center paint splats; live paintballs project wrapped splats where they break.
+
+static func trigger_bunker_vinyl_flex(bunker_body: Node3D, impact_dir: Vector3, intensity: float = 0.12) -> void:
+	if bunker_body == null or not is_instance_valid(bunker_body):
+		return
+	if String(bunker_body.name).begins_with("WoodSpool") or String(bunker_body.name) == "TurfFloor" or String(bunker_body.name).begins_with("SafetyNet"):
+		return
+	var mesh_inst := bunker_body.get_node_or_null("BunkerMesh") as MeshInstance3D
+	if mesh_inst == null:
+		return
+	var base_scale: Vector3 = mesh_inst.get_meta("base_scale", Vector3.ONE)
+	var base_pos: Vector3 = mesh_inst.get_meta("base_pos", Vector3.ZERO)
+	var dir := impact_dir
+	dir.y = 0.0
+	if dir.length_squared() < 0.001:
+		dir = Vector3(0, 0, -1)
+	else:
+		dir = dir.normalized()
+	var local_dir := (bunker_body.global_transform.basis.inverse() * dir).normalized()
+	var ax := absf(local_dir.x)
+	var az := absf(local_dir.z)
+	var amp := clampf(intensity, 0.02, 0.24)
+	var flex_scale := Vector3(
+		base_scale.x * (1.0 - amp * ax + amp * 0.45 * az),
+		base_scale.y * (1.0 + amp * 0.28),
+		base_scale.z * (1.0 - amp * az + amp * 0.45 * ax)
+	)
+	var flex_pos := base_pos + Vector3(dir.x * amp * 0.26, -amp * 0.05, dir.z * amp * 0.26)
+	mesh_inst.scale = flex_scale
+	mesh_inst.position = flex_pos
+	bunker_body.set_meta("last_vinyl_flex_intensity", amp)
+	bunker_body.set_meta("vinyl_flex_active", true)
+	if bunker_body.is_inside_tree():
+		var tw := bunker_body.create_tween()
+		tw.set_parallel(true)
+		tw.tween_property(mesh_inst, "scale", base_scale, 0.32).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+		tw.tween_property(mesh_inst, "position", base_pos, 0.32).set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
 
 static func upgrade_first_person_marker(marker_rig: Node3D, body_mesh: MeshInstance3D, hopper_mesh: MeshInstance3D, hopper_lid_mesh: MeshInstance3D) -> void:
 	# 1. Weathered scratched anodized gunmetal/silver marker body

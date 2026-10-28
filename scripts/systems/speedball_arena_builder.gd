@@ -42,6 +42,9 @@ var center_flag_node: Node3D
 var center_flag_cloth: MeshInstance3D
 var center_flag_label_3d: Label3D
 var breakout_horn_label: Label
+var visor_splat_overlay: ColorRect
+var visor_fog_overlay: ColorRect
+var squeegee_wipe_bar: ColorRect
 var _flag_wave_time: float = 0.0
 
 func _ready() -> void:
@@ -303,11 +306,27 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 	if state["pump_mode"]:
 		pump_text = " | PUMP: %s" % ("RACKED (Ready)" if state["pump_racked"] else "NEEDS RACK [RMB]")
 
+	var splat_a: float = float(state.get("visor_splatter_alpha", 0.0))
+	var splat_c: Color = state.get("visor_splatter_color", Color(0.98, 0.84, 0.10))
+	var fog_a: float = float(state.get("visor_fog_alpha", 0.0))
+	if visor_splat_overlay != null:
+		visor_splat_overlay.color = Color(splat_c.r, splat_c.g, splat_c.b, clampf(splat_a * 0.46, 0.0, 0.52))
+	if visor_fog_overlay != null:
+		visor_fog_overlay.color = Color(0.82, 0.88, 0.94, clampf(fog_a * 0.38, 0.0, 0.32))
+	if squeegee_wipe_bar != null:
+		var wiping: bool = bool(state.get("squeegee_wiping", false))
+		squeegee_wipe_bar.visible = wiping
+		if wiping:
+			squeegee_wipe_bar.position.x = lerpf(0.0, 1600.0, float(state.get("squeegee_pct", 0.0)))
+
+	var exp_mult: float = float(state.get("hopper_exposure", 1.0))
+	var exp_warn := "  |  [!! WRONG-HAND PEEK: %.1fx HOPPER EXPOSED — SWAP [X] !!]" % exp_mult if exp_mult > 1.5 else ""
+	var visor_warn := "  |  [VISOR SMEARED — PRESS [G] TO SQUEEGEE WIPE!]" if (splat_a > 0.08 or fog_a > 0.18) else ""
 	var flag_carry_text := "  |  [!! CARRYING CENTER FLAG -> HANG AT ENEMY GATE !!]" if state.get("carrying_flag", false) else ""
 	hud_label.text = (
-		"BRACKET: %s%s\n" % [state["bracket_name"], flag_carry_text] +
+		"BRACKET: %s%s%s\n" % [state["bracket_name"], flag_carry_text, visor_warn] +
 		"HOPPER: %d / %d  |  PODS: %d (%d rnds)%s\n" % [state["hopper"], state["hopper_max"], state["pods"], state["pod_cap"], pump_text] +
-		"STANCE: %s  |  SHOULDER: %s%s" % [state["stance"], state["hand"], reload_text]
+		"STANCE: %s  |  SHOULDER: %s%s%s" % [state["stance"], state["hand"], exp_warn, reload_text]
 	)
 
 func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> void:
@@ -323,7 +342,7 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 		"ROUND %d  |  FLAG: %s (A:%d B:%d)  |  KILLS: %d  |  DEATHS: %d/%d  |  %.0fs  |  %s\n" % [round_num, flag_hud_status, GameManager.alpha_flag_hangs, GameManager.bravo_flag_hangs, GameManager.local_kills, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, time_left, net_tag] +
 		"Move: WASD + Shift Break Out | E Peek (Active Hand, X Swap) | Q Crouch (Shift+Q Slide) | C Prone (Shift+C Dive)\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
-		"Center-50 Flag Pull & Hang at Enemy Gate | R Pod Reload | F Ping | [M] Scoreboard | [TAB] Menu"
+		"Center-50 Flag Pull & Hang | [G] Squeegee Wipe Visor | R Pod Reload | F Ping | [M] Scoreboard | [TAB] Menu"
 	)
 
 func _on_round_won(round_num: int) -> void:

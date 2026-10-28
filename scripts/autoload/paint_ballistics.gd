@@ -135,8 +135,12 @@ func _physics_process(delta: float) -> void:
 			var hit_normal: Vector3 = hit["normal"]
 			var collider: Object = hit["collider"]
 			var impact_cos: float = abs(vel.normalized().dot(hit_normal))
+			var bounce_thresh: float = BOUNCE_ANGLE_COS_THRESHOLD
+			if collider != null and collider.has_method("resolve_hit_subzone"):
+				var sub_info: Dictionary = collider.call("resolve_hit_subzone", hit_pos)
+				bounce_thresh = float(sub_info.get("bounce_cos_threshold", BOUNCE_ANGLE_COS_THRESHOLD))
 
-			if p["bounces"] == 0 and impact_cos < BOUNCE_ANGLE_COS_THRESHOLD:
+			if p["bounces"] == 0 and impact_cos < bounce_thresh:
 				p["bounces"] += 1
 				p["velocity"] = vel.bounce(hit_normal) * 0.45
 				node.global_position = hit_pos + hit_normal * 0.03
@@ -145,6 +149,12 @@ func _physics_process(delta: float) -> void:
 				continue
 
 			_spawn_splat(hit_pos, hit_normal, p["color"], collider)
+			if collider is Node3D:
+				GrittyArtThemeScript.trigger_bunker_vinyl_flex(collider as Node3D, vel.normalized(), 0.05)
+			var local_player := scene_root.get_node_or_null("Player3D") as Node3D
+			if local_player != null and p["shooter"] != local_player and collider != local_player:
+				if local_player.global_position.distance_to(hit_pos) < 1.85 and local_player.has_method("add_visor_splatter"):
+					local_player.call("add_visor_splatter", 0.30, p["color"], "NEAR-MISS BUNKER SPRAY ON VISOR")
 			if collider and collider.has_method("on_paintball_break"):
 				collider.on_paintball_break(hit_pos, p["shooter"])
 			elif collider is Node and collider.get_parent() and collider.get_parent().has_method("on_paintball_break"):
@@ -241,8 +251,8 @@ func _spawn_splat(pos: Vector3, normal: Vector3, color: Color, collider: Object 
 	decal.albedo_mix = 0.96
 	decal.normal_fade = 0.25
 
-	# Parent only to static cover or OpFor bots; never parent decals to scaled RemotePlayer avatars or Player3D
-	if collider is Node3D and collider.get_script() != null and not collider.has_meta("remote_peer_id") and collider.name != "Player3D":
+	# Parent to static cover bunkers or OpFor bots so bunker-rub detection & moving bots carry their splats
+	if collider is Node3D and not collider.has_meta("remote_peer_id") and collider.name != "Player3D" and String(collider.name) != "TurfFloor":
 		collider.add_child(decal)
 	else:
 		scene_root.add_child(decal)

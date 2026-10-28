@@ -546,12 +546,28 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 	avatar.rotation.z = deg_to_rad(-lean * 10.0)
 	avatar.rotation.x = deg_to_rad(-70.0) if eliminated else 0.0
 
+	var base_stance: int = stance_idx & 3
+	var remote_left_handed: bool = (stance_idx & 4) != 0 if stance_idx >= 4 else (lean < -0.05)
 	var stance_scale_y: float = 1.0
-	if stance_idx == 1:
+	if base_stance == 1:
 		stance_scale_y = 0.65
-	elif stance_idx == 2:
+	elif base_stance == 2:
 		stance_scale_y = 0.35
 	avatar.scale.y = lerpf(avatar.scale.y, stance_scale_y, 0.35)
+
+	# PB-13 (#16) & PB-16 (#20): Articulated 3P MarkerPivot3D + HopperPivot3D cant & shoulder swap
+	var hand_sign: float = -1.0 if remote_left_handed else 1.0
+	var marker_piv := avatar.get_node_or_null("MarkerPivot3D") as Node3D
+	if marker_piv != null:
+		marker_piv.position = marker_piv.position.lerp(Vector3(0.22 * hand_sign + lean * 0.14, 1.22, -0.28), 0.45)
+		var cant_deg: float = clampf(-lean * 24.0, -26.0, 26.0) if absf(lean) > 0.08 else (-14.0 * hand_sign)
+		marker_piv.rotation_degrees = Vector3(0.0, 0.0, cant_deg)
+		var hopper_piv := marker_piv.get_node_or_null("HopperPivot3D") as Node3D
+		if hopper_piv != null:
+			hopper_piv.rotation_degrees = Vector3(0.0, 0.0, cant_deg * 0.45)
+	var hm_col := avatar.get_node_or_null("Hitbox_HopperMarker") as CollisionShape3D
+	if hm_col != null and marker_piv != null:
+		hm_col.position = marker_piv.position + Vector3(0.0, 0.06, 0.0)
 
 	var tag := avatar.get_node_or_null("CallsignTag3D") as Label3D
 	if tag != null:
@@ -564,12 +580,37 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	body.set_meta("remote_peer_id", peer_id)
 
 	var col_torso := CollisionShape3D.new()
+	col_torso.name = "Hitbox_Torso"
 	var cap := CapsuleShape3D.new()
-	cap.radius = 0.28
-	cap.height = 1.45
+	cap.radius = 0.26
+	cap.height = 1.38
 	col_torso.shape = cap
-	col_torso.position = Vector3(0, 0.72, 0)
+	col_torso.position = Vector3(0, 0.69, 0)
 	body.add_child(col_torso)
+
+	var col_mask := CollisionShape3D.new()
+	col_mask.name = "Hitbox_Mask"
+	var m_sphere := SphereShape3D.new()
+	m_sphere.radius = 0.175
+	col_mask.shape = m_sphere
+	col_mask.position = Vector3(0, 1.48, 0.0)
+	body.add_child(col_mask)
+
+	var col_hm := CollisionShape3D.new()
+	col_hm.name = "Hitbox_HopperMarker"
+	var hm_box := BoxShape3D.new()
+	hm_box.size = Vector3(0.20, 0.28, 0.52)
+	col_hm.shape = hm_box
+	col_hm.position = Vector3(0.22, 1.28, -0.28)
+	body.add_child(col_hm)
+
+	var col_pack := CollisionShape3D.new()
+	col_pack.name = "Hitbox_PodPack"
+	var p_box := BoxShape3D.new()
+	p_box.size = Vector3(0.32, 0.26, 0.18)
+	col_pack.shape = p_box
+	col_pack.position = Vector3(0, 0.88, 0.20)
+	body.add_child(col_pack)
 
 	var jersey := MeshInstance3D.new()
 	jersey.name = "JerseyMesh"
@@ -585,6 +626,7 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	body.add_child(jersey)
 
 	var head := MeshInstance3D.new()
+	head.name = "MaskMesh3D"
 	var smesh := SphereMesh.new()
 	smesh.radius = 0.17
 	smesh.height = 0.34
@@ -597,6 +639,7 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	body.add_child(head)
 
 	var visor := MeshInstance3D.new()
+	visor.name = "VisorMesh3D"
 	var vbox := BoxMesh.new()
 	vbox.size = Vector3(0.30, 0.12, 0.18)
 	visor.mesh = vbox
@@ -608,13 +651,41 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	visor.material_override = vmat
 	body.add_child(visor)
 
+	var pack_mesh := MeshInstance3D.new()
+	pack_mesh.name = "PodPackMesh3D"
+	var pm_box := BoxMesh.new()
+	pm_box.size = Vector3(0.30, 0.24, 0.15)
+	pack_mesh.mesh = pm_box
+	pack_mesh.position = Vector3(0, 0.88, 0.19)
+	pack_mesh.material_override = hmat
+	body.add_child(pack_mesh)
+
+	var marker_piv := Node3D.new()
+	marker_piv.name = "MarkerPivot3D"
+	marker_piv.position = Vector3(0.22, 1.22, -0.28)
+	body.add_child(marker_piv)
+
 	var marker := MeshInstance3D.new()
+	marker.name = "MarkerBody3D"
 	var mbox := BoxMesh.new()
 	mbox.size = Vector3(0.06, 0.12, 0.52)
 	marker.mesh = mbox
-	marker.position = Vector3(0.22, 1.20, -0.28)
 	marker.material_override = hmat
-	body.add_child(marker)
+	marker_piv.add_child(marker)
+
+	var hopper_piv := Node3D.new()
+	hopper_piv.name = "HopperPivot3D"
+	hopper_piv.position = Vector3(0.0, 0.12, 0.05)
+	marker_piv.add_child(hopper_piv)
+
+	var loader_mesh := MeshInstance3D.new()
+	loader_mesh.name = "HopperMesh3D"
+	var lsphere := SphereMesh.new()
+	lsphere.radius = 0.085
+	lsphere.height = 0.15
+	loader_mesh.mesh = lsphere
+	loader_mesh.material_override = hmat
+	hopper_piv.add_child(loader_mesh)
 
 	var tag := Label3D.new()
 	tag.name = "CallsignTag3D"

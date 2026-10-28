@@ -99,6 +99,22 @@ var _at_bunker_edge_side: float = 0.0
 var _manual_hand_override_in_pocket: bool = false
 var _sustained_back_escape_timer: float = 0.0
 
+# PB-16 (#20): Exposed Hopper/Marker/Mask/Pack Sub-Hitboxes & 2.4x Wrong-Hand Exposure
+var hitbox_mask: CollisionShape3D = null
+var hitbox_hopper_marker: CollisionShape3D = null
+var hitbox_pod_pack: CollisionShape3D = null
+var hopper_exposure_multiplier: float = 1.0
+var last_hit_zone: String = "TORSO / JERSEY"
+
+# PB-12 (#13): Visor Paint Obstruction (Near-Miss / Bunker-Rub), Sprint Fogging & [G] Squeegee Wipe
+const SQUEEGEE_WIPE_DURATION: float = 0.60
+var visor_splatter_alpha: float = 0.0
+var visor_splatter_color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT
+var visor_fog_alpha: float = 0.0
+var squeegee_wipe_timer: float = 0.0
+var squeegee_glove_mesh: MeshInstance3D = null
+var _bunker_rub_cooldown: float = 0.0
+
 func _ready() -> void:
 	_build_player_nodes()
 	GearRuleEnforcer.bracket_changed.connect(_on_bracket_changed)
@@ -112,12 +128,38 @@ func _ready() -> void:
 
 func _build_player_nodes() -> void:
 	var col := CollisionShape3D.new()
+	col.name = "Hitbox_Torso"
 	var capsule := CapsuleShape3D.new()
-	capsule.radius = 0.27
-	capsule.height = 1.75
+	capsule.radius = 0.25
+	capsule.height = 1.38
 	col.shape = capsule
-	col.position = Vector3(0, 0.875, 0)
+	col.position = Vector3(0, 0.69, 0)
 	add_child(col)
+
+	# PB-16 (#20): Separate Mask, Hopper/Marker, and Pod Pack sub-hitboxes
+	hitbox_mask = CollisionShape3D.new()
+	hitbox_mask.name = "Hitbox_Mask"
+	var mask_sphere := SphereShape3D.new()
+	mask_sphere.radius = 0.17
+	hitbox_mask.shape = mask_sphere
+	hitbox_mask.position = Vector3(0.0, HEIGHT_STANDING, 0.0)
+	add_child(hitbox_mask)
+
+	hitbox_hopper_marker = CollisionShape3D.new()
+	hitbox_hopper_marker.name = "Hitbox_HopperMarker"
+	var hm_box := BoxShape3D.new()
+	hm_box.size = Vector3(0.18, 0.28, 0.50)
+	hitbox_hopper_marker.shape = hm_box
+	hitbox_hopper_marker.position = Vector3(0.22, HEIGHT_STANDING - 0.14, -0.34)
+	add_child(hitbox_hopper_marker)
+
+	hitbox_pod_pack = CollisionShape3D.new()
+	hitbox_pod_pack.name = "Hitbox_PodPack"
+	var pack_box := BoxShape3D.new()
+	pack_box.size = Vector3(0.32, 0.26, 0.18)
+	hitbox_pod_pack.shape = pack_box
+	hitbox_pod_pack.position = Vector3(0.0, 0.88, 0.20)
+	add_child(hitbox_pod_pack)
 
 	head_pivot = Node3D.new()
 	head_pivot.name = "HeadPivot"
@@ -208,6 +250,20 @@ func _build_player_nodes() -> void:
 	carried_flag_mesh.visible = false
 	camera.add_child(carried_flag_mesh)
 
+	squeegee_glove_mesh = MeshInstance3D.new()
+	squeegee_glove_mesh.name = "SqueegeeWipeGlove3D"
+	var sq_box := BoxMesh.new()
+	sq_box.size = Vector3(0.38, 0.055, 0.04)
+	squeegee_glove_mesh.mesh = sq_box
+	squeegee_glove_mesh.position = Vector3(-0.45, 0.06, -0.26)
+	squeegee_glove_mesh.rotation_degrees = Vector3(0.0, 0.0, -18.0)
+	var sq_mat := StandardMaterial3D.new()
+	sq_mat.albedo_color = Color(0.14, 0.82, 0.96)
+	sq_mat.roughness = 0.35
+	squeegee_glove_mesh.material_override = sq_mat
+	squeegee_glove_mesh.visible = false
+	camera.add_child(squeegee_glove_mesh)
+
 func _on_bracket_changed(bracket: Resource) -> void:
 	if bracket == null:
 		return
@@ -255,6 +311,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("ping_intel"):
 		_ping_crosshair_target()
 
+	if InputMap.has_action("wipe_visor") and event.is_action_pressed("wipe_visor"):
+		trigger_squeegee_wipe()
+
 	if event.is_action_pressed("bracket_speedball"):
 		GearRuleEnforcer.set_active_bracket("speedball")
 	elif event.is_action_pressed("bracket_woodsball"):
@@ -288,12 +347,14 @@ func _physics_process(delta: float) -> void:
 		_update_movement_and_stance(delta)
 	_enforce_arena_bounds_and_permafall_guard()
 	_update_lean_bob_and_viewmodel(delta)
+	_update_exposed_profile_hitboxes_and_visor(delta)
 	_update_pod_reload(delta)
 
 	_net_sync_timer += delta
 	if _net_sync_timer >= 0.05:
 		_net_sync_timer = 0.0
-		NetworkLobby.send_local_player_state(global_position, yaw, pitch, current_lean, int(stance), _respawn_flash_timer > 0.0)
+		var packed_stance: int = int(stance) | (4 if is_left_handed else 0) | (8 if bunker_pocket_weight > 0.25 else 0)
+		NetworkLobby.send_local_player_state(global_position, yaw, pitch, current_lean, packed_stance, _respawn_flash_timer > 0.0)
 
 func _resolve_held_stance() -> Stance:
 	if Input.is_action_pressed("prone_dive"):
@@ -657,7 +718,13 @@ func _emit_hud() -> void:
 		"carrying_flag": carrying_center_flag,
 		"breakout_boost": breakout_boost_timer > 0.0,
 		"bunker_tucked": bunker_pocket_weight > 0.25,
-		"bunker_name": active_bunker_name
+		"bunker_name": active_bunker_name,
+		"hopper_exposure": hopper_exposure_multiplier,
+		"visor_splatter_alpha": visor_splatter_alpha,
+		"visor_splatter_color": visor_splatter_color,
+		"visor_fog_alpha": visor_fog_alpha,
+		"squeegee_wiping": squeegee_wipe_timer > 0.0,
+		"squeegee_pct": clampf(1.0 - (squeegee_wipe_timer / SQUEEGEE_WIPE_DURATION), 0.0, 1.0) if squeegee_wipe_timer > 0.0 else 0.0
 	})
 
 func set_lobby_open_state(is_open: bool) -> void:
@@ -708,16 +775,105 @@ func award_kill_bonus_pod(victim_label: String = "Enemy") -> void:
 	status_banner_sent.emit("ELIMINATED %s! +1 BONUS POD AWARDED (Pods: %d)" % [victim_label, pods_remaining], Color(0.30, 1.0, 0.45))
 	_emit_hud()
 
-func on_paintball_break(_hit_pos: Vector3, shooter: Node) -> void:
+func resolve_hit_subzone(world_hit_pos: Vector3) -> Dictionary:
+	var local_hit := to_local(world_hit_pos)
+	if hitbox_hopper_marker != null:
+		var hm_box := hitbox_hopper_marker.shape as BoxShape3D
+		var hm_rel := local_hit - hitbox_hopper_marker.position
+		if hm_box != null and absf(hm_rel.x) <= hm_box.size.x * 0.62 and absf(hm_rel.y) <= hm_box.size.y * 0.62 and absf(hm_rel.z) <= hm_box.size.z * 0.62:
+			last_hit_zone = "HOPPER / MARKER"
+			return {"zone": "HOPPER / MARKER", "bounce_cos_threshold": 0.28}
+	if hitbox_mask != null and local_hit.distance_to(hitbox_mask.position) <= 0.24:
+		last_hit_zone = "MASK / GOGGLES"
+		return {"zone": "MASK / GOGGLES", "bounce_cos_threshold": 0.26}
+	if hitbox_pod_pack != null and local_hit.distance_to(hitbox_pod_pack.position) <= 0.26:
+		last_hit_zone = "POD PACK"
+		return {"zone": "POD PACK", "bounce_cos_threshold": 0.36}
+	last_hit_zone = "TORSO / JERSEY"
+	return {"zone": "TORSO / JERSEY", "bounce_cos_threshold": 0.48}
+
+func is_wrong_hand_peek() -> bool:
+	if bunker_pocket_weight <= 0.20 or absf(_at_bunker_edge_side) < 0.1:
+		return false
+	# Left edge (_at_bunker_edge_side < 0) requires Left hand; Right edge (> 0) requires Right hand
+	return (_at_bunker_edge_side < 0.0 and not is_left_handed) or (_at_bunker_edge_side > 0.0 and is_left_handed)
+
+func _update_exposed_profile_hitboxes_and_visor(delta: float) -> void:
+	if _bunker_rub_cooldown > 0.0:
+		_bunker_rub_cooldown = maxf(0.0, _bunker_rub_cooldown - delta)
+	var hand_sign: float = -1.0 if is_left_handed else 1.0
+	var wrong_hand := is_wrong_hand_peek()
+	var prev_exp := hopper_exposure_multiplier
+	hopper_exposure_multiplier = 2.4 if wrong_hand else 1.0
+	if hitbox_mask != null and head_pivot != null:
+		hitbox_mask.position = head_pivot.position
+	if hitbox_hopper_marker != null and head_pivot != null:
+		var hm_box := hitbox_hopper_marker.shape as BoxShape3D
+		if hm_box != null:
+			hm_box.size = Vector3(0.18 * hopper_exposure_multiplier, 0.28, 0.50)
+		var extra_outward := 0.22 * signf(_at_bunker_edge_side) if wrong_hand else 0.0
+		hitbox_hopper_marker.position = Vector3(
+			head_pivot.position.x + 0.20 * hand_sign + extra_outward,
+			head_pivot.position.y - 0.12,
+			-0.34
+		)
+	if hitbox_pod_pack != null and head_pivot != null:
+		hitbox_pod_pack.position = Vector3(head_pivot.position.x * 0.4, maxf(0.32, head_pivot.position.y - 0.68), 0.20)
+	if absf(prev_exp - hopper_exposure_multiplier) > 0.05:
+		_emit_hud()
+
+	# Thermal lens breath fogging when sprinting or diving hard
+	var horiz_speed := Vector2(velocity.x, velocity.z).length()
+	if horiz_speed > 8.0 or dive_timer > 0.0:
+		visor_fog_alpha = clampf(visor_fog_alpha + delta * 0.085, 0.0, 0.42)
+	else:
+		visor_fog_alpha = maxf(0.0, visor_fog_alpha - delta * 0.045)
+
+	# [G] Squeegee wipe animation
+	if squeegee_wipe_timer > 0.0:
+		squeegee_wipe_timer = maxf(0.0, squeegee_wipe_timer - delta)
+		var pct := 1.0 - (squeegee_wipe_timer / SQUEEGEE_WIPE_DURATION)
+		visor_splatter_alpha = lerpf(visor_splatter_alpha, 0.0, minf(1.0, delta * 12.0))
+		visor_fog_alpha = lerpf(visor_fog_alpha, 0.0, minf(1.0, delta * 14.0))
+		if squeegee_glove_mesh != null:
+			squeegee_glove_mesh.visible = true
+			squeegee_glove_mesh.position = Vector3(lerpf(-0.42, 0.42, pct), lerpf(0.10, -0.06, sin(pct * PI)), -0.24)
+		if squeegee_wipe_timer <= 0.0:
+			visor_splatter_alpha = 0.0
+			visor_fog_alpha = 0.0
+			if squeegee_glove_mesh != null:
+				squeegee_glove_mesh.visible = false
+		_emit_hud()
+
+func add_visor_splatter(amount: float, color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT, reason: String = "VISOR SPLATTER") -> void:
+	visor_splatter_alpha = clampf(visor_splatter_alpha + amount, 0.0, 0.88)
+	visor_splatter_color = color
+	if not reason.is_empty():
+		status_banner_sent.emit("%s — Press [G] to Squeegee Wipe Lens!" % reason, Color(0.98, 0.88, 0.22))
+	_emit_hud()
+
+func trigger_squeegee_wipe() -> void:
+	squeegee_wipe_timer = SQUEEGEE_WIPE_DURATION
+	visor_splatter_alpha = 0.0
+	visor_fog_alpha = 0.0
+	status_banner_sent.emit("SQUEEGEE WIPE! [G] Thermal Lens & Hopper Cleared", Color(0.38, 0.98, 0.72))
+	_emit_hud()
+
+func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	if _respawn_flash_timer > 0.2 or awaiting_respawn_choice or GameManager.match_ended:
 		return
+	var sub := resolve_hit_subzone(hit_pos)
+	var zone_lbl: String = String(sub.get("zone", "TORSO"))
 	var killer_name: String = "OpFor NPC"
 	if shooter != null and "bot_name" in shooter:
 		killer_name = String(shooter.get("bot_name"))
-	_handle_local_elimination(killer_name)
+	_handle_local_elimination("%s [%s]" % [killer_name, zone_lbl])
 
-func on_paintball_bounce(_hit_pos: Vector3) -> void:
-	status_banner_sent.emit("LUCKY BOUNCE ON YOUR JERSEY — No Break, Keep Playing!", Color(0.45, 0.95, 1.0))
+func on_paintball_bounce(hit_pos: Vector3) -> void:
+	var sub := resolve_hit_subzone(hit_pos)
+	var zone_lbl: String = String(sub.get("zone", "JERSEY"))
+	add_visor_splatter(0.18, GrittyArtThemeScript.NEON_YELLOW_PAINT, "")
+	status_banner_sent.emit("LUCKY BOUNCE OFF YOUR %s — Wipe Spray with [G] & Keep Playing!" % zone_lbl, Color(0.45, 0.95, 1.0))
 
 func _on_remote_player_hit_local(shooter_name: String) -> void:
 	_handle_local_elimination(shooter_name)
@@ -903,16 +1059,19 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 	var right_edge_open: bool = (hit_right.is_empty() or hit_right.get("collider") != col)
 
 	var prev_hand := is_left_handed
+	var prev_edge_side := _at_bunker_edge_side
 	if left_edge_open and not right_edge_open:
-		# Standing/sliding at the LEFT peeking edge -> automatically switch to LEFT hand!
-		is_left_handed = true
 		_at_bunker_edge_side = -1.0
-		_manual_hand_override_in_pocket = false
+		if prev_edge_side != -1.0:
+			_manual_hand_override_in_pocket = false
+		if not _manual_hand_override_in_pocket:
+			is_left_handed = true
 	elif right_edge_open and not left_edge_open:
-		# Standing/sliding at the RIGHT peeking edge -> automatically switch to RIGHT hand!
-		is_left_handed = false
 		_at_bunker_edge_side = 1.0
-		_manual_hand_override_in_pocket = false
+		if prev_edge_side != 1.0:
+			_manual_hand_override_in_pocket = false
+		if not _manual_hand_override_in_pocket:
+			is_left_handed = false
 	elif col != null and not _manual_hand_override_in_pocket:
 		# Check which side of the bunker center we are on in camera-right space (works on Cans, Spools, Doritos & Walls)
 		var rel_offset: float = (global_position - col.global_position).dot(cam_right)
@@ -951,6 +1110,17 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		velocity.z = move_toward(velocity.z, n.z * radial_pull, delta * 18.0)
 		_edge_breakaway_hold_timer = 0.0
 
+	# Wet bunker-rub visor smear if sliding/rubbing hard into a paint-splattered bunker (#13)
+	if col != null and dist < 0.48 and Vector2(velocity.x, velocity.z).length() > 3.2 and _bunker_rub_cooldown <= 0.0:
+		for bchild in col.get_children():
+			if bchild is Decal:
+				_bunker_rub_cooldown = 1.8
+				add_visor_splatter(0.24, (bchild as Decal).modulate, "BUNKER RUB SMEAR ON VISOR")
+				break
+
 	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
+		if col != null:
+			var flex_amp: float = 0.15 if (slide_timer > 0.0 or dive_timer > 0.0) else 0.09
+			GrittyArtThemeScript.trigger_bunker_vinyl_flex(col, -n, flex_amp)
 		status_banner_sent.emit("LOCKED IN COVER: %s — [E] Peek (%s Hand) | [X] Swap Hand | [Q] Crouch | [C] Prone | [Shift] Break Out" % [active_bunker_name, "LEFT" if is_left_handed else "RIGHT"], Color(0.35, 1.0, 0.58))
 		_emit_hud()

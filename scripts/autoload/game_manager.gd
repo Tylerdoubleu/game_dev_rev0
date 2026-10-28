@@ -198,6 +198,7 @@ func _setup_input_map() -> void:
 	_bind_key("swap_shoulder", KEY_X)
 	_bind_key("reload_pod", KEY_R)
 	_bind_key("ping_intel", KEY_F)
+	_bind_key("wipe_visor", KEY_G)
 	_bind_key("bracket_speedball", KEY_1)
 	_bind_key("bracket_woodsball", KEY_2)
 	_bind_key("bracket_pump", KEY_3)
