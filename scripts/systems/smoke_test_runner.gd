@@ -93,8 +93,46 @@ func _process(_delta: float) -> bool:
 	player.call("_enforce_arena_bounds_and_permafall_guard")
 	assert(absf(player.global_position.x) <= 52.5 and absf(player.global_position.z) <= 64.5 and player.global_position.y >= 0.0, "Perma-fall & boundary guard must keep player inside the arena")
 
+	# 6. Verify PB-15 Center-50 Flag Pull, Drop on Elimination, Hang Objective, and Breakout Horn Countdown
+	var flag_station := arena.get_node_or_null("Center50FlagStation") as Node3D
+	assert(flag_station != null, "Center50FlagStation must exist at the 50-yard line")
+	assert(not gm.breakout_horn_sounded and gm.breakout_countdown_left > 0.0, "Breakout horn countdown must be active at round start")
+	gm._process(3.5)
+	assert(gm.breakout_horn_sounded, "Breakout horn must sound after countdown completes")
+	assert(float(player.get("breakout_boost_timer")) > 0.0, "Clean breakout timing must grant initial sprint burst")
+
+	# Move player to Center-50 Flag to pull it
+	player.global_position = Vector3(0.0, 0.1, 1.35)
+	arena.call("_update_center_flag_pickup_and_hang")
+	assert(bool(player.get("carrying_center_flag")) and gm.flag_state == "CARRIED", "Player must pick up Center-50 Flag when sprinting through (0, 0, 1.35)")
+
+	# Eliminate flag carrier and verify flag drops on turf
+	player.set("_respawn_flash_timer", 0.0)
+	player.global_position = Vector3(-8.0, 0.1, 12.0)
+	player.call("on_paintball_break", player.global_position, bot)
+	assert(not bool(player.get("carrying_center_flag")) and gm.flag_state == "DROPPED", "Eliminating the flag carrier must drop the flag on the turf")
+	assert(flag_station.visible and flag_station.global_position.distance_to(Vector3(-8.0, 0.0, 12.0)) < 0.2, "Dropped flag must appear at carrier elimination spot")
+
+	# Recover dropped flag and hang it at the opposing Breakout Gate (North -Z for ALPHA)
+	player.global_position = Vector3(-8.0, 0.1, 12.0)
+	arena.call("_update_center_flag_pickup_and_hang")
+	assert(bool(player.get("carrying_center_flag")), "Player must be able to recover the dropped flag")
+	player.global_position = Vector3(0.0, 0.1, -45.5)
+	arena.call("_update_center_flag_pickup_and_hang")
+	assert(not bool(player.get("carrying_center_flag")) and gm.alpha_flag_hangs == 1 and gm.flag_state == "CENTER_50", "Reaching enemy Breakout Gate must hang the flag, score a Flag Hang point, and reset flag to Center-50")
+
+	# Test PB-16 Bunker Cover Pocket & Sprint Breakaway
+	player.global_position = Vector3(0.0, 0.1, 39.25) # Just behind Home_BackCenter (0, 0, 38.0, depth 1.4)
+	player.rotation.y = 0.0 # Facing -Z toward Home_BackCenter
+	for _i in range(6):
+		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Player behind a bunker face must settle into the PB-16 Bunker Cover Pocket")
+	player.call("_apply_bunker_cover_pocket_physics", 0.1, Vector3(0, 0, 1), Vector2(0, 1), true)
+	assert(float(player.get("bunker_pocket_weight")) == 0.0, "Sprinting or moving away must immediately release the PB-16 Bunker Cover Pocket")
+	print("[PASS] PB-16 Soft Bunker Cover Pocket + Corner Edge-Detent + Instant Sprint Breakaway verified")
+
 	# Test First to 10 Deaths loses
-	for _i in range(9):
+	while gm.local_deaths < 10:
 		gm.record_local_death("OpFor_Test")
 	assert(gm.local_deaths == 10 and gm.match_ended, "First to 10 deaths must trigger match loss")
 

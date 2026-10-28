@@ -80,6 +80,21 @@ var initial_spawn_pos: Vector3 = Vector3(0.0, 0.1, 45.5)
 var initial_spawn_yaw: float = 0.0
 var _net_sync_timer: float = 0.0
 var _respawn_flash_timer: float = 0.0
+var carrying_center_flag: bool = false
+var carried_flag_mesh: MeshInstance3D = null
+var breakout_boost_timer: float = 0.0
+var breakout_penalty_timer: float = 0.0
+var _was_moving_before_horn: bool = false
+
+# PB-16: Soft Bunker Cover Pocket + Corner Edge-Detent + Analog Lean Exposure
+const BUNKER_POCKET_REACH: float = 0.85
+const BUNKER_POCKET_IDEAL_DIST: float = 0.44
+var bunker_pocket_weight: float = 0.0
+var active_bunker_name: String = ""
+var active_bunker_normal: Vector3 = Vector3.ZERO
+var active_bunker_dist: float = 99.0
+var lean_exposure_scale: float = 1.0
+var _edge_breakaway_hold_timer: float = 0.0
 
 func _ready() -> void:
 	_build_player_nodes()
@@ -88,6 +103,8 @@ func _ready() -> void:
 	initial_spawn_yaw = yaw
 	NetworkLobby.remote_player_hit_local.connect(_on_remote_player_hit_local)
 	NetworkLobby.local_player_scored_kill.connect(award_kill_bonus_pod)
+	if GameManager.has_signal("breakout_countdown_updated"):
+		GameManager.breakout_countdown_updated.connect(_on_breakout_countdown_updated)
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
 
 func _build_player_nodes() -> void:
@@ -171,6 +188,23 @@ func _build_player_nodes() -> void:
 	pod_stream_mesh.material_override = GrittyArtThemeScript.create_oily_paint_material(GrittyArtThemeScript.NEON_YELLOW_PAINT, false)
 	pod_rig.add_child(pod_stream_mesh)
 
+	carried_flag_mesh = MeshInstance3D.new()
+	carried_flag_mesh.name = "CarriedCenterFlagCloth"
+	var fbox := BoxMesh.new()
+	fbox.size = Vector3(0.24, 0.16, 0.02)
+	carried_flag_mesh.mesh = fbox
+	carried_flag_mesh.position = Vector3(-0.34, -0.18, -0.42)
+	carried_flag_mesh.rotation_degrees = Vector3(12.0, 24.0, -14.0)
+	var fmat := StandardMaterial3D.new()
+	fmat.albedo_color = Color(1.0, 0.78, 0.06)
+	fmat.emission_enabled = true
+	fmat.emission = Color(1.0, 0.65, 0.04)
+	fmat.emission_energy_multiplier = 0.55
+	fmat.roughness = 0.45
+	carried_flag_mesh.material_override = fmat
+	carried_flag_mesh.visible = false
+	camera.add_child(carried_flag_mesh)
+
 func _on_bracket_changed(bracket: Resource) -> void:
 	if bracket == null:
 		return
@@ -197,6 +231,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 		else:
 			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			lean_exposure_scale = clampf(lean_exposure_scale + 0.12, 0.38, 1.15)
+			_emit_hud()
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			lean_exposure_scale = clampf(lean_exposure_scale - 0.12, 0.38, 1.15)
+			_emit_hud()
 
 	if event.is_action_pressed("swap_shoulder"):
 		is_left_handed = not is_left_handed
@@ -228,6 +270,10 @@ func _physics_process(delta: float) -> void:
 	time_since_last_shot += delta
 	if _respawn_flash_timer > 0.0:
 		_respawn_flash_timer = maxf(0.0, _respawn_flash_timer - delta)
+	if breakout_boost_timer > 0.0:
+		breakout_boost_timer = maxf(0.0, breakout_boost_timer - delta)
+	if breakout_penalty_timer > 0.0:
+		breakout_penalty_timer = maxf(0.0, breakout_penalty_timer - delta)
 
 	if woodsball_trigger_latched:
 		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
@@ -316,6 +362,16 @@ func _update_movement_and_stance(delta: float) -> void:
 		velocity.x = slide_dir.x * SLIDE_INITIAL_SPEED * slide_factor
 		velocity.z = slide_dir.z * SLIDE_INITIAL_SPEED * slide_factor
 	else:
+		if not GameManager.breakout_horn_sounded and input_vec.length() > 0.15:
+			_was_moving_before_horn = true
+		var speed_mult: float = 1.0
+		if not GameManager.breakout_horn_sounded:
+			# Hold on the starting gate net during the 3..2..1 countdown (slight lateral shuffle allowed)
+			speed_mult = 0.18
+		elif breakout_boost_timer > 0.0:
+			speed_mult = 1.15
+		elif breakout_penalty_timer > 0.0:
+			speed_mult = 0.72
 		var target_speed: float = WALK_SPEED
 		if wants_sprint:
 			target_speed = SPRINT_SPEED
@@ -323,8 +379,11 @@ func _update_movement_and_stance(delta: float) -> void:
 			target_speed = CROUCH_SPEED
 		elif stance == Stance.PRONE:
 			target_speed = PRONE_SPEED
+		target_speed *= speed_mult
 		velocity.x = move_dir.x * target_speed
 		velocity.z = move_dir.z * target_speed
+
+	_apply_bunker_cover_pocket_physics(delta, move_dir, input_vec, wants_sprint)
 
 	if not is_on_floor():
 		velocity.y -= 9.81 * delta
@@ -336,10 +395,10 @@ func _update_movement_and_stance(delta: float) -> void:
 func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	var target_lean: float = 0.0
 	if Input.is_action_pressed("lean_left"):
-		target_lean = -1.0
+		target_lean = -1.0 * lean_exposure_scale
 		is_left_handed = true
 	elif Input.is_action_pressed("lean_right"):
-		target_lean = 1.0
+		target_lean = 1.0 * lean_exposure_scale
 		is_left_handed = false
 
 	current_lean = lerp(current_lean, target_lean, min(1.0, delta * 12.0))
@@ -381,12 +440,15 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	camera.rotation.z = deg_to_rad(-current_lean * LEAN_ROLL_DEG + slide_roll_deg)
 
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
-	var target_hand_x: float = 0.17 * hand_sign + bob_x * 0.35
-	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 + bob_y * 0.45)
+	var tuck_factor: float = bunker_pocket_weight * clampf(1.0 - absf(current_lean), 0.0, 1.0)
+	var target_hand_x: float = (0.17 - 0.055 * tuck_factor) * hand_sign + bob_x * 0.35
+	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 - 0.025 * tuck_factor + bob_y * 0.45)
 	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
 	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
-	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else 0.0
+	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else deg_to_rad(-12.0 * hand_sign * tuck_factor)
+	var target_marker_pitch: float = deg_to_rad(10.0 * tuck_factor)
 	marker_rig.rotation.z = lerp(marker_rig.rotation.z, target_marker_roll, min(1.0, delta * 12.0))
+	marker_rig.rotation.x = lerp(marker_rig.rotation.x, target_marker_pitch, min(1.0, delta * 12.0))
 
 	if is_reloading_pod:
 		var pct: float = clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0)
@@ -558,17 +620,18 @@ func _ping_crosshair_target() -> void:
 		status_banner_sent.emit("PINGED: %s" % label, Color(1.0, 0.9, 0.2))
 
 func _get_stance_label() -> String:
+	var base_lbl := "STANDING"
 	if dive_timer > 0.0:
-		return "SUPERMAN DIVE"
-	if slide_timer > 0.0:
-		return "KNEE-SLIDE"
-	match stance:
-		Stance.CROUCHING:
-			return "CROUCH (Holding [C])"
-		Stance.PRONE:
-			return "PRONE (Holding [Ctrl])"
-		_:
-			return "STANDING"
+		base_lbl = "SUPERMAN DIVE"
+	elif slide_timer > 0.0:
+		base_lbl = "KNEE-SLIDE"
+	elif stance == Stance.CROUCHING:
+		base_lbl = "CROUCH (Holding [C])"
+	elif stance == Stance.PRONE:
+		base_lbl = "PRONE (Holding [Ctrl])"
+	if bunker_pocket_weight > 0.25 and not active_bunker_name.is_empty():
+		return "%s [TUCKED: %s]" % [base_lbl, active_bunker_name]
+	return base_lbl
 
 func _emit_hud() -> void:
 	var bracket: Resource = GearRuleEnforcer.active_bracket
@@ -583,7 +646,11 @@ func _emit_hud() -> void:
 		"reloading": is_reloading_pod,
 		"reload_pct": clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0) if is_reloading_pod else 0.0,
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,
-		"pump_racked": pump_racked
+		"pump_racked": pump_racked,
+		"carrying_flag": carrying_center_flag,
+		"breakout_boost": breakout_boost_timer > 0.0,
+		"bunker_tucked": bunker_pocket_weight > 0.25,
+		"bunker_name": active_bunker_name
 	})
 
 func set_lobby_open_state(is_open: bool) -> void:
@@ -648,9 +715,36 @@ func on_paintball_bounce(_hit_pos: Vector3) -> void:
 func _on_remote_player_hit_local(shooter_name: String) -> void:
 	_handle_local_elimination(shooter_name)
 
+func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> void:
+	if not horn_sounded:
+		if absf(seconds_left - GameManager.BREAKOUT_COUNTDOWN_DURATION) < 0.05:
+			_was_moving_before_horn = false
+			breakout_boost_timer = 0.0
+			breakout_penalty_timer = 0.0
+		return
+	if _was_moving_before_horn:
+		breakout_penalty_timer = 1.2
+		status_banner_sent.emit("FALSE START OFF THE GATE! (1.2s Speed Penalty — Wait for the Horn!)", Color(1.0, 0.42, 0.28))
+	else:
+		breakout_boost_timer = 1.5
+		status_banner_sent.emit("BUZZER! CLEAN BREAKOUT! (+15% Sprint Burst for 1.5s — Go Get Center Flag!)", Color(0.30, 1.0, 0.50))
+	_emit_hud()
+
+func set_carrying_center_flag(carrying: bool) -> void:
+	carrying_center_flag = carrying
+	if carried_flag_mesh != null:
+		carried_flag_mesh.visible = carrying
+	_emit_hud()
+
 func _handle_local_elimination(killer_name: String) -> void:
 	if awaiting_respawn_choice or GameManager.match_ended:
 		return
+	var death_pos := global_position
+	if carrying_center_flag:
+		set_carrying_center_flag(false)
+		var scene_root := get_tree().current_scene
+		if scene_root != null and scene_root.has_method("drop_center_flag_at"):
+			scene_root.call("drop_center_flag_at", death_pos, NetworkLobby.local_callsign)
 	_respawn_flash_timer = 2.8
 	GameManager.record_local_death(killer_name)
 	# Immediately reset pod count and position to starting spot as baseline, then open Tactical Respawn Map on interactive clients
@@ -660,3 +754,124 @@ func _handle_local_elimination(killer_name: String) -> void:
 		status_banner_sent.emit("MATCH OVER — Reached 10 Deaths! Press [T] or [M] to Review Scoreboard", Color(1.0, 0.25, 0.25))
 	else:
 		status_banner_sent.emit("YOU'VE BEEN HIT BY %s! Select your Respawn Zone on the Tactical Map (Deaths: %d / %d)" % [killer_name, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE], Color(1.0, 0.22, 0.48))
+
+func _is_cover_bunker_collider(col: Object) -> bool:
+	if col == null or not (col is StaticBody3D):
+		return false
+	var n: String = String(col.name)
+	if n == "TurfFloor" or n.begins_with("SafetyNet") or n.begins_with("RemotePlayer") or n.begins_with("OpFor_Snake50") or n.begins_with("OpFor_SnakeCorner") or n.begins_with("OpFor_CenterAztec") or n.begins_with("OpFor_Dorito2") or n.begins_with("OpFor_BackCenter"):
+		return false
+	return n.begins_with("Bunker_") or n.begins_with("Home_") or n.begins_with("OpFor_") or n.begins_with("Snake_") or n.begins_with("Spool")
+
+func _probe_nearest_bunker_cover() -> Dictionary:
+	var w3d := get_world_3d()
+	if w3d == null:
+		return {}
+	var space_state := w3d.direct_space_state
+	if space_state == null:
+		return {}
+	var fwd := -transform.basis.z.normalized()
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.001:
+		fwd = Vector3(0, 0, -1)
+	else:
+		fwd = fwd.normalized()
+	var right := transform.basis.x.normalized()
+	right.y = 0.0
+	right = right.normalized()
+
+	var origin := global_position + Vector3(0.0, 0.55, 0.0)
+	var dirs := [
+		fwd,
+		(fwd + right * 0.42).normalized(),
+		(fwd - right * 0.42).normalized(),
+		(fwd + right * 0.85).normalized(),
+		(fwd - right * 0.85).normalized()
+	]
+	var best_hit: Dictionary = {}
+	var best_dist: float = BUNKER_POCKET_REACH + 0.1
+	for d in dirs:
+		var q := PhysicsRayQueryParameters3D.create(origin, origin + d * BUNKER_POCKET_REACH)
+		q.exclude = [get_rid()]
+		var res: Dictionary = space_state.intersect_ray(q)
+		if not res.is_empty() and _is_cover_bunker_collider(res.get("collider")):
+			var hit_pos: Vector3 = res["position"]
+			var dist: float = Vector2(hit_pos.x - origin.x, hit_pos.z - origin.z).length()
+			if dist < best_dist:
+				best_dist = dist
+				best_hit = res
+				best_hit["horiz_dist"] = dist
+	return best_hit
+
+func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_vec: Vector2, wants_sprint: bool) -> void:
+	var hit := _probe_nearest_bunker_cover()
+	if hit.is_empty():
+		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 6.5)
+		if bunker_pocket_weight <= 0.01:
+			active_bunker_name = ""
+		_edge_breakaway_hold_timer = 0.0
+		return
+
+	var col: Node3D = hit["collider"] as Node3D
+	var raw_normal: Vector3 = hit.get("normal", Vector3.ZERO)
+	raw_normal.y = 0.0
+	if raw_normal.length_squared() < 0.001 and col != null:
+		raw_normal = (global_position - col.global_position)
+		raw_normal.y = 0.0
+	if raw_normal.length_squared() < 0.001:
+		return
+	var n := raw_normal.normalized() # Points outward from bunker surface toward player
+	var dist: float = float(hit.get("horiz_dist", 0.5))
+
+	# Instant zero-friction breakaway if sprinting or steering > 35 degrees away from the bunker face
+	var moving_away := (move_dir.length() > 0.15 and move_dir.dot(n) > 0.57)
+	if wants_sprint or moving_away:
+		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 12.0)
+		active_bunker_name = ""
+		_edge_breakaway_hold_timer = 0.0
+		return
+
+	# Settle into the bunker pocket!
+	var prev_weight := bunker_pocket_weight
+	bunker_pocket_weight = move_toward(bunker_pocket_weight, 1.0, delta * 7.5)
+	active_bunker_name = String(col.name) if col != null else "Bunker"
+	active_bunker_normal = n
+	active_bunker_dist = dist
+
+	# 1. Cushion slide/dive impact into the pocket so sliding into a Dorito/Snake catches you cleanly behind cover
+	if slide_timer > 0.0 or dive_timer > 0.0:
+		var into_bunker_speed := -Vector2(velocity.x, velocity.z).dot(Vector2(n.x, n.z))
+		if into_bunker_speed > 0.0 and dist < 0.65:
+			velocity.x *= 0.72
+			velocity.z *= 0.72
+
+	# 2. Gentle surface-normal spring toward the ideal 0.44m tuck pocket distance
+	var dist_err: float = dist - BUNKER_POCKET_IDEAL_DIST
+	var radial_pull: float = clampf(-dist_err * 4.8, -2.6, 2.6) * bunker_pocket_weight
+	velocity.x += n.x * radial_pull
+	velocity.z += n.z * radial_pull
+
+	# 3. Tangent-rail strafe + soft corner edge-detent so tapping A/D stops flush at the peeking edge
+	if move_dir.length() > 0.08 and slide_timer <= 0.0 and dive_timer <= 0.0:
+		var tangent := Vector3(-n.z, 0.0, n.x).normalized()
+		var tang_speed: float = velocity.dot(tangent)
+		if absf(tang_speed) > 0.15:
+			var side_sign: float = signf(tang_speed)
+			var probe_origin := global_position + Vector3(0.0, 0.55, 0.0) + tangent * (side_sign * 0.36)
+			var q_edge := PhysicsRayQueryParameters3D.create(probe_origin, probe_origin - n * (BUNKER_POCKET_REACH + 0.25))
+			q_edge.exclude = [get_rid()]
+			var edge_hit: Dictionary = get_world_3d().direct_space_state.intersect_ray(q_edge)
+			var still_has_bunker: bool = (not edge_hit.is_empty() and edge_hit.get("collider") == col)
+			if not still_has_bunker:
+				# Reached the peeking corner edge of the bunker! Apply soft edge detent for 0.22s unless deliberately held through
+				_edge_breakaway_hold_timer += delta
+				if _edge_breakaway_hold_timer < 0.22:
+					velocity -= tangent * (tang_speed * 0.86)
+					is_left_handed = (side_sign < 0.0)
+			else:
+				_edge_breakaway_hold_timer = 0.0
+	else:
+		_edge_breakaway_hold_timer = 0.0
+
+	if prev_weight <= 0.25 and bunker_pocket_weight > 0.25:
+		_emit_hud()

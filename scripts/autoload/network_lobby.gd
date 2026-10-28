@@ -18,6 +18,7 @@ signal match_started_signal(room_id: String, bracket_id: String, fill_bots: bool
 signal remote_player_hit_local(shooter_name: String)
 signal local_player_scored_kill(victim_name: String)
 signal match_over_networked(loser_name: String, winner_name: String)
+signal flag_event_received(event_type: String, player_name: String, team: String, world_pos: Vector3)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -506,6 +507,19 @@ func rpc_notify_player_hit(victim_peer_id: int, shooter_peer_id: int, shooter_na
 		local_player_scored_kill.emit(victim_name)
 		IntelBus.intel_feed_updated.emit("ELIMINATED %s! (+1 BONUS PAINT POD AWARDED!)" % victim_name)
 	lobby_state_changed.emit(get_lobby_state_snapshot())
+
+func broadcast_flag_event(event_type: String, player_name: String, team: String, world_pos: Vector3) -> void:
+	if not is_online_client():
+		return
+	rpc_broadcast_flag_event.rpc(event_type, player_name, team, world_pos, active_room)
+
+@rpc("any_peer", "call_local", "reliable")
+func rpc_broadcast_flag_event(event_type: String, player_name: String, team: String, world_pos: Vector3, room_id: String) -> void:
+	if is_dedicated_server:
+		return
+	if room_id != active_room:
+		return
+	flag_event_received.emit(event_type, player_name, team, world_pos)
 
 @rpc("authority", "call_local", "reliable")
 func rpc_announce_match_over(loser_name: String, winner_name: String) -> void:

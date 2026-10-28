@@ -6,6 +6,18 @@ signal round_updated(round_num: int, remaining_enemies: int, round_time_left: fl
 signal round_won(round_num: int)
 signal scoreboard_updated(stats: Dictionary)
 signal match_over(loser_name: String, winner_label: String)
+signal breakout_countdown_updated(seconds_left: float, horn_sounded: bool)
+signal center_flag_state_changed(state_text: String, carrier_name: String, carrier_team: String, flag_world_pos: Vector3)
+
+const BREAKOUT_COUNTDOWN_DURATION: float = 3.0
+var breakout_countdown_left: float = 0.0
+var breakout_horn_sounded: bool = true
+var flag_state: String = "CENTER_50" # "CENTER_50", "CARRIED", "DROPPED"
+var flag_carrier_name: String = ""
+var flag_carrier_team: String = ""
+var flag_world_pos: Vector3 = Vector3(0.0, 0.0, 1.35)
+var alpha_flag_hangs: int = 0
+var bravo_flag_hangs: int = 0
 
 const MAX_DEATHS_TO_LOSE: int = 10
 
@@ -53,6 +65,13 @@ func _notification(what: int) -> void:
 		get_tree().quit()
 
 func _process(delta: float) -> void:
+	if not breakout_horn_sounded and round_active and not match_ended:
+		breakout_countdown_left = maxf(0.0, breakout_countdown_left - delta)
+		if breakout_countdown_left <= 0.0:
+			breakout_horn_sounded = true
+			breakout_countdown_updated.emit(0.0, true)
+		else:
+			breakout_countdown_updated.emit(breakout_countdown_left, false)
 	if round_active and not match_ended:
 		round_time_left = max(0.0, round_time_left - delta)
 		round_updated.emit(current_round, remaining_enemies, round_time_left)
@@ -62,7 +81,45 @@ func register_round_start(enemy_count: int) -> void:
 	round_time_left = 240.0
 	round_active = true
 	match_ended = false
+	breakout_countdown_left = BREAKOUT_COUNTDOWN_DURATION
+	breakout_horn_sounded = false
+	reset_center_flag_to_50()
+	breakout_countdown_updated.emit(breakout_countdown_left, false)
 	round_updated.emit(current_round, remaining_enemies, round_time_left)
+	_emit_scoreboard()
+
+func reset_center_flag_to_50() -> void:
+	flag_state = "CENTER_50"
+	flag_carrier_name = ""
+	flag_carrier_team = ""
+	flag_world_pos = Vector3(0.0, 0.0, 1.35)
+	center_flag_state_changed.emit("AT CENTER 50", "", "", flag_world_pos)
+
+func notify_flag_picked_up(carrier_name: String, carrier_team: String, pos: Vector3) -> void:
+	flag_state = "CARRIED"
+	flag_carrier_name = carrier_name
+	flag_carrier_team = carrier_team
+	flag_world_pos = pos
+	center_flag_state_changed.emit("CARRIED BY %s (%s)" % [carrier_name, carrier_team], carrier_name, carrier_team, flag_world_pos)
+	_emit_scoreboard()
+
+func notify_flag_dropped(drop_pos: Vector3, former_carrier: String = "") -> void:
+	flag_state = "DROPPED"
+	flag_carrier_name = ""
+	flag_carrier_team = ""
+	flag_world_pos = Vector3(drop_pos.x, 0.0, drop_pos.z)
+	center_flag_state_changed.emit("DROPPED @ (%.0fm, %.0fm)" % [drop_pos.x, drop_pos.z], former_carrier, "", flag_world_pos)
+	_emit_scoreboard()
+
+func notify_flag_hung(scorer_name: String, scorer_team: String) -> void:
+	if scorer_team == "ALPHA":
+		alpha_flag_hangs += 1
+	else:
+		bravo_flag_hangs += 1
+	if scorer_name == (NetworkLobby.local_callsign if NetworkLobby else ""):
+		local_deaths = max(0, local_deaths - 3)
+	reset_center_flag_to_50()
+	round_won.emit(current_round)
 	_emit_scoreboard()
 
 func reset_match_stats() -> void:
@@ -108,6 +165,10 @@ func get_scoreboard_snapshot() -> Dictionary:
 		"local_kills": local_kills,
 		"local_deaths": local_deaths,
 		"npc_deaths": npc_deaths,
+		"alpha_flag_hangs": alpha_flag_hangs,
+		"bravo_flag_hangs": bravo_flag_hangs,
+		"flag_state": flag_state,
+		"flag_carrier_name": flag_carrier_name,
 		"max_deaths": MAX_DEATHS_TO_LOSE,
 		"match_ended": match_ended
 	}

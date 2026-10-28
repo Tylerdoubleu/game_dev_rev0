@@ -38,10 +38,16 @@ var death_killer_label: Label
 var death_sub_label: Label
 var respawn_map_container: Control
 var respawn_zone_buttons: Array[Button] = []
+var center_flag_node: Node3D
+var center_flag_cloth: MeshInstance3D
+var center_flag_label_3d: Label3D
+var breakout_horn_label: Label
+var _flag_wave_time: float = 0.0
 
 func _ready() -> void:
 	_build_environment_and_turf()
 	_build_speedball_bunkers()
+	_build_center_50_flag_station()
 	_set_opfor_bots_enabled(NetworkLobby.fill_bots_enabled)
 	if not NetworkLobby.is_dedicated_server:
 		_spawn_player()
@@ -57,6 +63,10 @@ func _ready() -> void:
 	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
 	NetworkLobby.connection_status_changed.connect(_on_lobby_connection_status)
 	NetworkLobby.match_started_signal.connect(_on_network_match_started)
+	if NetworkLobby.has_signal("flag_event_received"):
+		NetworkLobby.flag_event_received.connect(_on_network_flag_event)
+	if GameManager.has_signal("breakout_countdown_updated"):
+		GameManager.breakout_countdown_updated.connect(_on_breakout_countdown_updated)
 	GameManager.register_round_start(5)
 
 func _build_environment_and_turf() -> void:
@@ -272,6 +282,15 @@ func _build_hud() -> void:
 	intel_label.add_theme_color_override("font_color", Color(0.55, 0.95, 1.0))
 	canvas.add_child(intel_label)
 
+	breakout_horn_label = Label.new()
+	breakout_horn_label.name = "BreakoutHornBanner"
+	breakout_horn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	breakout_horn_label.position = Vector2(360, 125)
+	breakout_horn_label.custom_minimum_size = Vector2(880, 56)
+	breakout_horn_label.add_theme_font_size_override("font_size", 28)
+	breakout_horn_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.16))
+	canvas.add_child(breakout_horn_label)
+
 	player.call("_emit_hud")
 
 func _on_hud_state_changed(state: Dictionary) -> void:
@@ -284,8 +303,9 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 	if state["pump_mode"]:
 		pump_text = " | PUMP: %s" % ("RACKED (Ready)" if state["pump_racked"] else "NEEDS RACK [RMB]")
 
+	var flag_carry_text := "  |  [!! CARRYING CENTER FLAG -> HANG AT ENEMY GATE !!]" if state.get("carrying_flag", false) else ""
 	hud_label.text = (
-		"BRACKET: %s\n" % state["bracket_name"] +
+		"BRACKET: %s%s\n" % [state["bracket_name"], flag_carry_text] +
 		"HOPPER: %d / %d  |  PODS: %d (%d rnds)%s\n" % [state["hopper"], state["hopper_max"], state["pods"], state["pod_cap"], pump_text] +
 		"STANCE: %s  |  SHOULDER: %s%s" % [state["stance"], state["hand"], reload_text]
 	)
@@ -294,11 +314,16 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 	if round_label == null:
 		return
 	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else ("SOLO+NPCs" if NetworkLobby.fill_bots_enabled else "PVP ONLY")
+	var flag_hud_status := "AT 50"
+	if GameManager.flag_state == "CARRIED":
+		flag_hud_status = "CARRIED (%s)" % GameManager.flag_carrier_name
+	elif GameManager.flag_state == "DROPPED":
+		flag_hud_status = "DROPPED"
 	round_label.text = (
-		"ROUND %d  |  KILLS: %d (+1 Pod/Kill)  |  DEATHS: %d/%d  |  TIME: %.0fs  |  %s\n" % [round_num, GameManager.local_kills, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, time_left, net_tag] +
-		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide | Ctrl Prone | Shift+Ctrl Dive\n" +
+		"ROUND %d  |  FLAG: %s (A:%d B:%d)  |  KILLS: %d  |  DEATHS: %d/%d  |  %.0fs  |  %s\n" % [round_num, flag_hud_status, GameManager.alpha_flag_hangs, GameManager.bravo_flag_hangs, GameManager.local_kills, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, time_left, net_tag] +
+		"Move: WASD + Shift Sprint | C Crouch | Shift+C Knee-Slide | Ctrl/Alt/Z Prone | Shift+Ctrl Dive\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
-		"R Pod Reload | F Ping | [M] Scoreboard (K/D) | [TAB / ESC] Opening Menu | T Reset"
+		"Center-50 Flag Pull & Hang at Enemy Gate | R Pod Reload | F Ping | [M] Scoreboard | [TAB] Menu"
 	)
 
 func _on_round_won(round_num: int) -> void:
@@ -1060,3 +1085,174 @@ func _on_respawn_zone_selected(zone_index: int) -> void:
 		death_respawn_canvas.visible = false
 	if player != null and player.has_method("respawn_at_map_zone"):
 		player.call("respawn_at_map_zone", chosen["pos"], chosen["yaw"], chosen["title"])
+
+func _build_center_50_flag_station() -> void:
+	center_flag_node = Node3D.new()
+	center_flag_node.name = "Center50FlagStation"
+	center_flag_node.position = Vector3(0.0, 0.0, 1.35)
+	add_child(center_flag_node)
+
+	var base_mesh := MeshInstance3D.new()
+	var base_cyl := CylinderMesh.new()
+	base_cyl.top_radius = 0.42
+	base_cyl.bottom_radius = 0.50
+	base_cyl.height = 0.08
+	base_mesh.mesh = base_cyl
+	base_mesh.position = Vector3(0, 0.04, 0)
+	var bmat := StandardMaterial3D.new()
+	bmat.albedo_color = Color(0.18, 0.19, 0.21)
+	bmat.roughness = 0.7
+	base_mesh.material_override = bmat
+	center_flag_node.add_child(base_mesh)
+
+	var pole_mesh := MeshInstance3D.new()
+	var pole_cyl := CylinderMesh.new()
+	pole_cyl.top_radius = 0.032
+	pole_cyl.bottom_radius = 0.038
+	pole_cyl.height = 2.65
+	pole_mesh.mesh = pole_cyl
+	pole_mesh.position = Vector3(0, 1.325, 0)
+	var pmat := StandardMaterial3D.new()
+	pmat.albedo_color = Color(0.88, 0.90, 0.94)
+	pmat.metallic = 0.65
+	pmat.roughness = 0.25
+	pole_mesh.material_override = pmat
+	center_flag_node.add_child(pole_mesh)
+
+	center_flag_cloth = MeshInstance3D.new()
+	center_flag_cloth.name = "FlagBannerCloth"
+	var fbox := BoxMesh.new()
+	fbox.size = Vector3(0.95, 0.58, 0.035)
+	center_flag_cloth.mesh = fbox
+	center_flag_cloth.position = Vector3(0.48, 2.25, 0.0)
+	var fmat := StandardMaterial3D.new()
+	fmat.albedo_color = Color(1.0, 0.80, 0.06)
+	fmat.emission_enabled = true
+	fmat.emission = Color(1.0, 0.68, 0.04)
+	fmat.emission_energy_multiplier = 0.65
+	fmat.roughness = 0.42
+	center_flag_cloth.material_override = fmat
+	center_flag_node.add_child(center_flag_cloth)
+
+	center_flag_label_3d = Label3D.new()
+	center_flag_label_3d.name = "CenterFlagLabel3D"
+	center_flag_label_3d.text = "[CENTER-50 FLAG — SPRINT THROUGH TO PULL]"
+	center_flag_label_3d.font_size = 44
+	center_flag_label_3d.pixel_size = 0.005
+	center_flag_label_3d.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	center_flag_label_3d.position = Vector3(0, 2.95, 0)
+	center_flag_label_3d.modulate = Color(1.0, 0.92, 0.18)
+	center_flag_node.add_child(center_flag_label_3d)
+
+func _process(delta: float) -> void:
+	if NetworkLobby.is_dedicated_server:
+		return
+	_flag_wave_time += delta
+	if center_flag_cloth != null and center_flag_node != null and center_flag_node.visible:
+		center_flag_cloth.rotation.y = sin(_flag_wave_time * 4.5) * 0.18
+	_update_center_flag_pickup_and_hang()
+
+func _update_center_flag_pickup_and_hang() -> void:
+	if player == null or GameManager.match_ended:
+		return
+	if bool(player.get("awaiting_respawn_choice")) or bool(player.get("lobby_open")):
+		return
+	var p_pos: Vector3 = player.global_position
+	var is_carrying: bool = bool(player.get("carrying_center_flag"))
+
+	if not is_carrying and center_flag_node != null and center_flag_node.visible and GameManager.flag_state != "CARRIED":
+		var f_pos: Vector3 = center_flag_node.global_position
+		if Vector2(p_pos.x - f_pos.x, p_pos.z - f_pos.z).length() <= 2.35:
+			pickup_center_flag_for_local_player()
+	elif is_carrying:
+		var enemy_gate_z: float = -45.5 if NetworkLobby.local_team == "ALPHA" else 45.5
+		var enemy_gate_pos := Vector3(0.0, 0.1, enemy_gate_z)
+		if Vector2(p_pos.x - enemy_gate_pos.x, p_pos.z - enemy_gate_pos.z).length() <= 4.2:
+			hang_center_flag_for_local_player()
+
+func pickup_center_flag_for_local_player() -> void:
+	if player == null:
+		return
+	player.call("set_carrying_center_flag", true)
+	if center_flag_node != null:
+		center_flag_node.visible = false
+	GameManager.notify_flag_picked_up(NetworkLobby.local_callsign, NetworkLobby.local_team, player.global_position)
+	_on_status_banner("FLAG PULLED BY %s! Sprint to Enemy Breakout Gate (%s End) to HANG IT!" % [
+		NetworkLobby.local_callsign.to_upper(),
+		"NORTH -Z" if NetworkLobby.local_team == "ALPHA" else "SOUTH +Z"
+	], Color(1.0, 0.88, 0.14))
+	IntelBus.intel_feed_updated.emit("CENTER-50 FLAG PULLED BY %s (%s)!" % [NetworkLobby.local_callsign, NetworkLobby.local_team])
+	NetworkLobby.broadcast_flag_event("PICKUP", NetworkLobby.local_callsign, NetworkLobby.local_team, player.global_position)
+
+func drop_center_flag_at(drop_pos: Vector3, carrier_name: String) -> void:
+	var clamped_drop := Vector3(clampf(drop_pos.x, -48.0, 48.0), 0.0, clampf(drop_pos.z, -44.0, 44.0))
+	if center_flag_node != null:
+		center_flag_node.global_position = clamped_drop
+		center_flag_node.visible = true
+	if center_flag_label_3d != null:
+		center_flag_label_3d.text = "[DROPPED FLAG — SPRINT THROUGH TO RECOVER]"
+	GameManager.notify_flag_dropped(clamped_drop, carrier_name)
+	_on_status_banner("FLAG DROPPED BY %s AT (%.0fm, %.0fm)!" % [carrier_name.to_upper(), clamped_drop.x, clamped_drop.z], Color(1.0, 0.52, 0.18))
+	IntelBus.intel_feed_updated.emit("FLAG DROPPED @ (%.0fm, %.0fm)!" % [clamped_drop.x, clamped_drop.z])
+	NetworkLobby.broadcast_flag_event("DROP", carrier_name, NetworkLobby.local_team, clamped_drop)
+
+func hang_center_flag_for_local_player() -> void:
+	if player == null:
+		return
+	player.call("set_carrying_center_flag", false)
+	player.call("award_kill_bonus_pod", "Center-50 Flag Hang (+2 Bonus Pods)")
+	player.call("award_kill_bonus_pod", "Center-50 Flag Hang")
+	if center_flag_node != null:
+		center_flag_node.global_position = Vector3(0.0, 0.0, 1.35)
+		center_flag_node.visible = true
+	if center_flag_label_3d != null:
+		center_flag_label_3d.text = "[CENTER-50 FLAG — SPRINT THROUGH TO PULL]"
+	GameManager.notify_flag_hung(NetworkLobby.local_callsign, NetworkLobby.local_team)
+	_on_status_banner("FLAG HUNG BY %s (%s)! ROUND POINT SCORED (+2 PODS & -3 TEAM DEATHS)!" % [
+		NetworkLobby.local_callsign.to_upper(),
+		NetworkLobby.local_team
+	], Color(0.28, 1.0, 0.48))
+	IntelBus.intel_feed_updated.emit("FLAG HUNG ON ENEMY GATE BY %s (%s)!" % [NetworkLobby.local_callsign, NetworkLobby.local_team])
+	NetworkLobby.broadcast_flag_event("HANG", NetworkLobby.local_callsign, NetworkLobby.local_team, Vector3(0.0, 0.0, 1.35))
+
+func _on_network_flag_event(event_type: String, p_name: String, team: String, world_pos: Vector3) -> void:
+	if p_name == NetworkLobby.local_callsign:
+		return
+	if event_type == "PICKUP":
+		if center_flag_node != null:
+			center_flag_node.visible = false
+		GameManager.notify_flag_picked_up(p_name, team, world_pos)
+		_on_status_banner("ALERT: %s (%s) PULLED THE CENTER-50 FLAG!" % [p_name.to_upper(), team], Color(1.0, 0.65, 0.16))
+	elif event_type == "DROP":
+		if center_flag_node != null:
+			center_flag_node.global_position = Vector3(world_pos.x, 0.0, world_pos.z)
+			center_flag_node.visible = true
+		if center_flag_label_3d != null:
+			center_flag_label_3d.text = "[DROPPED FLAG — SPRINT THROUGH TO RECOVER]"
+		GameManager.notify_flag_dropped(world_pos, p_name)
+		_on_status_banner("FLAG DROPPED BY %s AT (%.0fm, %.0fm)!" % [p_name.to_upper(), world_pos.x, world_pos.z], Color(1.0, 0.85, 0.22))
+	elif event_type == "HANG":
+		if center_flag_node != null:
+			center_flag_node.global_position = Vector3(0.0, 0.0, 1.35)
+			center_flag_node.visible = true
+		if center_flag_label_3d != null:
+			center_flag_label_3d.text = "[CENTER-50 FLAG — SPRINT THROUGH TO PULL]"
+		GameManager.notify_flag_hung(p_name, team)
+		_on_status_banner("FLAG HUNG BY %s (%s)! Flag Reset to Center-50!" % [p_name.to_upper(), team], Color(1.0, 0.42, 0.42))
+
+func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> void:
+	if breakout_horn_label == null:
+		return
+	if not horn_sounded:
+		breakout_horn_label.visible = true
+		breakout_horn_label.text = "BARRELS ON THE GATE NET — BREAKOUT IN %.1fs..." % seconds_left
+		breakout_horn_label.add_theme_color_override("font_color", Color(1.0, 0.86, 0.16))
+	else:
+		breakout_horn_label.text = "!! HORN SOUNDED — BREAKOUT !! GO GET THE CENTER-50 FLAG !!"
+		breakout_horn_label.add_theme_color_override("font_color", Color(0.32, 1.0, 0.52))
+		var tw := create_tween()
+		tw.tween_interval(2.2)
+		tw.tween_callback(func() -> void:
+			if breakout_horn_label != null:
+				breakout_horn_label.visible = false
+		)
