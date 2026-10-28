@@ -376,7 +376,13 @@ func _physics_process(delta: float) -> void:
 	_net_sync_timer += delta
 	if _net_sync_timer >= 0.05:
 		_net_sync_timer = 0.0
-		var packed_stance: int = int(stance) | (4 if is_left_handed else 0) | (8 if bunker_pocket_weight > 0.25 else 0) | (16 if slide_timer > 0.0 else 0) | (32 if dive_timer > 0.0 else 0) | (64 if is_reloading_pod else 0)
+		var b_idx: int = 0
+		if GearRuleEnforcer.active_bracket != null:
+			if GearRuleEnforcer.active_bracket.trigger_mode == GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
+				b_idx = 1
+			elif GearRuleEnforcer.active_bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL:
+				b_idx = 2
+		var packed_stance: int = int(stance) | (4 if is_left_handed else 0) | (8 if bunker_pocket_weight > 0.25 else 0) | (16 if slide_timer > 0.0 else 0) | (32 if dive_timer > 0.0 else 0) | (64 if is_reloading_pod else 0) | (b_idx << 7)
 		NetworkLobby.send_local_player_state(global_position, yaw, pitch, current_lean, packed_stance, _respawn_flash_timer > 0.0)
 
 func _resolve_held_stance() -> Stance:

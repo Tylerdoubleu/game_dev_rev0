@@ -558,7 +558,8 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 	var remote_sliding: bool = (stance_idx & 16) != 0
 	var remote_diving: bool = (stance_idx & 32) != 0
 	var remote_reloading: bool = (stance_idx & 64) != 0
-	var p_bracket: String = String(players.get(peer_id, {}).get("bracket", local_bracket))
+	var packed_b_idx: int = (stance_idx >> 7) & 3
+	var p_bracket: String = "woodsball" if packed_b_idx == 1 else ("pump" if packed_b_idx == 2 else String(players.get(peer_id, {}).get("bracket", local_bracket)))
 
 	var pro_rig := avatar.get_node_or_null("ProPaintballRig3D") as Node3D
 	if pro_rig != null and pro_rig.has_method("apply_pose"):
