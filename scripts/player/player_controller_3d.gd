@@ -633,9 +633,9 @@ func _get_stance_label() -> String:
 	elif slide_timer > 0.0:
 		base_lbl = "KNEE-SLIDE"
 	elif stance == Stance.CROUCHING:
-		base_lbl = "CROUCH (Holding [C])"
+		base_lbl = "CROUCH (Holding [Q])"
 	elif stance == Stance.PRONE:
-		base_lbl = "PRONE (Holding [Ctrl])"
+		base_lbl = "PRONE (Holding [C])"
 	if bunker_pocket_weight > 0.25 and not active_bunker_name.is_empty():
 		return "%s [TUCKED: %s]" % [base_lbl, active_bunker_name]
 	return base_lbl
@@ -882,16 +882,22 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		tangent = -tangent
 
 	# Continuous Left/Right Bunker-Edge Detection & Automatic Marker Hand Assignment:
-	# 1) Relative offset from bunker center along camera-right tangent tells us which half of the bunker we're on.
-	# 2) Twin shoulder edge-probes at ±0.42m detect when the left or right peeking lane is open right next to us.
+	# 1) Test actual ±0.52m (LEAN_OFFSET_X) left/right peek sightlines along both -n and camera forward (cam_fwd),
+	#    so flat walls, cylindrical Cans/Spools, and angled Doritos all detect which peek lane clears the bunker!
+	# 2) Fall back to camera-right offset from bunker center (global_position - col.global_position).dot(cam_right),
+	#    which works even on curved cylinders where radial normal n is parallel to (pos - center).
 	var space_state := get_world_3d().direct_space_state
 	var probe_base := global_position + Vector3(0.0, 0.55, 0.0)
-	var q_left := PhysicsRayQueryParameters3D.create(probe_base - tangent * 0.42, (probe_base - tangent * 0.42) - n * (BUNKER_POCKET_REACH + 0.35))
+	var probe_dir := (-n + fwd_look * 0.65).normalized()
+	var left_origin := probe_base - cam_right * LEAN_OFFSET_X
+	var right_origin := probe_base + cam_right * LEAN_OFFSET_X
+
+	var q_left := PhysicsRayQueryParameters3D.create(left_origin, left_origin + probe_dir * (BUNKER_POCKET_REACH + 0.55))
 	q_left.exclude = [get_rid()]
 	var hit_left: Dictionary = space_state.intersect_ray(q_left)
 	var left_edge_open: bool = (hit_left.is_empty() or hit_left.get("collider") != col)
 
-	var q_right := PhysicsRayQueryParameters3D.create(probe_base + tangent * 0.42, (probe_base + tangent * 0.42) - n * (BUNKER_POCKET_REACH + 0.35))
+	var q_right := PhysicsRayQueryParameters3D.create(right_origin, right_origin + probe_dir * (BUNKER_POCKET_REACH + 0.55))
 	q_right.exclude = [get_rid()]
 	var hit_right: Dictionary = space_state.intersect_ray(q_right)
 	var right_edge_open: bool = (hit_right.is_empty() or hit_right.get("collider") != col)
@@ -908,9 +914,11 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		_at_bunker_edge_side = 1.0
 		_manual_hand_override_in_pocket = false
 	elif col != null and not _manual_hand_override_in_pocket:
-		# Inside a wide or narrow bunker: check which side of the bunker center we are offset toward in camera-right space
-		var rel_offset: float = (global_position - col.global_position).dot(tangent)
-		if absf(rel_offset) > 0.08:
+		# Check which side of the bunker center we are on in camera-right space (works on Cans, Spools, Doritos & Walls)
+		var rel_offset: float = (global_position - col.global_position).dot(cam_right)
+		if absf(rel_offset) <= 0.06:
+			rel_offset = (global_position - col.global_position).dot(tangent)
+		if absf(rel_offset) > 0.06:
 			is_left_handed = (rel_offset < 0.0)
 	if prev_hand != is_left_handed:
 		_emit_hud()

@@ -127,6 +127,22 @@ func _process(_delta: float) -> bool:
 	for _i in range(6):
 		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
 	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Player behind a bunker face must settle into the PB-16 Bunker Cover Pocket")
+	# Verify Left Edge (-X) triggers LEFT HAND and Right Edge (+X) triggers RIGHT HAND on flat bunker (Home_BackCenter)
+	player.global_position = Vector3(-1.35, 0.1, 39.25)
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(bool(player.get("is_left_handed")) == true, "Left edge of Home_BackCenter must switch marker to LEFT hand")
+	player.global_position = Vector3(1.35, 0.1, 39.25)
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(bool(player.get("is_left_handed")) == false, "Right edge of Home_BackCenter must switch marker to RIGHT hand")
+	# Verify Left Side vs Right Side of cylindrical Can bunker (Home_BreakoutCan_L at X=-2.6, Z=41.8) triggers correct marker hand
+	player.global_position = Vector3(-3.15, 0.1, 42.85)
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(bool(player.get("is_left_handed")) == true, "Left side of cylindrical Can bunker must switch marker to LEFT hand")
+	player.global_position = Vector3(-2.05, 0.1, 42.85)
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
+	assert(bool(player.get("is_left_handed")) == false, "Right side of cylindrical Can bunker must switch marker to RIGHT hand")
+	player.global_position = Vector3(-0.95, 0.1, 39.25)
+	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
 	assert(bool(player.get("is_left_handed")) == true, "Standing at the LEFT edge of a bunker must automatically select LEFT marker hand")
 	player.global_position = Vector3(0.95, 0.1, 39.25) # Right edge of Home_BackCenter
 	player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
