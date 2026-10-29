@@ -30,7 +30,7 @@ func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	resolve_hit_subzone(hit_pos)
 	if has_meta("remote_peer_id"):
 		if shooter == null or shooter.name == "Player3D":
-			NetworkLobby.notify_remote_player_hit(int(get_meta("remote_peer_id")))
+			NetworkLobby.notify_remote_player_hit(int(get_meta("remote_peer_id")), hit_pos)
 
 func on_paintball_bounce(hit_pos: Vector3) -> void:
 	resolve_hit_subzone(hit_pos)
