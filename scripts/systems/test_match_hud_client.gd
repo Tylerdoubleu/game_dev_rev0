@@ -346,6 +346,7 @@ func _run() -> void:
 
 	await _ctf_round_and_match_end_flow()
 	await _dm_match_end_flow()
+	await _timer_captures_respawn_flow()
 
 	_finish()
 
@@ -458,6 +459,73 @@ func _dm_match_end_flow() -> void:
 func _arena_status() -> String:
 	var l: Variant = arena.get("status_label")
 	return (l as Label).text if l is Label else ""
+
+func _sync_x(mode: String, phase: String, round_num: int, score: Dictionary, extra_match: Dictionary, roster: Array) -> void:
+	var nl := _lobby()
+	var m := {"phase": phase, "mode": mode, "round": round_num, "score": score, "kills": {"red": 0, "blue": 0},
+		"target": 3 if mode == "ctf" else 10, "best_of": 5 if mode == "ctf" else 1, "flags": _flags_home()}
+	m.merge(extra_match, true)
+	var pl := _players()
+	for r in roster:
+		pl[int(r["peer"])]["kills"] = int(r["kills"])
+		pl[int(r["peer"])]["deaths"] = int(r["deaths"])
+		pl[int(r["peer"])]["captures"] = int(r["captures"])
+	nl.sync_lobby_state({
+		"room": "hudtest", "name": "hudtest", "permanent": false, "map": nl.selected_map, "selected_map": nl.selected_map,
+		"mode": mode, "fill_bots": false, "status": "in_match", "match_active": true, "max_per_team": 5,
+		"match": m, "players": pl, "room_roster": roster,
+	})
+
+func _timer_captures_respawn_flow() -> void:
+	print("[9] Tim 1a2b7d0: CTF round timer (round_ms_left / round_time_ms), time-out + draw reasons, live captures, respawn_in_ms")
+	var nl := _lobby()
+	_sync_x("ctf", "waiting", 0, {"red": 0, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 0, "respawn_ms": 1000}, [])
+	_check(String(mc.call("round_timer_text")) == "" and not mc.find_child("RoundTimer", true, false).visible, "no round clock outside a live CTF round")
+	_ev("round_started", {"round": 1, "mode": "ctf", "score": {"red": 0, "blue": 0}, "kills": {"red": 0, "blue": 0}, "target": 3,
+		"reset_positions": true, "round_time_ms": 180000, "respawn_ms": 0})
+	await _frames(1)
+	_check(String(mc.call("round_timer_text")) == "3:00" and _lbl("RoundTimer") == "3:00" and mc.find_child("RoundTimer", true, false).visible, "round_started.round_time_ms -> 3:00: %s" % _lbl("RoundTimer"))
+	_check(_lbl("RoundInfo").contains("3:00 LEFT"), "info line shows time left: %s" % _lbl("RoundInfo"))
+	var roster := [_row(1, "Bluey", "ALPHA", 2, 1, 1), _row(2, "Mate", "ALPHA", 1, 0, 1), _row(3, "Pal", "ALPHA", 0, 1, 0), _row(10, "Rival", "BRAVO", 1, 1, 1), _row(11, "Foe", "BRAVO", 0, 2, 0)]
+	_sync_x("ctf", "live", 1, {"red": 0, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 151200, "respawn_ms": 0}, roster)
+	await _frames(1)
+	_check(String(mc.call("round_timer_text")) == "2:32", "snapshot round_ms_left resyncs the clock: %s" % mc.call("round_timer_text"))
+	mc.set("round_left", 0.6)
+	await _frames(1)
+	mc.call("_process", 0.7)
+	_check(String(mc.call("round_timer_text")) == "" and not mc.find_child("RoundTimer", true, false).visible, "clock ticks locally and hides at 0")
+	_check(_lbl("LiveStats").contains("YOU  K 2  D 1  CAPS 1") and _lbl("LiveStats").contains("CAPTURES  RED 2 - 1 BLUE"), "live captures from room_roster: %s" % _lbl("LiveStats"))
+	var tc: Dictionary = mc.call("team_captures")
+	_check(int(tc["red"]) == 2 and int(tc["blue"]) == 1, "team capture totals from roster rows")
+	_ev("round_ended", {"round": 1, "winner": "ALPHA", "winner_color": "red", "reason": "time", "by": 0, "by_name": "", "score": {"red": 1, "blue": 0},
+		"target": 3, "best_of": 5, "next_round_in_ms": 8000, "match_point": false, "scoreboard": roster})
+	_check(_banner().begins_with("ROUND 1 - RED WINS: TIME UP - RED HAD MORE PLAYERS ALIVE"), "time-out banner: %s" % _banner())
+	_check(_summary_title() == "ROUND 1 - RED WINS" and _lbl("SummarySub").contains("TIME UP - RED HAD MORE PLAYERS ALIVE"), "time-out overview: %s" % _lbl("SummarySub").replace("\n", " / "))
+	_check(String(mc.call("round_timer_text")) == "" and float(mc.get("round_left")) == 0.0, "no clock in the intermission")
+	_ev("round_started", {"round": 2, "mode": "ctf", "score": {"red": 1, "blue": 0}, "kills": {"red": 3, "blue": 1}, "target": 3, "reset_positions": true, "round_time_ms": 180000, "respawn_ms": 0})
+	_ev("round_ended", {"round": 2, "winner": "", "winner_color": "", "reason": "time", "by": 0, "by_name": "", "score": {"red": 1, "blue": 0},
+		"target": 3, "best_of": 5, "next_round_in_ms": 8000, "match_point": false, "scoreboard": roster})
+	_check(_banner().begins_with("ROUND 2 - DRAW: TIME UP - EQUAL PLAYERS ALIVE, NO POINT") and _banner().contains("[RED 1 - 0 BLUE]"), "draw banner: %s" % _banner())
+	_check(_summary_title() == "ROUND 2 - DRAW" and _lbl("SummarySub").contains("RED 1  -  0 BLUE") and not _lbl("SummarySub").contains("MATCH POINT"), "draw overview, score unchanged: %s / %s" % [_summary_title(), _lbl("SummarySub").replace("\n", " / ")])
+	_check(bool(mc.get("countdown_active")), "draw still counts down to the next round")
+	mc.call("show_summary", "round", "T", "S", "", Color.WHITE, 3.0, [], "ctf")
+	_check((mc.call("summary_row_texts") as Array).has("Bluey|red|2|1|1"), "scoreboard without server rows falls back to live room_roster captures")
+	mc.call("hide_summary")
+	print("  -- respawn_in_ms")
+	_sync_x("deathmatch", "live", 1, {"red": 0, "blue": 0}, {"round_time_ms": 0, "round_ms_left": 0, "respawn_ms": 1000}, [])
+	_ev("round_started", {"round": 1, "mode": "deathmatch", "score": {"red": 0, "blue": 0}, "kills": {"red": 0, "blue": 0}, "target": 10, "reset_positions": true, "round_time_ms": 0, "respawn_ms": 1000})
+	_check(String(mc.call("round_timer_text")) == "" and not mc.find_child("RoundTimer", true, false).visible, "no round clock in deathmatch")
+	var pl: Dictionary = nl.players
+	_ev("player_eliminated", {"victim": 1, "victim_name": "Bluey", "victim_team": "ALPHA", "shooter": 10, "shooter_name": "Rival", "shooter_team": "BRAVO",
+		"victim_kills": 0, "victim_deaths": 1, "shooter_kills": 1, "shooter_deaths": 0, "reason": "paint", "scored": true, "respawn_in_ms": 2500})
+	_check(absf(float(mc.get("respawn_left")) - 2.5) < 0.01 and String(mc.call("respawn_text")) == "RESPAWNING IN 2.5s", "respawn timer from respawn_in_ms: %s" % mc.call("respawn_text"))
+	mc.set("respawn_left", 0.0)
+	mc.set("match_respawn_ms", 1750)
+	_ev("player_eliminated", {"victim": 1, "victim_name": "Bluey", "victim_team": "ALPHA", "shooter": 10, "shooter_name": "Rival", "shooter_team": "BRAVO",
+		"victim_kills": 0, "victim_deaths": 2, "shooter_kills": 2, "shooter_deaths": 0, "reason": "paint", "scored": true})
+	_check(absf(float(mc.get("respawn_left")) - 1.75) < 0.01, "falls back to match.respawn_ms: %.2f" % float(mc.get("respawn_left")))
+	_sync_x("deathmatch", "live", 1, {"red": 0, "blue": 0}, {"round_time_ms": 0, "round_ms_left": 0, "respawn_ms": 1200}, [])
+	_check(int(mc.get("match_respawn_ms")) == 1200 and pl.size() >= 5, "snapshot respawn_ms adopted")
 
 func _finish() -> void:
 	var nl := _lobby()

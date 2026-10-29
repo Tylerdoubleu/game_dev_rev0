@@ -48,6 +48,12 @@ var next_round_num: int = 0
 var last_round_end_text: String = ""
 var kill_feed: Array = [] # [{text, shooter_color, victim_color, age}]
 var respawn_left: float = 0.0
+## v0.5 (Tim 1a2b7d0): CTF round clock from match.round_ms_left / round_started.round_time_ms; ticks locally between syncs
+var round_left: float = 0.0
+var round_time_s: float = 0.0
+var match_respawn_ms: int = -1 # match.respawn_ms / round_started.respawn_ms (-1 = not seen yet)
+var round_timer_label: Label
+var stats_label: Label
 var last_team_shown: String = ""
 var local_peer_override: int = 0 # tests
 var events_seen: Array[String] = []
@@ -280,6 +286,12 @@ func apply_match_snapshot(m: Dictionary) -> void:
 	target = int(m.get("target", target))
 	_copy_colors(m.get("score", {}), score)
 	_copy_colors(m.get("kills", {}), kills)
+	if m.has("round_time_ms"):
+		round_time_s = float(m["round_time_ms"]) / 1000.0
+	if m.has("round_ms_left"):
+		round_left = float(m["round_ms_left"]) / 1000.0 # 0 outside a live CTF round
+	if m.has("respawn_ms"):
+		match_respawn_ms = int(m["respawn_ms"])
 	var fl: Variant = m.get("flags", {})
 	if typeof(fl) == TYPE_DICTIONARY:
 		for c in ["red", "blue"]:
@@ -302,6 +314,10 @@ func _on_round_started(data: Dictionary) -> void:
 	intermission_left = 0.0
 	respawn_left = 0.0
 	countdown_active = false
+	round_time_s = float(data.get("round_time_ms", 0)) / 1000.0
+	round_left = round_time_s if mode == "ctf" else 0.0
+	if data.has("respawn_ms"):
+		match_respawn_ms = int(data["respawn_ms"])
 	hide_summary()
 	awaiting_return_to_lobby = false
 	if mode == "ctf":
@@ -322,6 +338,7 @@ func _on_round_ended(data: Dictionary) -> void:
 	_copy_colors(data.get("score", {}), score)
 	phase = "intermission"
 	phase_clock = 0.0
+	round_left = 0.0
 	var finished := int(data.get("round", round_num))
 	round_num = finished
 	next_round_num = finished + 1
@@ -329,7 +346,7 @@ func _on_round_ended(data: Dictionary) -> void:
 	var winner_color := String(data.get("winner_color", ""))
 	var why := round_why(data)
 	if winner_color.is_empty():
-		last_round_end_text = "ROUND %d - NO WINNER (%s)" % [finished, why]
+		last_round_end_text = "ROUND %d - DRAW: %s" % [finished, why]
 	else:
 		last_round_end_text = "ROUND %d - %s WINS: %s" % [finished, winner_color.to_upper(), why]
 	last_round_end_text += "   [RED %d - %d BLUE]" % [int(score["red"]), int(score["blue"])]
@@ -353,12 +370,18 @@ func round_why(data: Dictionary) -> String:
 			why = "%s TEAM ELIMINATED" % ("BLUE" if winner_color == "red" else "RED")
 		"double_elimination":
 			why = "DOUBLE ELIMINATION - NO POINT"
+		"time":
+			if winner_color.is_empty():
+				why = "TIME UP - EQUAL PLAYERS ALIVE, NO POINT"
+			else:
+				why = "TIME UP - %s HAD MORE PLAYERS ALIVE" % winner_color.to_upper()
 		_:
 			why = reason.to_upper().replace("_", " ")
 	return why
 
 func _on_match_ended(data: Dictionary) -> void:
 	phase = "ended"
+	round_left = 0.0
 	intermission_left = 0.0
 	respawn_left = 0.0
 	countdown_active = false
@@ -384,10 +407,8 @@ func _on_player_eliminated(data: Dictionary) -> void:
 	if int(data.get("victim", 0)) == my_peer_id():
 		if is_one_life_round_live():
 			enter_spectate() # idempotent; the PlayerController already locked itself via _handle_local_elimination
-		elif mode == "deathmatch":
-			respawn_left = float(NetworkLobby.DM_RESPAWN_MS) / 1000.0
-		elif mode == "bots_test":
-			respawn_left = float(NetworkLobby.PRACTICE_RESPAWN_MS) / 1000.0
+		elif mode in ["deathmatch", "bots_test"]:
+			respawn_left = float(respawn_ms_for(data)) / 1000.0
 	elif spectating and int(data.get("victim", 0)) == spectate_target_pid:
 		cycle_spectate(1)
 
@@ -489,6 +510,61 @@ func current_banner_text() -> String:
 	if banner_left > 0.0:
 		return banner_text
 	return ""
+
+## Server respawn delay: player_eliminated.respawn_in_ms, else match.respawn_ms, else the lobby constants.
+func respawn_ms_for(data: Dictionary) -> int:
+	if data.has("respawn_in_ms"):
+		return maxi(0, int(data["respawn_in_ms"]))
+	if match_respawn_ms >= 0:
+		return match_respawn_ms
+	return NetworkLobby.DM_RESPAWN_MS if mode == "deathmatch" else NetworkLobby.PRACTICE_RESPAWN_MS
+
+## "2:31" while a CTF round is live with time left; "" otherwise (the label hides).
+func round_timer_text() -> String:
+	if mode != "ctf" or phase != "live" or round_left <= 0.0:
+		return ""
+	var secs := int(ceil(round_left))
+	return "%d:%02d" % [secs / 60, secs % 60]
+
+## Live per-player rows (room_roster, which carries live captures; players as fallback).
+func live_rows() -> Array:
+	var out: Array = []
+	var roster: Variant = NetworkLobby.room_state.get("room_roster", [])
+	if typeof(roster) == TYPE_ARRAY and not (roster as Array).is_empty():
+		for r in roster:
+			if typeof(r) == TYPE_DICTIONARY:
+				out.append({"peer": int(r.get("peer", 0)), "name": String(r.get("name", "")), "team": String(r.get("team", "ALPHA")),
+					"color": NetworkLobby.team_label(String(r.get("team", "ALPHA"))), "kills": int(r.get("kills", 0)),
+					"deaths": int(r.get("deaths", 0)), "captures": int(r.get("captures", 0))})
+	else:
+		for pid in NetworkLobby.players.keys():
+			var info: Dictionary = NetworkLobby.players[pid]
+			out.append({"peer": int(pid), "name": String(info.get("name", "")), "team": String(info.get("team", "ALPHA")),
+				"color": NetworkLobby.team_label(String(info.get("team", "ALPHA"))), "kills": int(info.get("kills", 0)),
+				"deaths": int(info.get("deaths", 0)), "captures": int(info.get("captures", 0))})
+	return out
+
+func team_captures() -> Dictionary:
+	var out := {"red": 0, "blue": 0}
+	for r in live_rows():
+		out[String(r["color"])] = int(out.get(String(r["color"]), 0)) + int(r["captures"])
+	return out
+
+func stats_text() -> String:
+	var me := my_peer_id()
+	var mine: Dictionary = {}
+	for r in live_rows():
+		if int(r["peer"]) == me:
+			mine = r
+	var t := ""
+	if not mine.is_empty():
+		t = "YOU  K %d  D %d" % [int(mine["kills"]), int(mine["deaths"])]
+		if mode == "ctf":
+			t += "  CAPS %d" % int(mine["captures"])
+	if mode == "ctf":
+		var tc := team_captures()
+		t += ("   |   " if not t.is_empty() else "") + "CAPTURES  RED %d - %d BLUE" % [int(tc["red"]), int(tc["blue"])]
+	return t
 
 func respawn_text() -> String:
 	if respawn_left <= 0.0:
@@ -645,6 +721,8 @@ func _process(delta: float) -> void:
 			hide_summary()
 	if respawn_left > 0.0:
 		respawn_left = maxf(0.0, respawn_left - delta)
+	if round_left > 0.0 and phase == "live":
+		round_left = maxf(0.0, round_left - delta)
 	for e in kill_feed:
 		e["age"] = float(e["age"]) + delta
 	while not kill_feed.is_empty() and float(kill_feed[-1]["age"]) > KILL_FEED_TTL:
@@ -702,8 +780,12 @@ func _build_hud() -> void:
 	row.add_child(blue_score_label)
 	info_label = _mk_label("RoundInfo", 15, Color(0.92, 0.92, 0.88), true)
 	vb.add_child(info_label)
+	round_timer_label = _mk_label("RoundTimer", 24, Color(1, 1, 1), true)
+	vb.add_child(round_timer_label)
 	alive_label = _mk_label("AliveCounts", 14, Color(0.75, 0.95, 0.75), true)
 	vb.add_child(alive_label)
+	stats_label = _mk_label("LiveStats", 14, Color(0.95, 0.9, 0.7), true)
+	vb.add_child(stats_label)
 	team_label = _mk_label("TeamBadge", 14, Color(1, 1, 1), true)
 	vb.add_child(team_label)
 
@@ -772,6 +854,12 @@ func _refresh_all() -> void:
 	var ac := alive_counts()
 	alive_label.visible = mode == "ctf"
 	alive_label.text = "ALIVE   RED %d  |  BLUE %d" % [int(ac["red"]), int(ac["blue"])]
+	var rt := round_timer_text()
+	round_timer_label.text = rt
+	round_timer_label.visible = not rt.is_empty()
+	round_timer_label.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3) if round_left <= 30.0 else Color(1, 1, 1))
+	stats_label.text = stats_text()
+	stats_label.visible = not stats_label.text.is_empty()
 	var mc := my_color()
 	team_label.text = "YOU: TEAM %s (%s)" % [mc.to_upper(), NetworkLobby.local_team]
 	team_label.add_theme_color_override("font_color", TEAM_COLORS[mc])
@@ -785,6 +873,9 @@ func phase_text() -> String:
 	match phase:
 		"live":
 			if mode == "ctf":
+				var rtt := round_timer_text()
+				if not rtt.is_empty():
+					return "ROUND %d / %d  -  %s LEFT" % [round_num, maxi(best_of, 1), rtt]
 				return "ROUND %d / %d  -  LIVE %s" % [round_num, maxi(best_of, 1), clock]
 			return "LIVE %s" % clock
 		"intermission":
@@ -1126,7 +1217,7 @@ func on_round_results(data: Dictionary) -> void:
 	var wc := String(data.get("winner_color", ""))
 	var sc: Dictionary = data.get("score", {}) if typeof(data.get("score")) == TYPE_DICTIONARY else {}
 	var hold := float(data.get("next_round_in_ms", NetworkLobby.ROUND_INTERMISSION_MS)) / 1000.0
-	var title := "ROUND %d - %s" % [finished, ("%s WINS" % wc.to_upper()) if not wc.is_empty() else "NO POINT"]
+	var title := "ROUND %d - %s" % [finished, ("%s WINS" % wc.to_upper()) if not wc.is_empty() else "DRAW"]
 	var why := round_why(data)
 	var sub := "%s\nROUND SCORE:  RED %d  -  %d BLUE    (FIRST TO %d  -  BEST OF %d)" % [why, int(sc.get("red", 0)), int(sc.get("blue", 0)),
 		int(data.get("target", NetworkLobby.CTF_ROUNDS_TO_WIN)), int(data.get("best_of", NetworkLobby.CTF_BEST_OF))]
@@ -1181,6 +1272,8 @@ func show_summary(kind: String, title: String, sub: String, footer: String, colo
 	summary_kind = kind
 	summary_left = seconds
 	summary_rows = []
+	if rows.is_empty():
+		rows = live_rows() # older server without a scoreboard: live room_roster (incl. captures)
 	for r in rows:
 		if typeof(r) == TYPE_DICTIONARY:
 			summary_rows.append((r as Dictionary).duplicate())
