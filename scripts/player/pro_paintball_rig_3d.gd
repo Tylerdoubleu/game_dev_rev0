@@ -769,7 +769,8 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	# v0.5 run cycle: 0 = walk, 1 = full sprint. Drives stride length, knee lift, double-bounce bob,
 	# forward lean, torso counter-twist and the marker "port arms" carry bounce.
 	var upright := 1.0 - clampf(_current_stance_f, 0.0, 1.0)
-	var run_factor := clampf((horiz_speed - 3.5) / 3.5, 0.0, 1.0) * move_factor * upright
+	# v0.5 retune for Bluey's 25c60c5 speeds: walk 5.6 m/s = 0 run blend, sprint 8.4 m/s = full run.
+	var run_factor := clampf((horiz_speed - 5.9) / 2.2, 0.0, 1.0) * move_factor * upright
 	last_run_factor = run_factor
 
 	# 1. Pelvis Height & Orientation (Stance + Tuck + Slide + Superman Dive)
