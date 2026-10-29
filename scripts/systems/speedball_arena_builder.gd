@@ -303,6 +303,7 @@ func _build_hud() -> void:
 	add_child(canvas)
 
 	var crosshair := Label.new()
+	crosshair.name = "SpreadCrosshair" # v0.5.0: PlayerController3D grows/fades it with the live shot spread
 	crosshair.text = "+"
 	crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER

@@ -28,15 +28,23 @@ enum Stance {
 	PRONE
 }
 
-const WALK_SPEED: float = 6.2
-const SPRINT_SPEED: float = 10.4
-const CROUCH_SPEED: float = 3.6
-const PRONE_SPEED: float = 1.85
-const SLIDE_INITIAL_SPEED: float = 17.5
+# ---------------------------------------------------------------------------------------------------------
+# v0.5.0 MOVEMENT TUNING (deliberate tournament pace). Pre-v0.5 values in comments.
+# Strafing/back-pedal use the same speeds (no separate strafe multiplier).
+# ---------------------------------------------------------------------------------------------------------
+const WALK_SPEED: float = 5.6          # was 6.2 (-10%)
+const SPRINT_SPEED: float = 8.4        # was 10.4 (-19%)
+const CROUCH_SPEED: float = 3.3        # was 3.6 (-8%)
+const PRONE_SPEED: float = 1.7         # was 1.85 (-8%)
+## Ground speed ramps instead of snapping (pre-v0.5 velocity was set instantly every frame).
+const GROUND_ACCEL: float = 28.0       # m/s^2 from rest up to walk/crouch speed (0 -> walk in 0.20s)
+const SPRINT_ACCEL: float = 9.0        # m/s^2 above walk speed (walk -> sprint in 0.31s; 0 -> sprint ~0.51s)
+const GROUND_DECEL: float = 60.0       # m/s^2 when releasing keys or dropping to a slower gait (sprint -> stop 0.14s)
+const SLIDE_INITIAL_SPEED: float = 15.8 # was 17.5 (-10%: ~7.4m -> ~6.6m slide)
 const SLIDE_DURATION: float = 0.85
 ## v0.4.5: no firing during the Shift+Q knee-slide or Shift+C Superman dive, plus a short trigger-recovery after.
 const MOVEMENT_FIRE_RECOVERY: float = 0.15
-const DIVE_INITIAL_SPEED: float = 19.5
+const DIVE_INITIAL_SPEED: float = 17.6 # was 19.5 (-10%: dive keeps a little more reach than the slide)
 const DIVE_DURATION: float = 0.95
 
 const HEIGHT_STANDING: float = 1.58
@@ -48,6 +56,25 @@ const HEIGHT_DIVE: float = 0.42
 const BASE_FOV: float = 82.0
 const SLIDE_FOV: float = 96.0
 const DIVE_FOV: float = 100.0
+
+# ---------------------------------------------------------------------------------------------------------
+# v0.5.0 SHOT SPREAD (rewards bunker play). Cone half-angle (deg) = bracket base * state multiplier.
+# Pre-v0.5: flat 0.75 deg square spread, +1.3 deg when moving > 3 m/s, identical for every bracket.
+# ---------------------------------------------------------------------------------------------------------
+const SPREAD_BASE_DEG_SPEEDBALL: float = 0.75 # RAMP_10_5 electro
+const SPREAD_BASE_DEG_WOODSBALL: float = 0.60 # SEMI_ONE_PULL mechanical
+const SPREAD_BASE_DEG_PUMP: float = 0.42      # PUMP_MANUAL (most accurate)
+const SPREAD_MULT_POCKET: float = 0.55        # tucked in a bunker pocket (tightest)
+const SPREAD_MULT_PRONE: float = 0.60
+const SPREAD_MULT_CROUCH: float = 0.70
+const SPREAD_MULT_STANDING: float = 1.00      # standing still
+const SPREAD_MULT_WALK: float = 2.00          # at full walk speed (scales with ground speed up to this)
+const SPREAD_MULT_SPRINT: float = 4.50        # at full sprint speed
+const SPREAD_MULT_AIRBORNE: float = 3.00      # off the ground (falls, ramp lips)
+const SPREAD_RECOVERY_TIME: float = 0.40      # s for the cone to shrink from sprint to standing (pocket ~0.45s)
+const SPREAD_BLOOM_TIME: float = 0.15         # s for the cone to open from standing to sprint
+const SPREAD_CROSSHAIR_MIN_FONT: int = 20     # crosshair "+" size at the tightest cone
+const SPREAD_CROSSHAIR_MAX_FONT: int = 38     # crosshair "+" size at the widest cone
 
 const LEAN_OFFSET_X: float = 0.52
 const LEAN_ROLL_DEG: float = 11.5
@@ -102,6 +129,14 @@ var _was_moving_before_horn: bool = false
 const BUNKER_POCKET_REACH: float = 1.65
 const BUNKER_POCKET_IDEAL_DIST: float = 0.40
 var bunker_pocket_weight: float = 0.0
+# v0.5.0 ground-speed ramp + movement-driven shot spread
+var ground_speed: float = 0.0
+var _ground_move_dir: Vector3 = Vector3.ZERO
+var shot_spread_mult: float = SPREAD_MULT_STANDING
+var last_shot_base_dir: Vector3 = Vector3.ZERO
+var last_shot_dir: Vector3 = Vector3.ZERO
+var _spread_crosshair: Label = null
+var _spread_crosshair_font: int = -1
 var active_bunker_name: String = ""
 var _active_bunker_node: Node3D = null
 var _bunker_slam_flex_cooldown: float = 0.0
@@ -402,6 +437,7 @@ func _physics_process(delta: float) -> void:
 	_update_lean_bob_and_viewmodel(delta)
 	_update_exposed_profile_hitboxes_and_visor(delta)
 	_update_pod_reload(delta)
+	_update_shot_spread(delta)
 
 	_net_sync_timer += delta
 	if _net_sync_timer >= 0.05:
@@ -486,10 +522,14 @@ func _update_movement_and_stance(delta: float) -> void:
 		var dive_factor: float = clamp(dive_timer / DIVE_DURATION, 0.15, 1.0)
 		velocity.x = slide_dir.x * DIVE_INITIAL_SPEED * dive_factor
 		velocity.z = slide_dir.z * DIVE_INITIAL_SPEED * dive_factor
+		ground_speed = minf(DIVE_INITIAL_SPEED * dive_factor, SPRINT_SPEED)
+		_ground_move_dir = slide_dir
 	elif slide_timer > 0.0:
 		var slide_factor: float = clamp(slide_timer / SLIDE_DURATION, 0.2, 1.0)
 		velocity.x = slide_dir.x * SLIDE_INITIAL_SPEED * slide_factor
 		velocity.z = slide_dir.z * SLIDE_INITIAL_SPEED * slide_factor
+		ground_speed = minf(SLIDE_INITIAL_SPEED * slide_factor, SPRINT_SPEED)
+		_ground_move_dir = slide_dir
 	else:
 		if not GameManager.breakout_horn_sounded and input_vec.length() > 0.15:
 			_was_moving_before_horn = true
@@ -509,8 +549,18 @@ func _update_movement_and_stance(delta: float) -> void:
 		elif stance == Stance.PRONE:
 			target_speed = PRONE_SPEED
 		target_speed *= speed_mult
-		velocity.x = move_dir.x * target_speed
-		velocity.z = move_dir.z * target_speed
+		# v0.5.0: ramp ground speed (walk-up fast, sprint-up slower, crisp stop); direction still follows input instantly.
+		var has_input: bool = move_dir.length() > 0.1
+		if not has_input:
+			target_speed = 0.0
+		else:
+			_ground_move_dir = move_dir
+		var accel: float = GROUND_DECEL
+		if target_speed > ground_speed:
+			accel = SPRINT_ACCEL if ground_speed >= WALK_SPEED * speed_mult - 0.01 else GROUND_ACCEL
+		ground_speed = move_toward(ground_speed, target_speed, accel * delta)
+		velocity.x = _ground_move_dir.x * ground_speed
+		velocity.z = _ground_move_dir.z * ground_speed
 
 	_apply_bunker_cover_pocket_physics(delta, move_dir, input_vec, wants_sprint)
 
@@ -780,6 +830,73 @@ func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 			return
 		_fire_single_paintball(bracket)
 
+## v0.5.0: bracket base cone half-angle (deg); pump is tightest, speedball widest.
+func get_bracket_base_spread_deg(bracket: Resource = null) -> float:
+	if bracket == null:
+		bracket = GearRuleEnforcer.active_bracket
+	if bracket == null:
+		return SPREAD_BASE_DEG_SPEEDBALL
+	match bracket.trigger_mode:
+		GearBracketDataScript.TriggerMode.PUMP_MANUAL:
+			return SPREAD_BASE_DEG_PUMP
+		GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
+			return SPREAD_BASE_DEG_WOODSBALL
+	return SPREAD_BASE_DEG_SPEEDBALL
+
+## Spread multiplier the cone is heading toward this frame: posture floor, opened up by ground speed.
+func get_target_spread_mult() -> float:
+	var posture: float = SPREAD_MULT_STANDING
+	if bunker_pocket_weight > 0.25:
+		posture = SPREAD_MULT_POCKET
+	elif stance == Stance.PRONE:
+		posture = SPREAD_MULT_PRONE
+	elif stance == Stance.CROUCHING:
+		posture = SPREAD_MULT_CROUCH
+	var spd: float = ground_speed
+	var m: float
+	if spd <= WALK_SPEED:
+		m = lerpf(posture, SPREAD_MULT_WALK, clampf(spd / WALK_SPEED, 0.0, 1.0))
+	else:
+		m = lerpf(SPREAD_MULT_WALK, SPREAD_MULT_SPRINT, clampf((spd - WALK_SPEED) / (SPRINT_SPEED - WALK_SPEED), 0.0, 1.0))
+	if slide_timer > 0.0 or dive_timer > 0.0:
+		m = SPREAD_MULT_SPRINT
+	elif not is_on_floor() and is_inside_tree():
+		m = maxf(m, SPREAD_MULT_AIRBORNE)
+	return m
+
+## Current (smoothed) cone half-angle in degrees that the next shot uses.
+func get_shot_spread_deg() -> float:
+	return get_bracket_base_spread_deg() * shot_spread_mult
+
+func _update_shot_spread(delta: float) -> void:
+	var target: float = get_target_spread_mult()
+	var span: float = SPREAD_MULT_SPRINT - SPREAD_MULT_STANDING
+	var rate: float = span / (SPREAD_BLOOM_TIME if target > shot_spread_mult else SPREAD_RECOVERY_TIME)
+	shot_spread_mult = move_toward(shot_spread_mult, target, rate * delta)
+	_update_spread_crosshair()
+
+func _update_spread_crosshair() -> void:
+	if _spread_crosshair == null or not is_instance_valid(_spread_crosshair):
+		_spread_crosshair = null
+		var p := get_parent()
+		if p == null:
+			return
+		_spread_crosshair = p.get_node_or_null("PlaytestHUD/SpreadCrosshair") as Label
+		if _spread_crosshair == null:
+			return
+	var t: float = clampf((shot_spread_mult - SPREAD_MULT_POCKET) / (SPREAD_MULT_SPRINT - SPREAD_MULT_POCKET), 0.0, 1.0)
+	var font: int = int(round(lerpf(float(SPREAD_CROSSHAIR_MIN_FONT), float(SPREAD_CROSSHAIR_MAX_FONT), t)))
+	if font != _spread_crosshair_font:
+		_spread_crosshair_font = font
+		_spread_crosshair.add_theme_font_size_override("font_size", font)
+		_spread_crosshair.add_theme_color_override("font_color", Color(0.2, 1.0, 0.4, lerpf(0.9, 0.55, t)))
+
+## Random direction inside a circular cone of half-angle spread_deg around base_dir (uniform over the disc).
+static func apply_spread_cone(base_dir: Vector3, right_dir: Vector3, up_dir: Vector3, spread_deg: float) -> Vector3:
+	var r: float = tan(deg_to_rad(spread_deg)) * sqrt(randf())
+	var th: float = randf() * TAU
+	return (base_dir + right_dir * (r * cos(th)) + up_dir * (r * sin(th))).normalized()
+
 func _fire_single_paintball(bracket: Resource) -> void:
 	if is_fire_locked_by_movement():
 		return
@@ -798,12 +915,10 @@ func _fire_single_paintball(bracket: Resource) -> void:
 
 	marker_rig.position.z = -0.39
 
-	var spread_rad := deg_to_rad(0.75 + (1.3 if velocity.length() > 3.0 else 0.0))
+	var spread_deg := get_shot_spread_deg()
 	var forward_dir := -camera.global_transform.basis.z.normalized()
 	var right_dir := camera.global_transform.basis.x.normalized()
 	var up_dir := camera.global_transform.basis.y.normalized()
-	var rand_x := randf_range(-spread_rad, spread_rad)
-	var rand_y := randf_range(-spread_rad, spread_rad)
 
 	# Sightline-convergent snap-peeking: if the eye/crosshair line of sight clears the near bunker,
 	# ensure the off-center barrel doesn't clip an invisible near-bunker edge when peeking!
@@ -825,7 +940,10 @@ func _fire_single_paintball(bracket: Resource) -> void:
 		muzzle_pos = cam_origin.lerp(muzzle_pos, 0.28) + forward_dir * 0.22
 
 	var base_dir := (aim_target - muzzle_pos).normalized()
-	var shot_dir := (base_dir + right_dir * rand_x + up_dir * rand_y).normalized()
+	# v0.5.0: movement-driven cone; the same shot_dir goes to local ballistics and the network broadcast.
+	var shot_dir := apply_spread_cone(base_dir, right_dir, up_dir, spread_deg)
+	last_shot_base_dir = base_dir
+	last_shot_dir = shot_dir
 
 	# Pneumatic bolt kick + subtle camera micro-recoil + HPA muzzle vapor puff
 	pitch = clamp(pitch + deg_to_rad(randf_range(0.18, 0.36)), deg_to_rad(-80.0), deg_to_rad(80.0))
@@ -931,6 +1049,7 @@ func _emit_hud() -> void:
 		"reloading": is_reloading_pod,
 		"fire_locked_movement": is_fire_locked_by_movement(),
 		"fire_lock_reason": get_fire_lock_reason(),
+		"spread_deg": get_shot_spread_deg(),
 		"reload_pct": clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0) if is_reloading_pod else 0.0,
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,
 		"pump_racked": pump_racked,
@@ -962,6 +1081,7 @@ func _enforce_arena_bounds_and_permafall_guard() -> void:
 	if global_position.y < -1.5:
 		global_position = Vector3(clampf(global_position.x, -48.0, 48.0), 0.2, clampf(global_position.z, -46.0, 46.0))
 		velocity = Vector3.ZERO
+		ground_speed = 0.0
 		status_banner_sent.emit("Returned to field boundary!", Color(1.0, 0.85, 0.25))
 
 func respawn_at_team_gate(team: String) -> void:
@@ -978,6 +1098,8 @@ func respawn_at_map_zone(spawn_pos: Vector3, spawn_yaw: float, zone_label: Strin
 	_respawn_flash_timer = 2.8
 	global_position = spawn_pos
 	velocity = Vector3.ZERO
+	ground_speed = 0.0
+	shot_spread_mult = SPREAD_MULT_STANDING
 	yaw = spawn_yaw
 	pitch = 0.0
 	rotation.y = yaw
