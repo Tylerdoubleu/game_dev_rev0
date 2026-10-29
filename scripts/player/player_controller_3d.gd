@@ -115,6 +115,12 @@ var time_since_last_shot: float = 99.0
 var _shot_counter: int = 0
 var lobby_open: bool = false
 var awaiting_respawn_choice: bool = false
+## v0.5 one-life CTF spectate: set by the MatchHudClient (via set_spectating) after a CTF elimination until the server's
+## round_started / match_ended. Blocks movement, look and every trigger pull exactly like awaiting_respawn_choice.
+var spectating: bool = false
+var spectate_blocked_trigger_pulls: int = 0
+## v0.5 CTF: the server says this player carries the enemy base flag (flag_state_changed carrier == me). Visual only.
+var carrying_ctf_flag: bool = false
 var initial_spawn_pos: Vector3 = Vector3(0.0, 0.1, 45.5)
 var initial_spawn_yaw: float = 0.0
 var _net_sync_timer: float = 0.0
@@ -361,7 +367,7 @@ func _on_bracket_changed(bracket_or_id: Variant) -> void:
 	_emit_hud()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if lobby_open or awaiting_respawn_choice or NetworkLobby.is_dedicated_server:
+	if lobby_open or awaiting_respawn_choice or spectating or NetworkLobby.is_dedicated_server:
 		return
 	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
 		yaw -= event.relative.x * MOUSE_SENSITIVITY
@@ -431,8 +437,11 @@ func _physics_process(delta: float) -> void:
 		if not (Input.is_action_pressed("fire_primary") and Input.is_action_pressed("fire_secondary_walk")):
 			woodsball_trigger_latched = false
 
-	if not lobby_open and not awaiting_respawn_choice:
+	if not lobby_open and not awaiting_respawn_choice and not spectating:
 		_update_movement_and_stance(delta)
+	elif spectating:
+		velocity = Vector3.ZERO
+		ground_speed = 0.0
 	_enforce_arena_bounds_and_permafall_guard()
 	_update_lean_bob_and_viewmodel(delta)
 	_update_exposed_profile_hitboxes_and_visor(delta)
@@ -789,6 +798,9 @@ func _update_movement_fire_lock_signal() -> void:
 		_emit_hud()
 
 func _handle_trigger_press(is_secondary_trigger: bool) -> void:
+	if spectating:
+		spectate_blocked_trigger_pulls += 1
+		return
 	if is_reloading_pod:
 		return
 	if is_fire_locked_by_movement():
@@ -898,6 +910,8 @@ static func apply_spread_cone(base_dir: Vector3, right_dir: Vector3, up_dir: Vec
 	return (base_dir + right_dir * (r * cos(th)) + up_dir * (r * sin(th))).normalized()
 
 func _fire_single_paintball(bracket: Resource) -> void:
+	if spectating:
+		return
 	if is_fire_locked_by_movement():
 		return
 	if time_since_last_shot < GearRuleEnforcer.get_min_shot_interval():
@@ -1054,6 +1068,8 @@ func _emit_hud() -> void:
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,
 		"pump_racked": pump_racked,
 		"carrying_flag": carrying_center_flag,
+		"carrying_ctf_flag": carrying_ctf_flag,
+		"spectating": spectating,
 		"breakout_boost": breakout_boost_timer > 0.0,
 		"bunker_tucked": bunker_pocket_weight > 0.25,
 		"bunker_name": active_bunker_name,
@@ -1193,7 +1209,7 @@ func trigger_squeegee_wipe() -> void:
 	_emit_hud()
 
 func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
-	if _respawn_flash_timer > 0.2 or awaiting_respawn_choice or GameManager.match_ended:
+	if _respawn_flash_timer > 0.2 or awaiting_respawn_choice or spectating or GameManager.match_ended:
 		return
 	var sub := resolve_hit_subzone(hit_pos)
 	var zone_lbl: String = String(sub.get("zone", "TORSO"))
@@ -1226,6 +1242,40 @@ func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> 
 		status_banner_sent.emit("BUZZER! CLEAN BREAKOUT! (+15% Sprint Burst for 1.5s — Go Get Center Flag!)", Color(0.30, 1.0, 0.50))
 	_emit_hud()
 
+## True while the server's match is a live one-life CTF round (asked of the scene's MatchHudClient; no local rules).
+func _is_one_life_round_live() -> bool:
+	if not is_inside_tree():
+		return false
+	var scene_root := get_tree().current_scene
+	if scene_root != null and scene_root.has_method("is_one_life_round_live"):
+		return bool(scene_root.call("is_one_life_round_live"))
+	return false
+
+## Spectate input lock (v0.5). Movement, look, triggers, reload/ping are all ignored while on; the viewmodel hides.
+func set_spectating(on: bool) -> void:
+	if spectating == on:
+		return
+	spectating = on
+	velocity = Vector3.ZERO
+	ground_speed = 0.0
+	if marker_rig != null:
+		marker_rig.visible = not on
+	if on and carrying_ctf_flag:
+		set_carrying_ctf_flag(false)
+	_emit_hud()
+
+## First-person view of the enemy flag we carry (server flag_state_changed carrier == me). Purely visual.
+func set_carrying_ctf_flag(carrying: bool, flag_color: Color = Color(1.0, 0.78, 0.06)) -> void:
+	carrying_ctf_flag = carrying
+	if carried_flag_mesh != null:
+		carried_flag_mesh.visible = carrying or carrying_center_flag
+		var mat := carried_flag_mesh.material_override as StandardMaterial3D
+		if mat != null:
+			var c := flag_color if carrying else Color(1.0, 0.78, 0.06)
+			mat.albedo_color = c
+			mat.emission = c * 0.8
+	_emit_hud()
+
 func set_carrying_center_flag(carrying: bool) -> void:
 	carrying_center_flag = carrying
 	if carried_flag_mesh != null:
@@ -1233,9 +1283,17 @@ func set_carrying_center_flag(carrying: bool) -> void:
 	_emit_hud()
 
 func _handle_local_elimination(killer_name: String) -> void:
-	if awaiting_respawn_choice or GameManager.match_ended:
+	if awaiting_respawn_choice or spectating or GameManager.match_ended:
 		return
 	var death_pos := global_position
+	if _is_one_life_round_live():
+		# v0.5 one-life CTF: the server keeps us dead until round_started, so do NOT respawn locally (shots from a
+		# local respawn get rejected). Stay where we fell, lock input and let the MatchHudClient spectate teammates.
+		GameManager.record_local_death(killer_name)
+		set_spectating(true)
+		player_eliminated.emit(killer_name)
+		status_banner_sent.emit("ELIMINATED BY %s - ONE LIFE PER ROUND: SPECTATING UNTIL THE NEXT ROUND" % killer_name.to_upper(), Color(1.0, 0.32, 0.32))
+		return
 	if carrying_center_flag:
 		set_carrying_center_flag(false)
 		var scene_root := get_tree().current_scene

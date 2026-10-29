@@ -6,6 +6,7 @@ extends Node3D
 ## stacked wooden cable spools, and 5 OpFor bots.
 
 const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
+const MatchHudClientScript = preload("res://scripts/ui/match_hud_client.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -50,6 +51,12 @@ var visor_splat_overlay: ColorRect
 var visor_fog_overlay: ColorRect
 var squeegee_wipe_bar: ColorRect
 var _flag_wave_time: float = 0.0
+## v0.5 client presentation of Tim's server match rules (HUD, banners, spectate camera, CTF base flags).
+var match_client: Node = null
+var legacy_center_flag_hidden: bool = false
+## Online start button pressed: menu stays up (waiting room) until notify_match_start.
+var awaiting_online_start: bool = false
+var online_start_requests: int = 0
 
 func _ready() -> void:
 	_build_environment_and_turf()
@@ -62,6 +69,10 @@ func _ready() -> void:
 		_build_tournament_lobby_overlay()
 		_build_scoreboard_overlay()
 		_build_death_and_respawn_map_overlay()
+		match_client = MatchHudClientScript.new()
+		match_client.name = "MatchHudClient"
+		add_child(match_client)
+		match_client.call("setup", self, player)
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
@@ -758,8 +769,24 @@ func _on_drop_in_pressed() -> void:
 	var chosen_room := room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
 	NetworkLobby.active_room = chosen_room
 	NetworkLobby.update_local_player_choices(callsign_input.text, NetworkLobby.local_team, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
+	if NetworkLobby.is_online_client():
+		_request_online_start_via_waiting_room(chosen_room)
+		return
+	# Offline solo / bots: direct drop-in, as before.
 	NetworkLobby.request_start_match(chosen_room, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
 	_set_lobby_overlay_visible(false)
+
+## v0.5 online: the start button goes through Tim's room start (request_start_match -> 5 s match_starting/countdown ->
+## notify_match_start) and Ren's waiting room instead of hiding the menu, so nobody sits in practice mode during the
+## countdown. The menu stays up (player input locked) until notify_match_start drops everyone in together.
+func _request_online_start_via_waiting_room(chosen_room: String) -> void:
+	awaiting_online_start = true
+	online_start_requests += 1
+	NetworkLobby.request_start_match(chosen_room, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
+	var flow := get_tree().root.get_node_or_null("LobbyEntryFlow")
+	if flow != null and flow.has_method("open_waiting_room"):
+		flow.call("open_waiting_room", {"id": NetworkLobby.active_room, "name": NetworkLobby.active_room, "map": NetworkLobby.selected_map, "mode": NetworkLobby.selected_mode})
+	_on_status_banner("MATCH START REQUESTED - Room [%s]: waiting for the countdown (everyone drops in together)" % NetworkLobby.active_room.to_upper(), Color(1.0, 0.85, 0.3))
 
 func _on_copy_invite_pressed() -> void:
 	NetworkLobby.active_room = room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
@@ -793,6 +820,8 @@ func _on_lobby_state_changed(state: Dictionary) -> void:
 		"" if p_dict.size() == 1 else "s",
 		"5 OpFor Bots" if NetworkLobby.fill_bots_enabled else "No Bots"
 	])
+	if NetworkLobby.is_online_client():
+		lines.append("YOU: TEAM %s (%s) - auto-assigned by the server" % [NetworkLobby.team_label(NetworkLobby.local_team).to_upper(), NetworkLobby.local_team])
 	for pid in p_dict.keys():
 		var info: Dictionary = p_dict[pid]
 		lines.append("  • [%s] %s  —  Bracket: %s  (%s)" % [
@@ -804,6 +833,9 @@ func _on_lobby_state_changed(state: Dictionary) -> void:
 	lobby_roster_label.text = "\n".join(lines)
 
 func _on_network_match_started(_room_id: String, bracket_id: String, fill_bots: bool) -> void:
+	if awaiting_online_start:
+		awaiting_online_start = false
+		_set_lobby_overlay_visible(false)
 	_set_opfor_bots_enabled(fill_bots)
 	_refresh_lobby_button_highlights()
 	_on_status_banner("MATCH LIVE — Room [%s] | Bracket: %s | Press [TAB] for Lobby" % [NetworkLobby.active_room.to_upper(), bracket_id.to_upper()], Color(0.35, 1.0, 0.55))
@@ -902,6 +934,10 @@ func _on_scoreboard_updated(_stats: Dictionary) -> void:
 	_refresh_scoreboard_text()
 
 func _on_match_over(loser_name: String, winner_label: String) -> void:
+	# v0.5 server matches (online): MatchHudClient shows the congrats + recap from match_results and the server's
+	# returned_to_lobby opens the waiting room, so no offline "10 Deaths / Press [T] for Rematch" screen here.
+	if match_client != null and bool(match_client.call("owns_match_end")):
+		return
 	if scoreboard_canvas != null:
 		scoreboard_canvas.visible = true
 	_refresh_scoreboard_text()
@@ -1167,6 +1203,9 @@ func _build_death_and_respawn_map_overlay() -> void:
 		quick_row.add_child(qbtn)
 
 func _on_local_player_eliminated(killer_name: String) -> void:
+	# v0.5 one-life CTF: no respawn map - the MatchHudClient spectate camera takes over until round_started.
+	if player != null and bool(player.get("spectating")):
+		return
 	if NetworkLobby.is_dedicated_server or DisplayServer.get_name() == "headless":
 		return
 	if GameManager.match_ended or death_respawn_canvas == null:
@@ -1270,9 +1309,27 @@ func _process(delta: float) -> void:
 	if NetworkLobby.is_dedicated_server:
 		return
 	_flag_wave_time += delta
+	_apply_legacy_center_flag_policy()
 	if center_flag_cloth != null and center_flag_node != null and center_flag_node.visible:
 		center_flag_cloth.rotation.y = sin(_flag_wave_time * 4.5) * 0.18
-	_update_center_flag_pickup_and_hang()
+	if not legacy_center_flag_hidden:
+		_update_center_flag_pickup_and_hang()
+
+## Used by PlayerController3D: a live one-life CTF round (server state via the MatchHudClient) means no local respawn.
+func is_one_life_round_live() -> bool:
+	return match_client != null and bool(match_client.call("is_one_life_round_live"))
+
+## v0.5: the legacy single Center-50 flag (and its local pickup/hang) only exists in offline non-CTF play. In CTF and
+## on every online client it is hidden and inert; CTF shows one server-driven flag per base (MatchHudClient).
+func _apply_legacy_center_flag_policy() -> void:
+	var enabled := match_client == null or bool(match_client.call("legacy_center_flag_enabled"))
+	if enabled == (not legacy_center_flag_hidden):
+		return
+	legacy_center_flag_hidden = not enabled
+	if center_flag_node != null:
+		center_flag_node.visible = enabled and GameManager.flag_state != "CARRIED"
+	if not enabled and player != null and bool(player.get("carrying_center_flag")):
+		player.call("set_carrying_center_flag", false)
 
 func _update_center_flag_pickup_and_hang() -> void:
 	if player == null or GameManager.match_ended:
@@ -1338,7 +1395,7 @@ func hang_center_flag_for_local_player() -> void:
 	NetworkLobby.broadcast_flag_event("HANG", NetworkLobby.local_callsign, NetworkLobby.local_team, Vector3(0.0, 0.0, 1.35))
 
 func _on_network_flag_event(event_type: String, p_name: String, team: String, world_pos: Vector3) -> void:
-	if p_name == NetworkLobby.local_callsign:
+	if p_name == NetworkLobby.local_callsign or legacy_center_flag_hidden:
 		return
 	if event_type == "PICKUP":
 		if center_flag_node != null:
