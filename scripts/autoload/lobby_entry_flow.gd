@@ -62,9 +62,9 @@ func close_browser() -> void:
 	if _layer != null:
 		_layer.visible = false
 
-## ?server= from the page URL (or a manual URL); "" -> LobbyBrowser's DEFAULT_SERVER_URL (always-on DO server).
+## ?server= from the page URL (or a manual URL), else the always-on server (NetworkLobby.DEFAULT_PUBLIC_WS_URL).
 func _explicit_server_url() -> String:
-	return NetworkLobby.current_ws_url if NetworkLobby.server_from_url else ""
+	return NetworkLobby.current_ws_url if NetworkLobby.server_from_url else NetworkLobby.DEFAULT_PUBLIC_WS_URL
 
 func _on_lobby_join_requested(entry: Dictionary) -> void:
 	if OS.has_feature("web"):
@@ -78,7 +78,7 @@ func _on_lobby_join_requested(entry: Dictionary) -> void:
 	if m != "":
 		NetworkLobby.selected_map = NetworkLobby.normalize_map(m)
 	close_browser()
-	NetworkLobby.connect_to_lobby(server if server != "" else LobbyBrowserScript.DEFAULT_SERVER_URL)
+	NetworkLobby.connect_to_lobby(server if server != "" else NetworkLobby.DEFAULT_PUBLIC_WS_URL)
 
 func _on_solo_requested() -> void:
 	solo_starts += 1

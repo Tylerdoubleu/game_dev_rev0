@@ -19,7 +19,7 @@ Clients send intents. The server sends facts back, and only to the members of th
 - Settings (map/mode): any player may change them while the room is `waiting` (`srv_set_room_settings`). They lock at match start. Brackets (speedball, woodsball, pump) stay per player.
 
 ## Entry flow (web)
-- A bare `https://tylerdoubleu.github.io/game_dev_rev0/` link doesn't connect. The `LobbyEntryFlow` autoload shows Ren's `LobbyBrowser`, using `GET https://134-199-181-82.sslip.io/api/lobbies`. `?server=` overrides the server.
+- A bare `https://tylerdoubleu.github.io/game_dev_rev0/` link doesn't connect. The `LobbyEntryFlow` autoload shows Ren's `LobbyBrowser`, using `GET https://play.jeetball.com/api/lobbies`. `?server=` overrides the server.
 - **JOIN** navigates to `join_url`, which is `...?server=wss://.../ws&room=lobby_NN&map=...`. That page then auto-connects to the room.
 - **SOLO TEST VS BOTS** runs the offline flow: NPC presence ON, then DROP IN.
 - The arena lobby menu has a **BROWSE ONLINE LOBBIES** button, added at runtime.
@@ -29,7 +29,7 @@ Clients send intents. The server sends facts back, and only to the members of th
 ```json
 {"lobbies":[{"id":"lobby_01","name":"Lobby 01","map":"speedball","mode":"deathmatch",
   "players":{"red":2,"blue":1},"max_per_team":5,"status":"waiting|in_match|full","bots":false,
-  "join_url":"https://tylerdoubleu.github.io/game_dev_rev0/?server=wss://134-199-181-82.sslip.io/ws&room=lobby_01&map=speedball&mode=deathmatch"}]}
+  "join_url":"https://tylerdoubleu.github.io/game_dev_rev0/?server=wss://play.jeetball.com/ws&room=lobby_01&map=speedball&mode=deathmatch"}]}
 ```
 - `GET /api/quickjoin` returns the waiting lobby with the most players that still has room, as `{lobby, join_url}`. With `?redirect=1` it returns a 302 instead.
 - If the Godot state is stale, the response is 503.

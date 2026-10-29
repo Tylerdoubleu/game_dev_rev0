@@ -63,7 +63,7 @@ var server_from_url: bool = false
 ## v0.5: the web build opened without ?room= shows Ren's LobbyBrowser (LobbyEntryFlow) instead of auto-joining.
 var show_lobby_browser_on_start: bool = false
 ## Always-on DigitalOcean server (deploy/digitalocean) used when the page host does not serve /ws itself (GitHub Pages).
-const DEFAULT_PUBLIC_WS_URL := "wss://134-199-181-82.sslip.io/ws"
+const DEFAULT_PUBLIC_WS_URL := "wss://play.jeetball.com/ws"
 
 ## Clients: the roster of the room we are in (peer_id -> {name, team, bracket, ready, room, kills, deaths, alive}).
 ## Server: every registered peer (same dictionaries as rooms[rid]["players"]).

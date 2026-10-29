@@ -27,8 +27,8 @@ func _process(_d: float) -> bool:
 	L.server_from_url = false
 	L._parse_query_string("?map=speedball")
 	_check(not L.room_from_url and not L.server_from_url, "bare link: no room, default server")
-	L._parse_query_string("?server=wss://134-199-181-82.sslip.io/ws&room=lobby_03&map=woodsball_crash")
-	_check(L.room_from_url and L.active_room == "lobby_03" and L.server_from_url and L.current_ws_url == "wss://134-199-181-82.sslip.io/ws", "join_url link: room + server parsed (%s %s)" % [L.active_room, L.current_ws_url])
+	L._parse_query_string("?server=wss://play.jeetball.com/ws&room=lobby_03&map=woodsball_crash")
+	_check(L.room_from_url and L.active_room == "lobby_03" and L.server_from_url and L.current_ws_url == "wss://play.jeetball.com/ws", "join_url link: room + server parsed (%s %s)" % [L.active_room, L.current_ws_url])
 	L.room_from_url = false
 	L.server_from_url = false
 	L.active_room = "alpha"
@@ -40,7 +40,7 @@ func _process(_d: float) -> bool:
 	if btn is Button:
 		(btn as Button).pressed.emit()
 	_check(flow.is_open() and flow.browser is LobbyBrowser, "menu button opens Ren's LobbyBrowser")
-	_check(flow.browser.api_base == "https://134-199-181-82.sslip.io", "browser defaults to the always-on server API (%s)" % flow.browser.api_base)
+	_check(flow.browser.api_base == "https://play.jeetball.com", "browser defaults to the always-on server API (%s)" % flow.browser.api_base)
 	_check(flow.browser.lobby_join_requested.is_connected(flow._on_lobby_join_requested) and flow.browser.solo_requested.is_connected(flow._on_solo_requested), "join/solo signals connected")
 	L.match_active = false
 	flow.browser.solo_requested.emit()
