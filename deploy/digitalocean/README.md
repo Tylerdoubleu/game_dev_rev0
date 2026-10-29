@@ -18,9 +18,9 @@ godot --headless ... -- --server --port=9080  (DEDICATED_SERVER=1)
 |---|---|
 | Droplet | `paintball-server`, Basic `s-2vcpu-2gb` (2 vCPU / 2 GB / 60 GB), `sfo2`, Ubuntu 24.04, ~$18/mo |
 | Reserved IP | `134.199.181.82` (free while attached; survives rebuilds) |
-| Hostname | `134-199-181-82.sslip.io` |
+| Hostname | `play.jeetball.com` (also still answers on `134-199-181-82.sslip.io`) |
 | Firewall | DO cloud firewall `paintball-fw`: inbound 22, 80, 443 only |
-| Invite link | https://tylerdoubleu.github.io/game_dev_rev0/?map=woodsball_crash&server=wss://134-199-181-82.sslip.io/ws |
+| Invite link | https://tylerdoubleu.github.io/game_dev_rev0/?map=woodsball_crash&server=wss://play.jeetball.com/ws |
 
 The web client is **not** exported on the server; players load it from GitHub Pages.
 
@@ -52,5 +52,5 @@ journalctl -u paintball-server -f          # game server logs
 journalctl -u paintball-update -n 50       # auto-update history
 systemctl restart paintball-server         # manual restart
 /opt/paintball/update.sh                   # force an update check now
-curl -s https://134-199-181-82.sslip.io/healthz
+curl -s https://play.jeetball.com/healthz
 ```

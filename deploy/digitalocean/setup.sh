@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-shot, idempotent provisioning for a fresh Ubuntu 24.04 droplet.
-# Usage (as root on the droplet):  PAINTBALL_HOST=1-2-3-4.sslip.io bash setup.sh
+# Usage (as root on the droplet):  PAINTBALL_HOST="play.jeetball.com, 1-2-3-4.sslip.io" bash setup.sh
 set -euo pipefail
 : "${PAINTBALL_HOST:?set PAINTBALL_HOST, e.g. 134-199-181-82.sslip.io}"
 REPO=https://github.com/Tylerdoubleu/game_dev_rev0.git
