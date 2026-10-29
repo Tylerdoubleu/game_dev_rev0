@@ -445,13 +445,17 @@ func copy_invite_link() -> String:
 			var u = new URL(window.location.href);
 			u.searchParams.set('room', '%s');
 			u.searchParams.set('bracket', '%s');
+			u.searchParams.set('map', '%s');
+			var ws = '%s';
+			var pageWs = (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws';
+			if (ws && ws !== pageWs) { u.searchParams.set('server', ws); }
 			var link = u.toString();
 			if (navigator.clipboard && navigator.clipboard.writeText) {
 				navigator.clipboard.writeText(link).catch(function(){});
 			}
 			return link;
 		})()
-		""" % [active_room.replace("'", ""), local_bracket.replace("'", "")]
+		""" % [active_room.replace("'", ""), local_bracket.replace("'", ""), selected_map.replace("'", ""), current_ws_url.replace("'", "").replace("\\", "")]
 		var res: Variant = JavaScriptBridge.eval(js_code)
 		if typeof(res) == TYPE_STRING and not String(res).is_empty():
 			invite_url = String(res)
