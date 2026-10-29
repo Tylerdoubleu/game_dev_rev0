@@ -30,6 +30,10 @@ var _gun_btns := {}
 var _start_btn: Button
 var _lock_note: Label
 var _online := false
+var _ready_btn: Button
+var _countdown: Label
+var counting_down: bool = false
+var countdown_left: int = 0
 
 func _ready() -> void:
 	_build_ui()
@@ -37,6 +41,10 @@ func _ready() -> void:
 		var nl := get_node("/root/NetworkLobby")
 		nl.lobby_state_changed.connect(apply_state)
 		nl.connection_status_changed.connect(_on_conn)
+		if nl.has_signal("match_countdown"):
+			nl.match_countdown.connect(_on_countdown)
+		if nl.has_signal("room_event"):
+			nl.room_event.connect(_on_room_event)
 		_online = nl.is_online_client()
 		apply_state(nl.get_lobby_state_snapshot())
 
@@ -53,6 +61,19 @@ func _on_conn(text: String, online: bool) -> void:
 	_status.text = text
 	_status.add_theme_color_override("font_color", Color(0.45, 0.95, 0.35) if online else Color(1.0, 0.72, 0.3))
 	_refresh_controls()
+
+func _on_countdown(seconds_left: int, _data: Dictionary = {}) -> void:
+	counting_down = seconds_left > 0
+	countdown_left = seconds_left
+	_countdown.text = "MATCH STARTS IN %d" % seconds_left if counting_down else "GO GO GO!"
+	_countdown.visible = true
+	_refresh_controls()
+
+func _on_room_event(event_name: String, _data: Dictionary) -> void:
+	if event_name in ["match_start_cancelled", "match_ended", "round_started"]:
+		counting_down = false
+		_countdown.visible = false
+		_refresh_controls()
 
 ## Fills rosters and highlights from a NetworkLobby.get_lobby_state_snapshot() dict. Static-friendly for tests.
 func apply_state(s: Dictionary) -> void:
@@ -72,7 +93,10 @@ func apply_state(s: Dictionary) -> void:
 			continue
 		var is_red := String(p.get("team", "ALPHA")).to_upper() in ["ALPHA", "RED"]
 		var gun := String(p.get("bracket", "speedball")).to_upper()
-		var line := "%s%s   [%s]" % [String(p.get("name", "PLAYER")).to_upper(), "  (YOU)" if int(pid) == me else "", gun]
+		var ready_mark := "[READY]  " if bool(p.get("ready", false)) else "[ - ]  "
+		var line := "%s%s%s   (%s)" % [ready_mark, String(p.get("name", "PLAYER")).to_upper(), "  (YOU)" if int(pid) == me else "", gun]
+		if int(pid) == me and _ready_btn != null:
+			_ready_btn.set_pressed_no_signal(bool(p.get("ready", false)))
 		var l := _label(line, 17, (RED_TEAM if is_red else BLUE_TEAM).lightened(0.35))
 		if is_red:
 			_red_list.add_child(l); red += 1
@@ -93,8 +117,14 @@ func _refresh_controls() -> void:
 	var locked := is_locked()
 	for k in _map_btns: _map_btns[k].disabled = locked
 	for k in _mode_btns: _mode_btns[k].disabled = locked
-	_start_btn.disabled = locked or not _online
-	_start_btn.text = "MATCH IN PROGRESS" if locked else ("START MATCH" if _online else "CONNECTING...")
+	var can_cancel := counting_down and _nl() != null and _nl().has_method("cancel_start")
+	_start_btn.disabled = (locked and not can_cancel) or not _online or (counting_down and not can_cancel)
+	if counting_down:
+		_start_btn.text = "CANCEL START" if can_cancel else "STARTING..."
+	else:
+		_start_btn.text = "MATCH IN PROGRESS" if locked else ("START MATCH" if _online else "CONNECTING...")
+	if _ready_btn != null:
+		_ready_btn.text = "READY  [X]" if _ready_btn.button_pressed else "READY  [ ]"
 	_lock_note.text = "Settings are locked while a match is running." if locked else "Anyone in the lobby can change the field and game type until the match starts."
 
 func _my_id() -> int:
@@ -123,10 +153,20 @@ func _pick_gun(id: String) -> void:
 	_highlight(_gun_btns, id)
 
 func _press_start() -> void:
-	start_requested.emit()
 	var nl := _nl()
+	if counting_down:
+		if nl and nl.has_method("cancel_start"):
+			nl.cancel_start()
+		return
+	start_requested.emit()
 	if nl:
 		nl.request_start_match(nl.active_room, nl.local_bracket, String(state.get("mode", "")) == "bots_test")
+
+func _press_ready(on: bool) -> void:
+	var nl := _nl()
+	if nl and nl.has_method("set_ready"):
+		nl.set_ready(on)
+	_refresh_controls()
 
 func _press_leave() -> void:
 	var nl := _nl()
@@ -252,6 +292,12 @@ func _build_ui() -> void:
 	leave.add_theme_stylebox_override("normal", _style(Color(0.35, 0.36, 0.33), Color(0.2, 0.2, 0.2)))
 	leave.pressed.connect(_press_leave)
 	foot.add_child(leave)
+	_ready_btn = _toggle("READY  [ ]")
+	_ready_btn.name = "ReadyButton"
+	_ready_btn.custom_minimum_size = Vector2(200, 54)
+	_ready_btn.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+	_ready_btn.toggled.connect(_press_ready)
+	foot.add_child(_ready_btn)
 	var sp := Control.new()
 	sp.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(sp)
@@ -266,4 +312,13 @@ func _build_ui() -> void:
 	_start_btn.add_theme_stylebox_override("disabled", _style(Color(0.18, 0.18, 0.17), Color(0.1, 0.1, 0.1)))
 	_start_btn.pressed.connect(_press_start)
 	foot.add_child(_start_btn)
+	_countdown = _label("", 64, NEON)
+	_countdown.name = "CountdownLabel"
+	_countdown.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_countdown.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
+	_countdown.position = Vector2(-300, 24)
+	_countdown.custom_minimum_size = Vector2(600, 80)
+	_countdown.add_theme_constant_override("outline_size", 10)
+	_countdown.visible = false
+	add_child(_countdown)
 	_refresh_controls()

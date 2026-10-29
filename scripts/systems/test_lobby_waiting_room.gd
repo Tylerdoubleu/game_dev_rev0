@@ -26,12 +26,18 @@ func _process(_d: float) -> bool:
 		_check(flow.is_open(), "still on the lobby menu, no match started")
 		wr.call("_on_conn", "LIVE", true)
 		wr.apply_state({"room": "lobby_07", "selected_map": "woodsball_crash", "mode": "ctf", "bracket": "pump", "status": "waiting", "match": {"phase": "waiting"},
-			"players": {11: {"name": "Tyler", "team": "ALPHA", "bracket": "speedball", "room": "lobby_07"}, 12: {"name": "Friend", "team": "BRAVO", "bracket": "pump", "room": "lobby_07"}, 13: {"name": "Other", "team": "BRAVO", "room": "lobby_02"}}})
+			"players": {11: {"name": "Tyler", "team": "ALPHA", "bracket": "speedball", "room": "lobby_07", "ready": true}, 12: {"name": "Friend", "team": "BRAVO", "bracket": "pump", "room": "lobby_07"}, 13: {"name": "Other", "team": "BRAVO", "room": "lobby_02"}}})
 	if f == 8:
 		var wr: Control = flow.waiting_room
 		_check(wr._red_list.get_child_count() == 1 and wr._blue_list.get_child_count() == 1, "rosters show only this room's players by team")
 		_check(wr._map_btns["woodsball_crash"].button_pressed and wr._mode_btns["ctf"].button_pressed and wr._gun_btns["pump"].button_pressed, "current field / game type / gun highlighted")
 		_check(not wr._start_btn.disabled and wr._start_btn.text == "START MATCH", "START MATCH enabled while waiting")
+		wr._on_countdown(5, {})
+		_check(wr._countdown.visible and wr._countdown.text == "MATCH STARTS IN 5" and wr._start_btn.text in ["CANCEL START", "STARTING..."], "5s countdown shows; start button turns into cancel")
+		wr._on_room_event("match_start_cancelled", {})
+		_check(not wr._countdown.visible and wr._start_btn.text == "START MATCH", "cancel hides the countdown")
+		wr._ready_btn.button_pressed = true
+		_check(nl.local_ready and wr._ready_btn.text == "READY  [X]", "READY toggle calls set_ready")
 		wr.apply_state({"room": "lobby_07", "status": "in_match", "match": {"phase": "live"}, "players": {}})
 		_check(wr._start_btn.disabled and wr._map_btns["speedball"].disabled, "settings + start locked once the match is live")
 		wr.call("_press_leave")
