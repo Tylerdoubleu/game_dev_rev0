@@ -24,6 +24,7 @@ func _process(_d: float) -> bool:
 		_check(not flow.browser.visible, "lobby list hidden behind it (no page navigation)")
 		_check(nl.active_room == "lobby_07", "joined room lobby_07")
 		_check(flow.is_open(), "still on the lobby menu, no match started")
+		_check(not root.get_node("/root/GameManager").unload_guard_armed, "no leave-site warning in the lobby menus")
 		wr.call("_on_conn", "LIVE", true)
 		wr.apply_state({"room": "lobby_07", "selected_map": "woodsball_crash", "mode": "ctf", "bracket": "pump", "status": "waiting", "match": {"phase": "waiting"},
 			"players": {11: {"name": "Tyler", "team": "ALPHA", "bracket": "speedball", "room": "lobby_07", "ready": true}, 12: {"name": "Friend", "team": "BRAVO", "bracket": "pump", "room": "lobby_07"}, 13: {"name": "Other", "team": "BRAVO", "room": "lobby_02"}}})
@@ -50,6 +51,9 @@ func _process(_d: float) -> bool:
 		nl.match_started_signal.emit("lobby_03", "speedball", false)
 	if f == 14:
 		_check(not flow.is_open(), "match start closes the lobby menu and drops you in")
+		_check(root.get_node("/root/GameManager").unload_guard_armed, "leave-site warning armed only once the match starts")
+		nl.room_event.emit("match_ended", {})
+		_check(not root.get_node("/root/GameManager").unload_guard_armed, "warning disarmed after the match ends")
 		print("=== [PASS] v0.5 lobby waiting room ===" if fails.is_empty() else "=== [FAIL] %s" % [fails])
 		quit(0 if fails.is_empty() else 1)
 	return false

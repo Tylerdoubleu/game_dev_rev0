@@ -35,7 +35,26 @@ func _ready() -> void:
 	_setup_input_map()
 	_setup_browser_close_and_hotkey_guard()
 
+## v0.5 (Ren): the "Leave site?" warning is armed only during a match (so lobby menus / JOIN never trigger it).
+func set_unload_guard(armed: bool) -> void:
+	unload_guard_armed = armed
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("window.__pb_unload_guard_armed = %s;" % ("true" if armed else "false"), true)
+
+var unload_guard_armed: bool = false
+
+func _wire_unload_guard() -> void:
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl == null:
+		return
+	nl.match_started_signal.connect(func(_r, _b, _f): set_unload_guard(true))
+	if nl.has_signal("left_room"):
+		nl.left_room.connect(func(_r): set_unload_guard(false))
+	if nl.has_signal("room_event"):
+		nl.room_event.connect(func(ev, _d): if ev == "match_ended": set_unload_guard(false))
+
 func _setup_browser_close_and_hotkey_guard() -> void:
+	call_deferred("_wire_unload_guard")
 	# Prevent accidental window/tab closure or OS/browser hotkey interruptions during Ctrl/Alt + WASD diving/sliding
 	get_tree().set_auto_accept_quit(false)
 	if OS.has_feature("web"):
@@ -44,6 +63,8 @@ func _setup_browser_close_and_hotkey_guard() -> void:
 			if (window.__pb_hotkey_guard_installed) return;
 			window.__pb_hotkey_guard_installed = true;
 			window.addEventListener('beforeunload', function(e) {
+				// v0.5 (Ren): only warn while you're actually in a match, never from the lobby menus.
+				if (!window.__pb_unload_guard_armed) return;
 				e.preventDefault();
 				e.returnValue = '';
 				return '';
