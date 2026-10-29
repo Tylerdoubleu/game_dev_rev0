@@ -1,0 +1,27 @@
+[Unit]
+Description=First-Person Paintball dedicated server (Node gateway :8080 + headless Godot :9080)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paintball
+Group=paintball
+WorkingDirectory=/opt/paintball/app
+Environment=HOME=/opt/paintball
+Environment=PORT=8080
+Environment=WS_PORT=9080
+Environment=AUTO_START_GODOT=1
+Environment=DEDICATED_SERVER=1
+Environment=NODE_ENV=production
+# Import assets (fast when the .godot cache is warm); failure is non-fatal.
+ExecStartPre=-/usr/local/bin/godot --headless --path /opt/paintball/app --import
+ExecStart=/usr/bin/node /opt/paintball/app/server/server.js
+Restart=always
+RestartSec=3
+TimeoutStartSec=900
+KillMode=control-group
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

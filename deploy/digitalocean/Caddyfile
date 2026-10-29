@@ -1,0 +1,28 @@
+# Caddy front door for the always-on paintball server.
+# PAINTBALL_HOST is set in /etc/systemd/system/caddy.service.d/paintball.conf
+# (e.g. 134-199-181-82.sslip.io). Caddy gets/renews TLS automatically
+# (Let's Encrypt, falling back to ZeroSSL).
+{$PAINTBALL_HOST} {
+	# CORS for the GitHub Pages client calling /api/* (e.g. /api/lobbies).
+	@api_preflight {
+		method OPTIONS
+		path /api/*
+	}
+	handle @api_preflight {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type"
+		header Access-Control-Max-Age "86400"
+		respond 204
+	}
+	# "defer" replaces any value server.js sets, so there is exactly one header.
+	header /api/* {
+		defer
+		Access-Control-Allow-Origin "*"
+		Access-Control-Allow-Methods "GET, OPTIONS"
+	}
+
+	# Everything else (/, /healthz, /api/*, and the /ws WebSocket upgrade)
+	# goes to the Node gateway (server/server.js), which pipes WS to Godot.
+	reverse_proxy 127.0.0.1:8080
+}

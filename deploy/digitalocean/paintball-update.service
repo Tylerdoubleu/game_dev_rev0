@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull origin/main for the paintball server and restart it if main moved
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/paintball/update.sh
