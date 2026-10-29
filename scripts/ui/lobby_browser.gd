@@ -19,6 +19,8 @@ const RED_TEAM := Color(1.0, 0.32, 0.25)
 const BLUE_TEAM := Color(0.3, 0.6, 1.0)
 
 @export var api_base: String = ""
+## When false, JOIN only emits lobby_join_requested (the in-place waiting room); true keeps the old page navigation.
+var navigate_on_join: bool = true
 var lobbies: Array = []
 var last_error: String = ""
 var _http: HTTPRequest
@@ -118,7 +120,7 @@ func set_lobbies(list: Array, error_text: String = "") -> void:
 func join(entry: Dictionary) -> void:
 	lobby_join_requested.emit(entry)
 	var url := String(entry.get("join_url", ""))
-	if url != "" and OS.has_feature("web"):
+	if navigate_on_join and url != "" and OS.has_feature("web"):
 		JavaScriptBridge.eval("window.location.href = %s" % JSON.stringify(url))
 
 func quick_join() -> void:
