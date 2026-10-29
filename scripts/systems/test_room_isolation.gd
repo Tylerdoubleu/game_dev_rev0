@@ -77,9 +77,11 @@ func _process(delta: float) -> bool:
 				for k in cl.keys():
 					cl[k].received_remote_shots = 0
 				# A1 fires a sanctioned shot (rpc_id(1) -> server -> room relay) and sends state packets.
-				cl["A1"].broadcast_paintball_shot(Vector3(0, 1.4, 40), Vector3(0, 0, -1), 59.0)
 				for i in 3:
-					cl["A1"].send_local_player_state(Vector3(1, 0, 40), 0.0, 0.0, 0.0, 0, false)
+					cl["A1"].send_local_player_state(Vector3(0, 0, 40), 0.0, 0.0, 0.0, 0, false)
+					cl["A2"].send_local_player_state(Vector3(0, 0, 30), PI, 0.0, 0.0, 0, false)
+				# PB-13: a geometrically valid shot (A1 at z=40 aiming at A2's chest at z=30) so the later hit report validates.
+				cl["A1"].broadcast_paintball_shot(Vector3(0, 1.4, 40), (Vector3(0, 1.2, 30) - Vector3(0, 1.4, 40)).normalized(), 290.0)
 				# A spoofing client tries a raw broadcast to every peer; authority-only + server_relay=false must drop it.
 				cl["A2"].rpc("rpc_fire_paintball", Vector3.ZERO, Vector3.FORWARD, 50.0, _id("A2"))
 				cl["A2"].rpc("cl_room_event", "match_ended", {"winner": "BRAVO"})
@@ -100,7 +102,7 @@ func _process(delta: float) -> bool:
 							spoof_ok = false
 				_check(spoof_ok, "spoofed client cl_room_event broadcast rejected everywhere")
 				# Server-authoritative elimination inside lobby_01 (A2 on BRAVO hit by A1 on ALPHA).
-				cl["A1"].notify_remote_player_hit(_id("A2"), Vector3(1, 1.0, 40))
+				cl["A1"].notify_remote_player_hit(_id("A2"), Vector3(0, 1.2, 30))
 				stage = 2
 				stage_t = 0.0
 		2:

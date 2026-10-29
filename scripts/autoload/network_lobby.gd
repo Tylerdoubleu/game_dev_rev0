@@ -58,6 +58,12 @@ var room_status: String = "waiting"
 var match_active: bool = true
 ## True when the page / process was launched with an explicit ?room= (or --room=).
 var room_from_url: bool = false
+## v0.5: true when ?server= / --ws= / LOBBY_WS_URL chose the server explicitly.
+var server_from_url: bool = false
+## v0.5: the web build opened without ?room= shows Ren's LobbyBrowser (LobbyEntryFlow) instead of auto-joining.
+var show_lobby_browser_on_start: bool = false
+## Always-on DigitalOcean server (deploy/digitalocean) used when the page host does not serve /ws itself (GitHub Pages).
+const DEFAULT_PUBLIC_WS_URL := "wss://134-199-181-82.sslip.io/ws"
 
 ## Clients: the roster of the room we are in (peer_id -> {name, team, bracket, ready, room, kills, deaths, alive}).
 ## Server: every registered peer (same dictionaries as rooms[rid]["players"]).
@@ -86,10 +92,15 @@ func _ready() -> void:
 	if is_dedicated_server:
 		var port := _resolve_dedicated_ws_port()
 		start_dedicated_server(port)
+		call_deferred("_build_server_collision_worlds")
 	else:
-		# Auto-connect on Web or if LOBBY_WS_URL / ?server= was provided
-		if OS.has_feature("web") or not OS.get_environment("LOBBY_WS_URL").is_empty():
+		# Auto-connect when the link names a room (?room=, from a LobbyBrowser join_url) or LOBBY_WS_URL is set.
+		# A bare web link shows the LobbyBrowser instead (LobbyEntryFlow); JOIN reloads the page with ?room=.
+		if (OS.has_feature("web") and room_from_url) or not OS.get_environment("LOBBY_WS_URL").is_empty():
 			connect_to_lobby(current_ws_url)
+		elif show_lobby_browser_on_start:
+			_refresh_offline_local_roster()
+			connection_status_changed.emit("PICK A LOBBY (or SOLO TEST VS BOTS)", false)
 		else:
 			_refresh_offline_local_roster()
 			connection_status_changed.emit("READY (Enter Edgegap/WS URL & Connect, or Drop In)", false)
@@ -165,18 +176,27 @@ func _parse_runtime_environment_and_url() -> void:
 		elif arg.begins_with("--ws=") or arg.begins_with("--server="):
 			var raw_arg := arg.split("=", true, 1)[1]
 			current_ws_url = normalize_ws_url(raw_arg)
+			server_from_url = true
 
 	var env_ws := OS.get_environment("LOBBY_WS_URL")
 	if not env_ws.is_empty():
 		current_ws_url = normalize_ws_url(env_ws)
+		server_from_url = true
 
 	if OS.has_feature("web"):
-		var auto_ws: Variant = JavaScriptBridge.eval("(window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws'")
-		if typeof(auto_ws) == TYPE_STRING and not String(auto_ws).is_empty():
-			current_ws_url = String(auto_ws)
+		var host_v: Variant = JavaScriptBridge.eval("window.location.host || ''")
+		var host := String(host_v) if typeof(host_v) == TYPE_STRING else ""
+		if host.is_empty() or host.ends_with("github.io") or host.ends_with("itch.zone") or host.ends_with("itch.io"):
+			# Static hosts (GitHub Pages) have no /ws: default to the always-on server.
+			current_ws_url = DEFAULT_PUBLIC_WS_URL
+		else:
+			var auto_ws: Variant = JavaScriptBridge.eval("(window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws'")
+			if typeof(auto_ws) == TYPE_STRING and not String(auto_ws).is_empty():
+				current_ws_url = String(auto_ws)
 		var search_str: Variant = JavaScriptBridge.eval("window.location.search || ''")
 		if typeof(search_str) == TYPE_STRING and not String(search_str).is_empty():
 			_parse_query_string(String(search_str))
+		show_lobby_browser_on_start = not room_from_url
 
 func _parse_query_string(query: String) -> void:
 	var clean := query.trim_prefix("?")
@@ -206,6 +226,7 @@ func _parse_query_string(query: String) -> void:
 				selected_mode = normalize_mode(val, selected_mode)
 			elif key in ["server", "ws", "edgegap"] and not val.is_empty():
 				current_ws_url = normalize_ws_url(val)
+				server_from_url = true
 
 func _sanitize_token(raw: String, fallback: String) -> String:
 	var cleaned := raw.strip_edges().substr(0, 20)
@@ -247,6 +268,10 @@ static func normalize_team(raw: String) -> String:
 static func other_team(team: String) -> String:
 	return "BRAVO" if team == "ALPHA" else "ALPHA"
 
+func _build_server_collision_worlds() -> void:
+	var n := ensure_collision_worlds()
+	print("[NetworkLobby] PB-13 hit validation: %d map collision world(s) ready for line-of-sight checks" % n)
+
 func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 	is_dedicated_server = true
 	peer = WebSocketMultiplayerPeer.new()
@@ -262,6 +287,8 @@ func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 	players.clear()
 	peer_room.clear()
 	rooms.clear()
+	rejected_shots.clear()
+	rejected_hits.clear()
 	_ensure_permanent_rooms()
 	lobby_state_file = _resolve_lobby_state_file()
 	if not lobby_state_file.is_empty():
@@ -736,9 +763,31 @@ func _client_apply_room_event(event_name: String, data: Dictionary) -> void:
 				selected_map = m
 				active_map = m
 				map_changed.emit(selected_map)
+		"round_started":
+			match_active = true
+			room_status = "in_match"
+			GameManager.match_ended = false
+			for pid in players.keys():
+				players[pid]["alive"] = true
+			if bool(data.get("reset_positions", false)):
+				_respawn_local_player_at_gate()
+		"teams_rebalanced":
+			for mv in data.get("moves", []):
+				if int(mv.get("peer", 0)) == my_id and String(mv.get("to", "")) in TEAMS:
+					local_team = String(mv["to"])
+					IntelBus.intel_feed_updated.emit("AUTO-BALANCE: YOU NOW PLAY FOR TEAM %s" % team_label(local_team).to_upper())
 		"join_rejected":
 			connection_status_changed.emit("ROOM [%s] REJECTED: %s" % [String(data.get("room", active_room)).to_upper(), String(data.get("reason", "?"))], true)
 
+
+## Server round_started (CTF rounds / match start): put the local player back on their breakout gate.
+func _respawn_local_player_at_gate() -> void:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return
+	var p: Variant = tree.current_scene.get("player")
+	if p is Node and is_instance_valid(p) and (p as Node).has_method("respawn_at_team_gate"):
+		(p as Node).call("respawn_at_team_gate", local_team)
 
 ## =============================================================================================================
 ## SERVER: ROOM ROUTER (v0.5 PB-12). Everything below only runs on the dedicated server.
@@ -893,6 +942,7 @@ func _server_register_peer(pid: int, callsign: String, team: String, bracket_id:
 	info["bracket"] = bracket_id if bracket_id in ["speedball", "woodsball", "pump"] else "speedball"
 	info["ready"] = is_ready
 	info["room"] = rid
+	info["peer_id"] = pid
 	info["team"] = _server_choose_team(room, pid, normalize_team(team), is_new, String(info.get("team", "")))
 	room["players"][pid] = info
 	players[pid] = info
@@ -903,13 +953,51 @@ func _server_register_peer(pid: int, callsign: String, team: String, bracket_id:
 	print("[NetworkLobby] Registered peer %d: %s (Team %s, Bracket %s, Room %s, %d/%d)" % [pid, info["name"], info["team"], info["bracket"], rid, room["players"].size(), MAX_PER_TEAM * 2])
 	_broadcast_room_state(rid)
 
-## Phase-1 placeholder balance (replaced by auto team balance below).
+## v0.5 auto team balance. A joining player goes to the smaller team (ties -> ALPHA/red). A requested team= is
+## honoured only when it would not unbalance the room (the requested side is not already bigger) and has room.
+## No switching while a match is running. Pure function of the room so tests can call it directly.
 func _server_choose_team(room: Dictionary, pid: int, requested: String, is_new: bool, current: String) -> String:
 	var c := room_team_counts(room, pid)
-	var want := requested if not requested.is_empty() else (current if not current.is_empty() else "ALPHA")
-	if int(c[want]) >= MAX_PER_TEAM:
-		want = other_team(want)
-	return want
+	var smaller := "ALPHA" if int(c["ALPHA"]) <= int(c["BRAVO"]) else "BRAVO"
+	if int(c[smaller]) >= MAX_PER_TEAM:
+		smaller = other_team(smaller)
+	if not is_new and current in TEAMS:
+		if bool(room["match"].get("active", false)):
+			return current
+		if requested.is_empty() or requested == current:
+			return current
+		if int(c[requested]) <= int(c[other_team(requested)]) and int(c[requested]) < MAX_PER_TEAM:
+			return requested
+		return current
+	if requested in TEAMS and int(c[requested]) <= int(c[other_team(requested)]) and int(c[requested]) < MAX_PER_TEAM:
+		return requested
+	return smaller
+
+## Between rounds / matches: if the teams differ by 2+, move the most recent joiners from the bigger team until
+## the difference is <= 1. Returns [{peer, from, to}] and emits teams_rebalanced to the room when anything moved.
+func _rebalance_room_teams(room: Dictionary) -> Array:
+	var moves: Array = []
+	var c := room_team_counts(room)
+	var order: Array = room.get("join_order", []).duplicate()
+	order.reverse()
+	while absi(int(c["ALPHA"]) - int(c["BRAVO"])) >= 2:
+		var big := "ALPHA" if int(c["ALPHA"]) > int(c["BRAVO"]) else "BRAVO"
+		var moved := false
+		for pid in order:
+			var info: Dictionary = room["players"].get(pid, {})
+			if not info.is_empty() and String(info.get("team", "")) == big:
+				info["team"] = other_team(big)
+				c[big] = int(c[big]) - 1
+				c[other_team(big)] = int(c[other_team(big)]) + 1
+				moves.append({"peer": int(pid), "name": info.get("name", ""), "from": big, "to": other_team(big)})
+				order.erase(pid)
+				moved = true
+				break
+		if not moved:
+			break
+	if not moves.is_empty():
+		_send_room_event(String(room["id"]), "teams_rebalanced", {"moves": moves, "red": c["ALPHA"], "blue": c["BRAVO"]})
+	return moves
 
 func _server_remove_peer(pid: int) -> void:
 	var rid := String(peer_room.get(pid, ""))
@@ -959,7 +1047,7 @@ func _server_on_fire(pid: int, origin: Vector3, dir: Vector3, speed: float) -> v
 		return
 	if not _server_accept_shot(pid, origin, dir.normalized(), speed):
 		return
-	_send_room(rid, &"rpc_fire_paintball", [origin, dir.normalized(), clampf(speed, 1.0, 120.0), pid], pid)
+	_send_room(rid, &"rpc_fire_paintball", [origin, dir.normalized(), clampf(speed, MIN_MUZZLE_FPS, MAX_MUZZLE_FPS), pid], pid)
 
 func _server_on_hit_report(shooter: int, victim: int, hit_pos: Vector3) -> void:
 	var rid := String(peer_room.get(shooter, ""))
@@ -985,7 +1073,7 @@ func _server_apply_elimination(room: Dictionary, shooter: int, victim: int, reas
 		if not s.is_empty():
 			s["kills"] = int(s.get("kills", 0)) + 1
 	v["alive"] = false
-	v["dead_since_ms"] = Time.get_ticks_msec()
+	v["dead_since_ms"] = _rules_now()
 	_send_room_event(String(room["id"]), "player_eliminated", {
 		"victim": victim, "victim_name": v.get("name", ""), "victim_team": v.get("team", ""),
 		"shooter": shooter, "shooter_name": s.get("name", "Enemy"), "shooter_team": s.get("team", ""),
@@ -1035,48 +1123,483 @@ func _server_tick(delta: float) -> void:
 		_tick_room_match(room, delta)
 	_tick_lobby_state_file(delta)
 
-## --- match rules hooks (phase 1: minimal; replaced by server-authoritative rules) ---
+## =============================================================================================================
+## SERVER-AUTHORITATIVE MATCH RULES (v0.5). One state machine per room. See docs/NETWORK_EVENTS.md.
+##   deathmatch : first team to DM_KILLS_TO_WIN kills, respawn ~1s after an elimination.
+##   ctf        : one life per round, best of 5 (first to CTF_ROUNDS_TO_WIN). A round ends on a flag capture or when a
+##                whole team is eliminated. One flag per base; the server owns pickup / drop / return / capture.
+##   bots_test  : bots on (fill_bots), kills tracked, no win condition.
+## phase: "waiting" (lobby, practice hits are not scored) -> "live" -> ("intermission" -> "live")* -> "waiting".
+## =============================================================================================================
+const DM_KILLS_TO_WIN: int = 10
+const CTF_ROUNDS_TO_WIN: int = 3
+const CTF_BEST_OF: int = 5
+const DM_RESPAWN_MS: int = 1000
+const PRACTICE_RESPAWN_MS: int = 1000
+const ROUND_INTERMISSION_MS: int = 4000
+const FLAG_PICKUP_RADIUS: float = 2.35
+const FLAG_CAPTURE_RADIUS: float = 4.2
+const FLAG_AUTO_RETURN_MS: int = 30000
+const TEAM_BASE_Z: float = 45.5 # ALPHA/red base +Z, BRAVO/blue base -Z (the breakout gates)
+## Test hook: when >= 0 it replaces Time.get_ticks_msec() for the rules clock.
+var rules_clock_override_ms: int = -1
+
+func _rules_now() -> int:
+	return rules_clock_override_ms if rules_clock_override_ms >= 0 else Time.get_ticks_msec()
+
+static func team_base_position(team: String) -> Vector3:
+	return Vector3(0.0, 0.0, TEAM_BASE_Z if team == "ALPHA" else -TEAM_BASE_Z)
 
 func _new_match_state() -> Dictionary:
-	return {"active": false}
+	return {
+		"active": false, "phase": "waiting", "mode": "", "round": 0,
+		"score": {"ALPHA": 0, "BRAVO": 0}, "kills": {"ALPHA": 0, "BRAVO": 0},
+		"flags": _new_flags(), "phase_until_ms": 0, "winner": "",
+	}
 
-func _public_match_state(_room: Dictionary) -> Dictionary:
-	return {}
+func _new_flags() -> Dictionary:
+	var f := {}
+	for t in TEAMS:
+		f[t] = {"state": "home", "carrier": 0, "pos": team_base_position(t), "dropped_ms": 0}
+	return f
 
-func _on_player_joined_room(_room: Dictionary, _pid: int) -> void:
-	pass
+static func _team_dict_to_colors(d: Dictionary) -> Dictionary:
+	return {"red": int(d.get("ALPHA", 0)), "blue": int(d.get("BRAVO", 0))}
 
-func _on_player_left_room(_room: Dictionary, _pid: int) -> void:
-	pass
+func _public_match_state(room: Dictionary) -> Dictionary:
+	var m: Dictionary = room.get("match", {})
+	if m.is_empty():
+		return {}
+	var flags := {}
+	for t in TEAMS:
+		var fl: Dictionary = m["flags"][t]
+		flags[team_label(t)] = {"team": t, "state": fl["state"], "carrier": fl["carrier"], "pos": fl["pos"]}
+	var mode := String(m.get("mode", "")) if bool(m.get("active", false)) else String(room["settings"]["mode"])
+	return {
+		"phase": m.get("phase", "waiting"), "mode": mode, "round": m.get("round", 0),
+		"score": _team_dict_to_colors(m.get("score", {})), "kills": _team_dict_to_colors(m.get("kills", {})),
+		"target": CTF_ROUNDS_TO_WIN if mode == "ctf" else (DM_KILLS_TO_WIN if mode == "deathmatch" else 0),
+		"best_of": CTF_BEST_OF if mode == "ctf" else 1, "flags": flags,
+	}
 
-func _on_player_moved(_room: Dictionary, _pid: int, _pos: Vector3) -> void:
-	pass
+func _room_mode(room: Dictionary) -> String:
+	var m: Dictionary = room["match"]
+	return String(m["mode"]) if bool(m.get("active", false)) else String(room["settings"]["mode"])
 
-func _on_player_eliminated(_room: Dictionary, _shooter: int, _victim: int) -> void:
-	pass
+func _is_live(room: Dictionary) -> bool:
+	return bool(room["match"].get("active", false)) and String(room["match"].get("phase", "")) == "live"
 
-func _match_counts_kill(_room: Dictionary) -> bool:
-	return true
+func _on_player_joined_room(room: Dictionary, pid: int) -> void:
+	var info: Dictionary = room["players"][pid]
+	info["alive"] = true
+	# One life per CTF round: a late joiner sits out until the next round starts.
+	if bool(room["match"].get("active", false)) and String(room["match"]["mode"]) == "ctf":
+		info["alive"] = false
+		info["dead_since_ms"] = _rules_now()
+		info["late_join"] = true
+
+func _on_player_left_room(room: Dictionary, pid: int) -> void:
+	_drop_flags_carried_by(room, pid, "carrier_left")
+	if _is_live(room) and String(room["match"]["mode"]) == "ctf":
+		_check_ctf_elimination(room)
+
+func _on_player_moved(room: Dictionary, pid: int, pos: Vector3) -> void:
+	if not _is_live(room) or String(room["match"]["mode"]) != "ctf":
+		return
+	var info: Dictionary = room["players"].get(pid, {})
+	if info.is_empty() or not bool(info.get("alive", true)):
+		return
+	var team := String(info.get("team", "ALPHA"))
+	var enemy := other_team(team)
+	var flags: Dictionary = room["match"]["flags"]
+	var own: Dictionary = flags[team]
+	var theirs: Dictionary = flags[enemy]
+	var flat := Vector2(pos.x, pos.z)
+	# Own flag lying in the field: touching it sends it home.
+	if String(own["state"]) == "dropped" and flat.distance_to(Vector2(own["pos"].x, own["pos"].z)) <= FLAG_PICKUP_RADIUS:
+		_set_flag(room, team, "home", 0, team_base_position(team), "returned", pid)
+	# Enemy flag at their base or dropped: pick it up.
+	if String(theirs["state"]) in ["home", "dropped"] and flat.distance_to(Vector2(theirs["pos"].x, theirs["pos"].z)) <= FLAG_PICKUP_RADIUS:
+		_set_flag(room, enemy, "carried", pid, pos, "picked_up", pid)
+	# Carrying the enemy flag back to your own base: capture (your own flag does not need to be home).
+	if String(theirs["state"]) == "carried" and int(theirs["carrier"]) == pid:
+		theirs["pos"] = pos
+		var base := team_base_position(team)
+		if flat.distance_to(Vector2(base.x, base.z)) <= FLAG_CAPTURE_RADIUS:
+			_set_flag(room, enemy, "home", 0, team_base_position(enemy), "captured", pid)
+			_end_ctf_round(room, team, "capture", pid)
+
+func _set_flag(room: Dictionary, flag_team: String, state: String, carrier: int, pos: Vector3, action: String, by_pid: int) -> void:
+	var fl: Dictionary = room["match"]["flags"][flag_team]
+	fl["state"] = state
+	fl["carrier"] = carrier
+	fl["pos"] = pos
+	fl["dropped_ms"] = _rules_now() if state == "dropped" else 0
+	var by_info: Dictionary = room["players"].get(by_pid, {})
+	_send_room_event(String(room["id"]), "flag_state_changed", {
+		"flag_team": flag_team, "flag": team_label(flag_team), "state": state, "action": action,
+		"carrier": carrier, "carrier_name": String(room["players"].get(carrier, {}).get("name", "")),
+		"by": by_pid, "by_name": String(by_info.get("name", "")), "pos": pos,
+	})
+
+func _drop_flags_carried_by(room: Dictionary, pid: int, action: String) -> void:
+	if not bool(room["match"].get("active", false)):
+		return
+	for t in TEAMS:
+		var fl: Dictionary = room["match"]["flags"][t]
+		if String(fl["state"]) == "carried" and int(fl["carrier"]) == pid:
+			var p: Vector3 = fl["pos"]
+			var info: Dictionary = room["players"].get(pid, players.get(pid, {}))
+			if info.has("state"):
+				p = info["state"]["pos"]
+			_set_flag(room, t, "dropped", 0, Vector3(clampf(p.x, -48.0, 48.0), 0.0, clampf(p.z, -46.0, 46.0)), action, pid)
+
+func _on_player_eliminated(room: Dictionary, shooter: int, victim: int) -> void:
+	if not _is_live(room):
+		return
+	var mode := String(room["match"]["mode"])
+	var s: Dictionary = room["players"].get(shooter, {})
+	var v: Dictionary = room["players"].get(victim, {})
+	if mode == "ctf":
+		_drop_flags_carried_by(room, victim, "carrier_eliminated")
+		_check_ctf_elimination(room)
+		return
+	if s.is_empty() or v.is_empty() or String(s.get("team", "")) == String(v.get("team", "")):
+		return
+	var st := String(s["team"])
+	room["match"]["kills"][st] = int(room["match"]["kills"][st]) + 1
+	if mode == "deathmatch" and int(room["match"]["kills"][st]) >= DM_KILLS_TO_WIN:
+		_end_room_match(room, st, "kills")
+
+func _match_counts_kill(room: Dictionary) -> bool:
+	return _is_live(room)
+
+func _alive_counts(room: Dictionary) -> Dictionary:
+	var c := {"ALPHA": 0, "BRAVO": 0}
+	for pid in room["players"].keys():
+		var info: Dictionary = room["players"][pid]
+		if bool(info.get("alive", true)):
+			c[String(info.get("team", "ALPHA"))] = int(c[String(info.get("team", "ALPHA"))]) + 1
+	return c
+
+func _check_ctf_elimination(room: Dictionary) -> void:
+	if not _is_live(room):
+		return
+	var tc := room_team_counts(room)
+	if int(tc["ALPHA"]) == 0 or int(tc["BRAVO"]) == 0:
+		return # needs both teams present; a one-sided room can still win by capture
+	var ac := _alive_counts(room)
+	if int(ac["ALPHA"]) == 0 and int(ac["BRAVO"]) == 0:
+		_end_ctf_round(room, "", "double_elimination", 0)
+	elif int(ac["ALPHA"]) == 0:
+		_end_ctf_round(room, "BRAVO", "elimination", 0)
+	elif int(ac["BRAVO"]) == 0:
+		_end_ctf_round(room, "ALPHA", "elimination", 0)
+
+func _end_ctf_round(room: Dictionary, winner: String, reason: String, by_pid: int) -> void:
+	var m: Dictionary = room["match"]
+	if String(m["phase"]) != "live":
+		return
+	if winner in TEAMS:
+		m["score"][winner] = int(m["score"][winner]) + 1
+	m["phase"] = "intermission"
+	m["phase_until_ms"] = _rules_now() + ROUND_INTERMISSION_MS
+	var rid := String(room["id"])
+	_send_room_event(rid, "round_ended", {
+		"round": m["round"], "winner": winner, "winner_color": team_label(winner) if winner in TEAMS else "",
+		"reason": reason, "by": by_pid, "score": _team_dict_to_colors(m["score"]),
+		"next_round_in_ms": ROUND_INTERMISSION_MS,
+	})
+	if winner in TEAMS and int(m["score"][winner]) >= CTF_ROUNDS_TO_WIN:
+		_end_room_match(room, winner, "rounds")
+		return
+	_broadcast_room_state(rid)
 
 func _start_room_match(room: Dictionary) -> void:
-	room["match"]["active"] = true
 	var rid := String(room["id"])
+	var mode := String(room["settings"]["mode"])
+	var m := _new_match_state()
+	m["active"] = true
+	m["mode"] = mode
+	room["match"] = m
+	_rebalance_room_teams(room)
 	for pid in room["players"].keys():
-		_send(int(pid), &"notify_match_start", [rid, String(room["players"][pid].get("bracket", "speedball")), String(room["settings"]["mode"]) == "bots_test"])
+		var info: Dictionary = room["players"][pid]
+		info["kills"] = 0
+		info["deaths"] = 0
+		info["alive"] = true
+		info.erase("late_join")
+	_broadcast_room_state(rid)
+	for pid in room["players"].keys():
+		_send(int(pid), &"notify_match_start", [rid, String(room["players"][pid].get("bracket", "speedball")), mode == "bots_test"])
+	_start_round(room, false)
+
+func _start_round(room: Dictionary, rebalance: bool) -> void:
+	var m: Dictionary = room["match"]
+	var rid := String(room["id"])
+	if rebalance:
+		_rebalance_room_teams(room)
+	m["round"] = int(m["round"]) + 1
+	m["phase"] = "live"
+	m["phase_until_ms"] = 0
+	m["flags"] = _new_flags()
+	for pid in room["players"].keys():
+		var info: Dictionary = room["players"][pid]
+		info["alive"] = true
+		info.erase("late_join")
+	_send_room_event(rid, "round_started", {
+		"round": m["round"], "mode": m["mode"], "score": _team_dict_to_colors(m["score"]),
+		"kills": _team_dict_to_colors(m["kills"]), "reset_positions": true,
+		"target": CTF_ROUNDS_TO_WIN if String(m["mode"]) == "ctf" else (DM_KILLS_TO_WIN if String(m["mode"]) == "deathmatch" else 0),
+	})
+	_broadcast_room_state(rid)
+
+func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
+	var m: Dictionary = room["match"]
+	var rid := String(room["id"])
+	var mode := String(m["mode"])
+	var score: Dictionary = m["score"] if mode == "ctf" else m["kills"]
+	_send_room_event(rid, "match_ended", {
+		"winner": winner, "winner_color": team_label(winner) if winner in TEAMS else "", "reason": reason,
+		"mode": mode, "score": _team_dict_to_colors(score), "kills": _team_dict_to_colors(m["kills"]),
+		"rounds": m["round"],
+	})
+	var fresh := _new_match_state()
+	fresh["winner"] = winner
+	room["match"] = fresh
+	for pid in room["players"].keys():
+		room["players"][pid]["alive"] = true
+	_rebalance_room_teams(room)
 	_broadcast_room_state(rid)
 
 func _tick_room_match(room: Dictionary, _delta: float) -> void:
-	var now := Time.get_ticks_msec()
+	var now := _rules_now()
+	var m: Dictionary = room["match"]
+	var active := bool(m.get("active", false))
+	var mode := String(m.get("mode", ""))
+	if active and String(m["phase"]) == "intermission" and now >= int(m["phase_until_ms"]):
+		_start_round(room, true)
+		return
+	var revived := false
 	for pid in room["players"].keys():
 		var info: Dictionary = room["players"][pid]
-		if not bool(info.get("alive", true)) and now - int(info.get("dead_since_ms", 0)) > 1000:
+		if bool(info.get("alive", true)):
+			continue
+		var wait_ms := DM_RESPAWN_MS if active else PRACTICE_RESPAWN_MS
+		if active and mode == "ctf":
+			continue # one life per round
+		if now - int(info.get("dead_since_ms", 0)) >= wait_ms:
 			info["alive"] = true
+			revived = true
+	if active and mode == "ctf" and String(m["phase"]) == "live":
+		for t in TEAMS:
+			var fl: Dictionary = m["flags"][t]
+			if String(fl["state"]) == "dropped" and now - int(fl["dropped_ms"]) >= FLAG_AUTO_RETURN_MS:
+				_set_flag(room, t, "home", 0, team_base_position(t), "auto_returned", 0)
+	if revived:
+		_broadcast_room_state(String(room["id"]))
 
-func _server_accept_shot(_pid: int, _origin: Vector3, _dir: Vector3, _speed: float) -> bool:
+## =============================================================================================================
+## PB-13 SERVER HIT VALIDATION. Clients only *report* hits; the server checks them and owns eliminations.
+##   shot  : shooter alive, not under the knee-slide / dive fire lock (packed_stance bits 16/32 + 0.10s recovery),
+##           muzzle within SHOT_ORIGIN_TOLERANCE of the shooter's last reported position, sane muzzle velocity.
+##   hit   : same room, different teams, both alive, a matching accepted shot from the last HIT_SHOT_WINDOW_MS
+##           (range <= HIT_MAX_RANGE, aim within HIT_AIM_TOLERANCE_DEG after gravity drop), hit point inside the
+##           victim's stance-sized hitbox at some point in their recent movement history (lag tolerant), and clear
+##           line of sight against the room map's static geometry (arc or straight chord).
+## =============================================================================================================
+const BALL_GRAVITY: float = 9.81 # mirrors PaintBallistics.GRAVITY
+const BALL_AIR_DRAG: float = 0.26 # mirrors PaintBallistics.AIR_DRAG
+const MIN_MUZZLE_FPS: float = 150.0
+const MAX_MUZZLE_FPS: float = 300.0
+const SHOT_ORIGIN_TOLERANCE: float = 2.0
+const HIT_SHOT_WINDOW_MS: int = 3000
+const HIT_MAX_RANGE: float = 90.0
+const HIT_AIM_TOLERANCE_DEG: float = 12.0
+const HIT_HISTORY_SLACK_MS: int = 250
+const HIT_BOX_TOP := [1.95, 1.30, 0.80, 0.80] # standing, crouching, prone, (spare) - feet-relative metres
+const HIT_BOX_TOP_SLIDE: float = 1.0
+const HIT_BOX_TOP_DIVE: float = 0.80
+const HIT_BOX_BOTTOM: float = -0.35
+const HIT_BOX_RADIUS: float = 0.9
+const HIT_BOX_RADIUS_PRONE: float = 1.3
+const LOS_END_SLACK: float = 0.45
+var rejected_shots: Dictionary = {} # reason -> count
+var rejected_hits: Dictionary = {} # reason -> count
+## map_id -> World3D holding a private, collision-only copy of that arena (server only, see ensure_collision_worlds).
+var collision_worlds: Dictionary = {}
+
+static func muzzle_fps_to_mps(fps: float) -> float:
+	return fps * 0.3048 * 0.68 # same conversion as PaintBallistics.spawn_paintball
+
+func _count_reject(bucket: Dictionary, reason: String) -> void:
+	bucket[reason] = int(bucket.get(reason, 0)) + 1
+
+func _server_accept_shot(pid: int, origin: Vector3, dir: Vector3, speed: float) -> bool:
+	var info: Dictionary = players.get(pid, {})
+	if info.is_empty():
+		return false
+	var reason := ""
+	if not bool(info.get("alive", true)):
+		reason = "shooter_dead"
+	elif not is_remote_fire_allowed(pid):
+		reason = "fire_lock"
+		rejected_movement_lock_shots += 1
+	elif info.has("state") and Vector3(info["state"]["pos"]).distance_to(origin - Vector3(0.0, 1.0, 0.0)) > SHOT_ORIGIN_TOLERANCE + 1.0:
+		reason = "origin_mismatch"
+	if not reason.is_empty():
+		_count_reject(rejected_shots, reason)
+		return false
+	var now := _rules_now()
+	var shots: Array = info.get("shots", [])
+	shots.append({"ms": now, "origin": origin, "dir": dir, "speed": clampf(speed, MIN_MUZZLE_FPS, MAX_MUZZLE_FPS)})
+	while shots.size() > 0 and (now - int(shots[0]["ms"]) > HIT_SHOT_WINDOW_MS or shots.size() > 48):
+		shots.pop_front()
+	info["shots"] = shots
 	return true
 
-func _server_validate_hit(_shooter: int, _victim: int, _hit_pos: Vector3) -> Dictionary:
-	return {"ok": true}
+static func stance_hitbox_top(stance_idx: int) -> float:
+	if (stance_idx & STANCE_BIT_DIVING) != 0:
+		return HIT_BOX_TOP_DIVE
+	if (stance_idx & STANCE_BIT_SLIDING) != 0:
+		return HIT_BOX_TOP_SLIDE
+	return float(HIT_BOX_TOP[stance_idx & 3])
+
+static func point_in_stance_box(hit_pos: Vector3, feet: Vector3, stance_idx: int) -> bool:
+	var prone := (stance_idx & 3) == 2 or (stance_idx & STANCE_BIT_DIVING) != 0
+	var r := HIT_BOX_RADIUS_PRONE if prone else HIT_BOX_RADIUS
+	if Vector2(hit_pos.x - feet.x, hit_pos.z - feet.z).length() > r:
+		return false
+	var dy := hit_pos.y - feet.y
+	return dy >= HIT_BOX_BOTTOM and dy <= stance_hitbox_top(stance_idx)
+
+func _server_validate_hit(shooter: int, victim: int, hit_pos: Vector3) -> Dictionary:
+	var s: Dictionary = players.get(shooter, {})
+	var v: Dictionary = players.get(victim, {})
+	var verdict := _validate_hit_inner(s, v, hit_pos)
+	if not bool(verdict.get("ok", false)):
+		_count_reject(rejected_hits, String(verdict.get("reason", "invalid")))
+	return verdict
+
+func _validate_hit_inner(s: Dictionary, v: Dictionary, hit_pos: Vector3) -> Dictionary:
+	if s.is_empty() or v.is_empty():
+		return {"ok": false, "reason": "unknown_player"}
+	if not hit_pos.is_finite():
+		return {"ok": false, "reason": "no_hit_position"}
+	if String(s.get("team", "")) == String(v.get("team", "")):
+		return {"ok": false, "reason": "friendly_fire"}
+	if not bool(v.get("alive", true)):
+		return {"ok": false, "reason": "victim_dead"}
+	var now := _rules_now()
+	var dead_since := int(s.get("dead_since_ms", -1)) if not bool(s.get("alive", true)) else -1
+	# 1) a matching accepted shot (fired while alive; a ball in flight when the shooter dies still counts)
+	var shot: Dictionary = {}
+	var best_angle := 999.0
+	for sh in s.get("shots", []):
+		var age := now - int(sh["ms"])
+		if age > HIT_SHOT_WINDOW_MS or age < -50:
+			continue
+		if dead_since >= 0 and int(sh["ms"]) > dead_since:
+			continue
+		var o: Vector3 = sh["origin"]
+		var dist := o.distance_to(hit_pos)
+		if dist > HIT_MAX_RANGE:
+			continue
+		var t := dist / maxf(muzzle_fps_to_mps(float(sh["speed"])), 1.0)
+		var aim := hit_pos + Vector3(0.0, 0.5 * BALL_GRAVITY * t * t, 0.0) - o
+		var ang := 0.0 if aim.length() < 0.5 else rad_to_deg(Vector3(sh["dir"]).angle_to(aim))
+		if ang < best_angle:
+			best_angle = ang
+			shot = sh
+	if dead_since >= 0 and shot.is_empty():
+		return {"ok": false, "reason": "shooter_dead"}
+	if shot.is_empty():
+		return {"ok": false, "reason": "no_matching_shot"}
+	if best_angle > HIT_AIM_TOLERANCE_DEG:
+		return {"ok": false, "reason": "aim_mismatch", "angle": best_angle}
+	# 2) stance-sized hitbox somewhere in the victim's recent history (shot time - slack .. now)
+	var in_box := false
+	var samples: Array = v.get("history", [])
+	if samples.is_empty() and v.has("state"):
+		samples = [[now, v["state"]["pos"], int(v["state"]["stance"])]]
+	if samples.is_empty():
+		return {"ok": false, "reason": "no_victim_state"}
+	for smp in samples:
+		if int(smp[0]) < int(shot["ms"]) - HIT_HISTORY_SLACK_MS and smp != samples[samples.size() - 1]:
+			continue
+		if point_in_stance_box(hit_pos, smp[1], int(smp[2])):
+			in_box = true
+			break
+	if not in_box:
+		return {"ok": false, "reason": "outside_hitbox"}
+	# 3) line of sight against the room map's static geometry
+	var room: Dictionary = rooms.get(String(s.get("room", "")), {})
+	var map_id := String(room.get("settings", {}).get("map", "speedball")) if not room.is_empty() else "speedball"
+	var los := line_of_sight_status(map_id, shot["origin"], shot["dir"], float(shot["speed"]), hit_pos)
+	if los == "blocked":
+		return {"ok": false, "reason": "no_line_of_sight"}
+	return {"ok": true, "angle": best_angle, "los": los}
+
+## Builds one private World3D per map containing a collision copy of the arena (bunkers, trees, wreck, walls).
+## Called on the real dedicated server; tests call it explicitly. Returns the number of worlds available.
+func ensure_collision_worlds() -> int:
+	for map_id in MAPS:
+		if collision_worlds.has(map_id):
+			continue
+		var packed := load("res://scenes/maps/speedball_arena_01/speedball_arena_01.tscn") as PackedScene
+		if packed == null:
+			break
+		var vp := SubViewport.new()
+		vp.name = "CollisionWorld_%s" % map_id
+		vp.own_world_3d = true
+		vp.disable_3d = false
+		vp.size = Vector2i(2, 2)
+		vp.render_target_update_mode = SubViewport.UPDATE_DISABLED
+		add_child(vp)
+		var arena := packed.instantiate()
+		vp.add_child(arena)
+		if map_id != "speedball" and arena.has_method("switch_arena_map"):
+			arena.call("switch_arena_map", map_id)
+		collision_worlds[map_id] = vp.find_world_3d()
+	return collision_worlds.size()
+
+func _ray_blocked(space: PhysicsDirectSpaceState3D, a: Vector3, b: Vector3) -> bool:
+	if a.distance_to(b) < 0.01:
+		return false
+	var q := PhysicsRayQueryParameters3D.create(a, b)
+	q.collide_with_areas = false
+	return not space.intersect_ray(q).is_empty()
+
+## "clear", "blocked" or "unchecked" (no collision world for this map). Accepts if either the straight chord or the
+## gravity+drag arc reaches the hit point (stopping LOS_END_SLACK short of it so the victim's cover lip still counts).
+func line_of_sight_status(map_id: String, origin: Vector3, dir: Vector3, speed_fps: float, hit_pos: Vector3) -> String:
+	var world: World3D = collision_worlds.get(normalize_map(map_id), null)
+	if world == null:
+		return "unchecked"
+	var space := world.direct_space_state
+	if space == null:
+		return "unchecked"
+	var total := origin.distance_to(hit_pos)
+	if total <= LOS_END_SLACK:
+		return "clear"
+	var end := hit_pos.move_toward(origin, LOS_END_SLACK)
+	if not _ray_blocked(space, origin, end):
+		return "clear"
+	# Arc: integrate the same gravity + drag as PaintBallistics until we pass the hit point.
+	var p := origin
+	var vel := dir.normalized() * muzzle_fps_to_mps(speed_fps)
+	var dt := 1.0 / 60.0
+	for _i in range(0, 400):
+		vel.y -= BALL_GRAVITY * dt
+		vel *= maxf(0.0, 1.0 - BALL_AIR_DRAG * dt)
+		var nxt := p + vel * dt
+		if nxt.distance_to(origin) >= total - LOS_END_SLACK:
+			nxt = end if nxt.distance_to(end) < 3.0 else nxt
+			return "blocked" if _ray_blocked(space, p, nxt) else "clear"
+		if _ray_blocked(space, p, nxt):
+			return "blocked"
+		p = nxt
+	return "blocked"
 
 ## =============================================================================================================
 ## SERVER -> server.js IPC (v0.5 PB-12): the public lobby list is written as JSON to LOBBY_STATE_FILE (env) or
