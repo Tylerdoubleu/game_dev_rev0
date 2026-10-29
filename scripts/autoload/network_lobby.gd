@@ -485,6 +485,33 @@ func rpc_sync_player_state(pos: Vector3, body_yaw: float, head_pitch: float, lea
 			return
 	_update_or_spawn_remote_player(sender_id, pos, body_yaw, head_pitch, lean, stance_idx, team, callsign, eliminated)
 
+# v0.4.5: knee-slide / Superman-dive fire lock for other peers. Shots are relayed peer-to-peer (the dedicated
+# server ignores rpc_fire_paintball), so every receiving client validates against the shooter's latest
+# packed_stance: reject while bit 16 (knee-slide) or bit 32 (dive) is set, and for a short recovery after it clears.
+const STANCE_BIT_SLIDING: int = 16
+const STANCE_BIT_DIVING: int = 32
+const STANCE_FIRE_LOCK_BITS: int = STANCE_BIT_SLIDING | STANCE_BIT_DIVING
+## Slightly shorter than the local 0.15s lock to absorb the 0.05s state-tick + jitter (no false rejects).
+const REMOTE_SLIDE_FIRE_RECOVERY_SEC: float = 0.10
+var remote_move_lock_state: Dictionary = {} # peer_id -> {"locked": bool, "cleared_ms": int}
+var rejected_movement_lock_shots: int = 0
+
+func _note_remote_stance_bits(peer_id: int, stance_idx: int) -> void:
+	var st: Dictionary = remote_move_lock_state.get(peer_id, {"locked": false, "cleared_ms": -100000})
+	var locked := (stance_idx & STANCE_FIRE_LOCK_BITS) != 0
+	if bool(st["locked"]) and not locked:
+		st["cleared_ms"] = Time.get_ticks_msec()
+	st["locked"] = locked
+	remote_move_lock_state[peer_id] = st
+
+func is_remote_fire_allowed(peer_id: int) -> bool:
+	if not remote_move_lock_state.has(peer_id):
+		return true
+	var st: Dictionary = remote_move_lock_state[peer_id]
+	if bool(st["locked"]):
+		return false
+	return float(Time.get_ticks_msec() - int(st["cleared_ms"])) >= REMOTE_SLIDE_FIRE_RECOVERY_SEC * 1000.0
+
 func broadcast_paintball_shot(origin: Vector3, dir: Vector3, speed: float) -> void:
 	if not is_online_client():
 		return
@@ -499,6 +526,12 @@ func rpc_fire_paintball(origin: Vector3, dir: Vector3, speed: float, shooter_pee
 		return
 	var scene_root := get_tree().current_scene
 	if scene_root == null:
+		return
+	var rpc_sender := multiplayer.get_remote_sender_id() if peer != null else 0
+	if rpc_sender > 1 and rpc_sender != shooter_peer_id:
+		return # spoofed shooter id
+	if not is_remote_fire_allowed(shooter_peer_id):
+		rejected_movement_lock_shots += 1
 		return
 	var shooter_node: Node = remote_player_nodes.get(shooter_peer_id, null)
 	var shooter_team: String = "BRAVO"
@@ -581,6 +614,7 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 	if scene_root == null:
 		return
 
+	_note_remote_stance_bits(peer_id, stance_idx)
 	var avatar: StaticBody3D = remote_player_nodes.get(peer_id, null) as StaticBody3D
 	if avatar == null or not is_instance_valid(avatar):
 		avatar = _create_remote_player_avatar(peer_id, team, callsign)
@@ -677,6 +711,7 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	return body
 
 func _remove_remote_player_node(peer_id: int) -> void:
+	remote_move_lock_state.erase(peer_id)
 	if remote_player_nodes.has(peer_id):
 		var node: Node = remote_player_nodes[peer_id]
 		if is_instance_valid(node):

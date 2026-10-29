@@ -39,11 +39,15 @@ func clear_all() -> void:
 	splat_nodes.clear()
 	mist_burst_count = 0
 
+## v0.4.5: running count of spawned paintballs (tests / diagnostics)
+var total_spawned: int = 0
+
 func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shooter: Node, color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT) -> void:
 	var scene_root: Node = get_tree().current_scene
 	if scene_root == null:
 		return
 
+	total_spawned += 1
 	if projectiles.size() >= MAX_ACTIVE_BALLS:
 		var oldest: Dictionary = projectiles.pop_front()
 		if is_instance_valid(oldest["node"]):

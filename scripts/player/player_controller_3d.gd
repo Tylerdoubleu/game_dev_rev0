@@ -17,6 +17,10 @@ const StanceRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
 signal player_eliminated(killer_name: String)
+## v0.4.5: emitted when the movement fire lock engages (knee-slide / Superman-dive start) and releases (end of the
+## post-move recovery). reason is "slide", "dive", or "" on release. Viewmodel/HUD hook: also read
+## is_fire_locked_by_movement(), get_fire_lock_reason() and get_movement_fire_lock_progress() each frame.
+signal movement_fire_lock_changed(locked: bool, reason: String)
 
 enum Stance {
 	STANDING,
@@ -30,6 +34,8 @@ const CROUCH_SPEED: float = 3.6
 const PRONE_SPEED: float = 1.85
 const SLIDE_INITIAL_SPEED: float = 17.5
 const SLIDE_DURATION: float = 0.85
+## v0.4.5: no firing during the Shift+Q knee-slide or Shift+C Superman dive, plus a short trigger-recovery after.
+const MOVEMENT_FIRE_RECOVERY: float = 0.15
 const DIVE_INITIAL_SPEED: float = 19.5
 const DIVE_DURATION: float = 0.95
 
@@ -62,6 +68,11 @@ var is_left_handed: bool = false
 
 var stance: Stance = Stance.STANDING
 var slide_timer: float = 0.0
+var movement_fire_recovery_timer: float = 0.0
+var _movement_fire_lock_state: bool = false
+var _movement_fire_lock_reason: String = ""
+var _movement_fire_hint_shown: bool = false
+var movement_blocked_trigger_pulls: int = 0
 var dive_timer: float = 0.0
 var slide_dir: Vector3 = Vector3.ZERO
 var bob_time: float = 0.0
@@ -371,6 +382,9 @@ func _physics_process(delta: float) -> void:
 	if NetworkLobby.is_dedicated_server:
 		return
 	time_since_last_shot += delta
+	if movement_fire_recovery_timer > 0.0 and slide_timer <= 0.0 and dive_timer <= 0.0:
+		movement_fire_recovery_timer = maxf(0.0, movement_fire_recovery_timer - delta)
+	_update_movement_fire_lock_signal()
 	if _respawn_flash_timer > 0.0:
 		_respawn_flash_timer = maxf(0.0, _respawn_flash_timer - delta)
 	if breakout_boost_timer > 0.0:
@@ -444,12 +458,16 @@ func _update_movement_and_stance(delta: float) -> void:
 		dive_timer -= delta
 		if dive_timer <= 0.0:
 			dive_timer = 0.0
+			movement_fire_recovery_timer = MOVEMENT_FIRE_RECOVERY
+			_movement_fire_lock_reason = "dive"
 			stance = _clamp_stance_to_headroom(_resolve_held_stance(), true)
 			_emit_hud()
 	elif slide_timer > 0.0:
 		slide_timer -= delta
 		if slide_timer <= 0.0:
 			slide_timer = 0.0
+			movement_fire_recovery_timer = MOVEMENT_FIRE_RECOVERY
+			_movement_fire_lock_reason = "slide"
 			stance = _clamp_stance_to_headroom(_resolve_held_stance(), true)
 			_emit_hud()
 	else:
@@ -668,8 +686,54 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 		var bolt_kick := clampf(1.0 - (time_since_last_shot / 0.075), 0.0, 1.0)
 		electro_bolt.position.z = lerpf(0.13, 0.175, bolt_kick)
 
+## v0.4.5: true for the whole knee-slide (slide_timer > 0), the whole Superman dive (dive_timer > 0), and the
+## MOVEMENT_FIRE_RECOVERY window after either ends.
+func is_fire_locked_by_movement() -> bool:
+	return slide_timer > 0.0 or dive_timer > 0.0 or movement_fire_recovery_timer > 0.0
+
+## "slide" or "dive" while locked (during the move and its recovery), "" when free to fire.
+func get_fire_lock_reason() -> String:
+	if slide_timer > 0.0:
+		return "slide"
+	if dive_timer > 0.0:
+		return "dive"
+	if movement_fire_recovery_timer > 0.0:
+		return _movement_fire_lock_reason
+	return ""
+
+## True while in the post-slide/dive recovery tail only.
+func is_in_movement_fire_recovery() -> bool:
+	return slide_timer <= 0.0 and dive_timer <= 0.0 and movement_fire_recovery_timer > 0.0
+
+## 1.0 while sliding/diving, ramps 1.0 -> 0.0 across the recovery, 0.0 when free to fire.
+func get_movement_fire_lock_progress() -> float:
+	if slide_timer > 0.0 or dive_timer > 0.0:
+		return 1.0
+	return clampf(movement_fire_recovery_timer / MOVEMENT_FIRE_RECOVERY, 0.0, 1.0)
+
+func _update_movement_fire_lock_signal() -> void:
+	var locked := is_fire_locked_by_movement()
+	if slide_timer > 0.0:
+		_movement_fire_lock_reason = "slide"
+	elif dive_timer > 0.0:
+		_movement_fire_lock_reason = "dive"
+	if locked != _movement_fire_lock_state:
+		_movement_fire_lock_state = locked
+		if not locked:
+			_movement_fire_hint_shown = false # re-arm the one-shot hint for the next slide/dive
+		movement_fire_lock_changed.emit(locked, get_fire_lock_reason())
+		_emit_hud()
+
 func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 	if is_reloading_pod:
+		return
+	if is_fire_locked_by_movement():
+		# Silent block: no shot, paint, rate/ramp state, pump rack, 1-pull latch, FX or dry-fire click.
+		# Firing resumes on the next trigger pull after the slide/dive + recovery (no buffered/auto shot).
+		movement_blocked_trigger_pulls += 1
+		if not _movement_fire_hint_shown:
+			_movement_fire_hint_shown = true
+			status_banner_sent.emit("DIVING - CAN'T SHOOT" if get_fire_lock_reason() == "dive" else "SLIDING - CAN'T SHOOT", Color(1.0, 0.75, 0.3))
 		return
 
 	var bracket: Resource = GearRuleEnforcer.active_bracket
@@ -703,6 +767,8 @@ func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 		_fire_single_paintball(bracket)
 
 func _fire_single_paintball(bracket: Resource) -> void:
+	if is_fire_locked_by_movement():
+		return
 	if time_since_last_shot < GearRuleEnforcer.get_min_shot_interval():
 		return
 
@@ -849,6 +915,8 @@ func _emit_hud() -> void:
 		"hand": "LEFT HAND" if is_left_handed else "RIGHT HAND",
 		"stance": _get_stance_label(),
 		"reloading": is_reloading_pod,
+		"fire_locked_movement": is_fire_locked_by_movement(),
+		"fire_lock_reason": get_fire_lock_reason(),
 		"reload_pct": clamp(1.0 - (reload_timer / reload_duration), 0.0, 1.0) if is_reloading_pod else 0.0,
 		"pump_mode": bracket.trigger_mode == GearBracketDataScript.TriggerMode.PUMP_MANUAL if bracket else false,
 		"pump_racked": pump_racked,
