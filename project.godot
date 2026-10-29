@@ -20,6 +20,7 @@ GearRuleEnforcer="*res://scripts/autoload/gear_rule_enforcer.gd"
 IntelBus="*res://scripts/autoload/intel_bus.gd"
 PaintBallistics="*res://scripts/autoload/paint_ballistics.gd"
 NetworkLobby="*res://scripts/autoload/network_lobby.gd"
+LobbyEntryFlow="*res://scripts/autoload/lobby_entry_flow.gd"
 
 [display]
 
