@@ -70,6 +70,10 @@ func _on_countdown(seconds_left: int, _data: Dictionary = {}) -> void:
 	_refresh_controls()
 
 func _on_room_event(event_name: String, _data: Dictionary) -> void:
+	if event_name == "start_rejected":
+		_lock_note.text = "CAN'T START YET: each team needs at least one player (or pick TEST VS BOTS)." if String(_data.get("reason", "")) == "team_empty" else "START WAS REFUSED (%s)." % String(_data.get("reason", "?"))
+		_lock_note.add_theme_color_override("font_color", Color(1.0, 0.45, 0.3))
+		return
 	if event_name in ["match_start_cancelled", "match_ended", "round_started"]:
 		counting_down = false
 		_countdown.visible = false
@@ -125,6 +129,8 @@ func _refresh_controls() -> void:
 		_start_btn.text = "MATCH IN PROGRESS" if locked else ("START MATCH" if _online else "CONNECTING...")
 	if _ready_btn != null:
 		_ready_btn.text = "READY  [X]" if _ready_btn.button_pressed else "READY  [ ]"
+	_lock_note.remove_theme_color_override("font_color")
+	_lock_note.add_theme_color_override("font_color", Color(0.55, 0.56, 0.5))
 	_lock_note.text = "Settings are locked while a match is running." if locked else "Anyone in the lobby can change the field and game type until the match starts."
 
 func _my_id() -> int:

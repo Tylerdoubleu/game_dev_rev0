@@ -36,6 +36,8 @@ func _process(_d: float) -> bool:
 		_check(wr._countdown.visible and wr._countdown.text == "MATCH STARTS IN 5" and wr._start_btn.text in ["CANCEL START", "STARTING..."], "5s countdown shows; start button turns into cancel")
 		wr._on_room_event("match_start_cancelled", {})
 		_check(not wr._countdown.visible and wr._start_btn.text == "START MATCH", "cancel hides the countdown")
+		wr._on_room_event("start_rejected", {"reason": "team_empty"})
+		_check(wr._lock_note.text.begins_with("CAN'T START YET"), "team_empty refusal is explained")
 		wr._ready_btn.button_pressed = true
 		_check(nl.local_ready and wr._ready_btn.text == "READY  [X]", "READY toggle calls set_ready")
 		wr.apply_state({"room": "lobby_07", "status": "in_match", "match": {"phase": "live"}, "players": {}})
