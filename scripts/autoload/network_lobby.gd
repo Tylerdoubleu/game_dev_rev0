@@ -263,6 +263,10 @@ func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 	peer_room.clear()
 	rooms.clear()
 	_ensure_permanent_rooms()
+	lobby_state_file = _resolve_lobby_state_file()
+	if not lobby_state_file.is_empty():
+		write_lobby_state_file()
+		print("[NetworkLobby] Writing lobby state for /api/lobbies to %s" % lobby_state_file)
 	var edgegap_ip := OS.get_environment("ARBITRIUM_PUBLIC_IP")
 	var edgegap_tag := (" [Edgegap Public IP: %s]" % edgegap_ip) if not edgegap_ip.is_empty() else ""
 	print("[NetworkLobby] Dedicated WebSocket Server listening on 0.0.0.0:%d (%d permanent lobbies, %d per team)%s" % [port, PERMANENT_LOBBY_COUNT, MAX_PER_TEAM, edgegap_tag])
@@ -1074,11 +1078,92 @@ func _server_accept_shot(_pid: int, _origin: Vector3, _dir: Vector3, _speed: flo
 func _server_validate_hit(_shooter: int, _victim: int, _hit_pos: Vector3) -> Dictionary:
 	return {"ok": true}
 
-func _mark_lobby_state_dirty() -> void:
-	pass
+## =============================================================================================================
+## SERVER -> server.js IPC (v0.5 PB-12): the public lobby list is written as JSON to LOBBY_STATE_FILE (env) or
+## --lobby-state-file=PATH about once a second and shortly after any room change. server.js serves it as
+## GET /api/lobbies and GET /api/quickjoin. Written atomically (tmp + rename).
+## =============================================================================================================
+const LOBBY_STATE_WRITE_INTERVAL: float = 1.0
+const LOBBY_STATE_MIN_INTERVAL: float = 0.2
+var lobby_state_file: String = ""
+var _lobby_state_dirty: bool = true
+var _lobby_state_timer: float = 0.0
+var _lobby_state_since_write: float = 99.0
+var lobby_state_writes: int = 0
 
-func _tick_lobby_state_file(_delta: float) -> void:
-	pass
+func _resolve_lobby_state_file() -> String:
+	for arg in OS.get_cmdline_args() + OS.get_cmdline_user_args():
+		if arg.begins_with("--lobby-state-file="):
+			return arg.trim_prefix("--lobby-state-file=")
+	return OS.get_environment("LOBBY_STATE_FILE").strip_edges()
+
+static func team_label(team: String) -> String:
+	return "red" if team == "ALPHA" else "blue"
+
+## The permanent lobbies in the exact /api/lobbies row shape (minus join_url, which server.js adds).
+func get_public_lobby_list() -> Array:
+	var out: Array = []
+	for i in range(1, PERMANENT_LOBBY_COUNT + 1):
+		var rid := "lobby_%02d" % i
+		var room: Dictionary = rooms.get(rid, {})
+		if room.is_empty():
+			continue
+		var c := room_team_counts(room)
+		var mode := String(room["settings"]["mode"])
+		out.append({
+			"id": rid,
+			"name": String(room["name"]),
+			"map": String(room["settings"]["map"]),
+			"mode": mode,
+			"players": {"red": int(c["ALPHA"]), "blue": int(c["BRAVO"])},
+			"max_per_team": MAX_PER_TEAM,
+			"status": room_status_of(room),
+			"bots": mode == "bots_test",
+		})
+	return out
+
+func build_lobby_state_document() -> Dictionary:
+	var adhoc := 0
+	for rid in rooms.keys():
+		if not bool(rooms[rid]["permanent"]):
+			adhoc += 1
+	return {
+		"version": 1,
+		"generated_at": Time.get_unix_time_from_system(),
+		"max_per_team": MAX_PER_TEAM,
+		"lobbies": get_public_lobby_list(),
+		"private_rooms": adhoc,
+		"connected_peers": peer_room.size(),
+	}
+
+func write_lobby_state_file(path: String = "") -> bool:
+	var target := path if not path.is_empty() else lobby_state_file
+	if target.is_empty():
+		return false
+	var tmp := target + ".tmp"
+	var fa := FileAccess.open(tmp, FileAccess.WRITE)
+	if fa == null:
+		return false
+	fa.store_string(JSON.stringify(build_lobby_state_document()))
+	fa.close()
+	var err := DirAccess.rename_absolute(tmp, target)
+	if err == OK:
+		lobby_state_writes += 1
+	return err == OK
+
+func _mark_lobby_state_dirty() -> void:
+	_lobby_state_dirty = true
+
+func _tick_lobby_state_file(delta: float) -> void:
+	if lobby_state_file.is_empty():
+		return
+	_lobby_state_timer += delta
+	_lobby_state_since_write += delta
+	if (_lobby_state_dirty and _lobby_state_since_write >= LOBBY_STATE_MIN_INTERVAL) or _lobby_state_timer >= LOBBY_STATE_WRITE_INTERVAL:
+		_lobby_state_dirty = false
+		_lobby_state_timer = 0.0
+		_lobby_state_since_write = 0.0
+		write_lobby_state_file()
 
 ## --- REMOTE AVATARS ---
 func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float, _head_pitch: float, lean: float, stance_idx: int, team: String, callsign: String, eliminated: bool) -> void:

@@ -13,6 +13,7 @@ const net = require("net");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const lobbyApi = require("./lobby_api");
 
 const HTTP_PORT = parseInt(
   process.env.ARBITRIUM_PORT_HTTP_INTERNAL ||
@@ -27,6 +28,11 @@ const GODOT_WS_PORT = parseInt(
 );
 const WEB_ROOT = path.resolve(
   process.env.WEB_ROOT || path.join(__dirname, "..", "build", "web")
+);
+
+// v0.5: the headless Godot room router writes its real room state here; /api/lobbies serves it.
+const LOBBY_STATE_FILE = path.resolve(
+  process.env.LOBBY_STATE_FILE || path.join(require("os").tmpdir(), `paintball_lobbies_${GODOT_WS_PORT}.json`)
 );
 
 const MIME_TYPES = {
@@ -45,14 +51,17 @@ function startGodotServerIfRequested() {
   if (process.env.AUTO_START_GODOT !== "1") return;
   const linuxBin = path.resolve(__dirname, "..", "build", "linux", "paintball_server.x86_64");
   const cmd = fs.existsSync(linuxBin) ? linuxBin : "godot";
+  // v0.5: no --low-processor-mode (it sleeps between frames and throttles the room tick / 20 Hz snapshots);
+  // --max-fps caps the headless loop so it does not spin a whole core. GODOT_MAX_FPS overrides (default 60).
+  const maxFps = String(parseInt(process.env.GODOT_MAX_FPS || "60", 10) || 60);
   const args = fs.existsSync(linuxBin)
-    ? ["--headless", "--low-processor-mode", "--", "--server", `--port=${GODOT_WS_PORT}`]
-    : ["--headless", "--low-processor-mode", "--path", path.resolve(__dirname, ".."), "--", "--server", `--port=${GODOT_WS_PORT}`];
+    ? ["--headless", "--max-fps", maxFps, "--", "--server", `--port=${GODOT_WS_PORT}`]
+    : ["--headless", "--max-fps", maxFps, "--path", path.resolve(__dirname, ".."), "--", "--server", `--port=${GODOT_WS_PORT}`];
 
   console.log(`[Supervisor] Starting headless Godot server: ${cmd} ${args.join(" ")}`);
   godotProc = spawn(cmd, args, {
     stdio: "inherit",
-    env: { ...process.env, DEDICATED_SERVER: "1", WS_PORT: String(GODOT_WS_PORT) },
+    env: { ...process.env, DEDICATED_SERVER: "1", WS_PORT: String(GODOT_WS_PORT), LOBBY_STATE_FILE },
   });
   godotProc.on("exit", (code, sig) => {
     console.warn(`[Supervisor] Headless Godot exited (code=${code}, sig=${sig}). Restarting in 2s...`);
@@ -62,7 +71,68 @@ function startGodotServerIfRequested() {
 
 startGodotServerIfRequested();
 
+function readLobbyState(cb) {
+  fs.readFile(LOBBY_STATE_FILE, "utf8", (err, text) => {
+    if (err) return cb(null);
+    try {
+      cb(JSON.parse(text));
+    } catch (_) {
+      cb(null);
+    }
+  });
+}
+
+function sendJson(res, status, body, extraHeaders = {}) {
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    ...extraHeaders,
+  });
+  res.end(JSON.stringify(body));
+}
+
+function handleApi(req, res, parsedUrl) {
+  const cors = lobbyApi.apiCorsHeaders(req.headers.origin);
+  if (req.method === "OPTIONS") {
+    res.writeHead(204, cors);
+    res.end();
+    return;
+  }
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    sendJson(res, 405, { error: "method not allowed" }, { ...cors, Allow: "GET, OPTIONS" });
+    return;
+  }
+  readLobbyState((doc) => {
+    const out = lobbyApi.buildLobbiesResponse(doc, { headers: req.headers });
+    if (parsedUrl.pathname === "/api/lobbies") {
+      sendJson(res, out.status, out.body, cors);
+      return;
+    }
+    // /api/quickjoin
+    if (out.status !== 200) {
+      sendJson(res, out.status, { lobby: null, join_url: null, error: out.body.error }, cors);
+      return;
+    }
+    const pick = lobbyApi.pickQuickJoin(out.body.lobbies);
+    if (!pick) {
+      sendJson(res, 404, { lobby: null, join_url: null, error: "no waiting lobby with room" }, cors);
+      return;
+    }
+    if (parsedUrl.searchParams.get("redirect") === "1") {
+      res.writeHead(302, { ...cors, Location: pick.join_url, "Cache-Control": "no-store" });
+      res.end();
+      return;
+    }
+    sendJson(res, 200, { lobby: pick, join_url: pick.join_url }, cors);
+  });
+}
+
 const server = http.createServer((req, res) => {
+  const earlyUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+  if (earlyUrl.pathname === "/api/lobbies" || earlyUrl.pathname === "/api/quickjoin") {
+    handleApi(req, res, earlyUrl);
+    return;
+  }
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
@@ -84,7 +154,7 @@ const server = http.createServer((req, res) => {
       JSON.stringify({
         status: "ok",
         service: "2000s-pro-paintball-server",
-        version: "0.2.2-multiplayer",
+        version: "0.5.0-rooms",
         http_port: HTTP_PORT,
         godot_ws_port: GODOT_WS_PORT,
         arbitrium_public_ip: process.env.ARBITRIUM_PUBLIC_IP || null,
