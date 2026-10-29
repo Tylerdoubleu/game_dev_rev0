@@ -45,9 +45,16 @@ Client → server (always `rpc_id(1)`):
 | `srv_report_hit(victim_peer, hit_pos)` | The shooter's local hit. The server validates it and may emit `player_eliminated`. |
 | `srv_bot_eliminated(name)`, `srv_flag_event(...)` | Cosmetic relays (legacy centre flag). |
 | `srv_set_room_settings(map, mode)` | Change the lobby map or mode (waiting only). |
-| `request_start_match(room, bracket, fill_bots)` | Start the room's match. |
+| `request_start_match(room, bracket, fill_bots)` | Start the room's match after a 3 s countdown (`match_starting`, then `match_countdown` 3,2,1, then `round_started`). It does not wait for READY. A second press during the countdown is ignored. |
+| `srv_set_ready(ready)` | The READY toggle. Use `NetworkLobby.set_ready(bool)`. It is informational only and resets to false after each match. |
+
+Client helpers:
+- `NetworkLobby.set_ready(bool)` sends `srv_set_ready` when online, or updates the offline roster.
+- `NetworkLobby.leave_room()` disconnects cleanly (the server drops the peer from its room) and clears room, match and ready state. On web it strips `room`, `team`, `map` and `mode` from the URL. It then emits `left_room(room_id)`, and LobbyEntryFlow reopens the lobby list.
 
 Server → client (authority, per peer): `sync_lobby_state(state)`, `notify_match_start(room, bracket, fill_bots)`, `cl_room_event(name, data)`, `rpc_sync_player_state(...)`, `rpc_fire_paintball(...)`, `rpc_notify_bot_eliminated`, `rpc_broadcast_flag_event`.
+
+Client signals: `match_starting(data)` and `match_countdown(seconds_left, data)`. These names are stable, and the HUD countdown banner hooks them. `room_roster_changed(roster)` fires on every `sync_lobby_state`, and `left_room(room_id)` fires after `leave_room()`.
 
 Listen to `NetworkLobby.room_event(event_name, data)`. It fires on clients for every `cl_room_event`, and on the server for every room event.
 
@@ -57,7 +64,12 @@ Listen to `NetworkLobby.room_event(event_name, data)`. It fires on clients for e
  target (10 kills or 3 rounds), score:{red,blue} (CTF rounds won), kills:{red,blue},
  flags:{red:{team:"ALPHA",state:"home"|"carried"|"dropped",carrier,pos}, blue:{...}}}
 ```
-Each player has `team`, `alive`, `kills`, `deaths`, and `bracket`.
+Each player has `team`, `alive`, `kills`, `deaths`, `bracket` and `ready`.
+
+The snapshot also carries the following fields:
+- `room_roster`: rows in join order, `[{peer, name, team, color:"red"|"blue", ready, alive, kills, deaths, bracket}]`.
+- `ready_count`.
+- `countdown_ms_left`: 0 unless a countdown is running.
 
 ## Room events (`cl_room_event` / `room_event`)
 
@@ -66,7 +78,10 @@ Every room event includes `room`.
 | Event | Data | When |
 |---|---|---|
 | `room_settings_changed` | map, mode, by, by_name | A player changed settings (waiting only). |
-| `settings_rejected` (to one peer) | reason=`match_in_progress`, map, mode | A settings change arrived after match start. |
+| `settings_rejected` (to one peer) | reason=`match_in_progress` / `match_starting`, map, mode | A settings change arrived after match start or during the countdown. |
+| `player_ready_changed` | peer, name, ready | A player toggled READY. The roster is re-synced too. |
+| `match_starting` | in_ms (3000), seconds (3), by, by_name, mode, map | Someone pressed Start Match. Settings lock now. |
+| `match_countdown` | seconds_left (3, 2, 1), ms_left | Sent once per second during the countdown. `round_started` follows at 0. The countdown is cancelled if the room empties. |
 | `teams_rebalanced` | moves:[{peer,name,from,to}], red, blue | Auto-balance moved players. |
 | `join_rejected` (to one peer) | room, reason=`full`/`unknown_lobby` | The join was refused. |
 | `round_started` | round, mode, score, kills, target, reset_positions:true | The match starts (round 1), or the next CTF round starts after a 4 s intermission. **Clients respawn at their team gate.** NetworkLobby already does this via `respawn_at_team_gate`. |

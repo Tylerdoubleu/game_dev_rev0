@@ -28,6 +28,13 @@ signal flag_event_received(event_type: String, player_name: String, team: String
 ## v0.5: every documented server room event (see docs/NETWORK_EVENTS.md) is emitted here on clients.
 signal room_event(event_name: String, data: Dictionary)
 signal mode_changed(mode_id: String)
+## v0.5 pre-match countdown (stable names; Bluey's HUD banner hooks these). Also delivered as room_event.
+signal match_starting(data: Dictionary)
+signal match_countdown(seconds_left: int, data: Dictionary)
+## v0.5: emitted on clients after leave_room() (LobbyEntryFlow reopens the lobby browser).
+signal left_room(room_id: String)
+## v0.5: room_roster from the latest sync_lobby_state (Array of {peer,name,team,color,ready,alive,kills,deaths,bracket}).
+signal room_roster_changed(roster: Array)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -49,7 +56,7 @@ var active_room: String = DEFAULT_ROOM
 var local_callsign: String = "NPPL_Pro"
 var local_team: String = "ALPHA"
 var local_bracket: String = "speedball"
-var local_ready: bool = true
+var local_ready: bool = false
 var fill_bots_enabled: bool = false
 var selected_map: String = "speedball"
 var active_map: String = "speedball"
@@ -335,6 +342,34 @@ func disconnect_from_lobby() -> void:
 	_refresh_offline_local_roster()
 	connection_status_changed.emit("DISCONNECTED — Solo Bot Practice Mode", false)
 
+## v0.5 READY toggle (informational only: Start Match never waits for it). Reset by the server after each match.
+func set_ready(is_ready: bool) -> void:
+	local_ready = is_ready
+	if is_online_client():
+		srv_set_ready.rpc_id(1, is_ready)
+	else:
+		_refresh_offline_local_roster()
+
+## v0.5: leave the current room cleanly and go back to the lobby list. Disconnects (the server drops the peer from
+## its room on disconnect), clears room state, strips ?room= from the page URL and emits left_room.
+func leave_room() -> void:
+	var old_room := active_room
+	if is_online_client() or peer != null:
+		disconnect_from_lobby()
+	active_room = DEFAULT_ROOM
+	room_from_url = false
+	match_active = false
+	room_state = {}
+	local_ready = false
+	if GameManager:
+		GameManager.match_ended = false
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("(function(){var u=new URL(window.location.href);['room','team','map','mode'].forEach(function(k){u.searchParams.delete(k)});window.history.replaceState(null,'',u.toString());})()", true)
+	show_lobby_browser_on_start = true
+	_refresh_offline_local_roster()
+	connection_status_changed.emit("LEFT ROOM [%s] — PICK A LOBBY" % old_room.to_upper(), false)
+	left_room.emit(old_room)
+
 func is_online_client() -> bool:
 	return not is_dedicated_server and is_connected_to_server and peer != null and peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
@@ -367,7 +402,11 @@ func get_lobby_state_snapshot() -> Dictionary:
 		"match_active": match_active,
 		"ws_url": current_ws_url,
 		"match": room_state.get("match", {}),
-		"players": players.duplicate(true)
+		"players": players.duplicate(true),
+		"room_roster": room_state.get("room_roster", []),
+		"ready_count": int(room_state.get("ready_count", 0)),
+		"countdown_ms_left": int(room_state.get("countdown_ms_left", 0)),
+		"local_ready": local_ready,
 	}
 
 ## Lobby menu map picker. Online: asks the server to change the room's map (validated, synced to the whole room,
@@ -499,6 +538,12 @@ func srv_flag_event(event_type: String, player_name: String, team: String, world
 	_send_room(rid, &"rpc_broadcast_flag_event", [event_type.substr(0, 12), player_name.substr(0, 20), team, world_pos, rid], sid)
 
 @rpc("any_peer", "call_remote", "reliable")
+func srv_set_ready(is_ready: bool) -> void:
+	if not is_dedicated_server:
+		return
+	_server_set_ready(multiplayer.get_remote_sender_id(), is_ready)
+
+@rpc("any_peer", "call_remote", "reliable")
 func srv_set_room_settings(map_id: String, mode_id: String) -> void:
 	if not is_dedicated_server:
 		return
@@ -544,6 +589,9 @@ func sync_lobby_state(state_dict: Dictionary) -> void:
 			var srv_team := String(players[my_id].get("team", local_team)).to_upper()
 			if srv_team in TEAMS and srv_team != local_team:
 				local_team = srv_team
+			local_ready = bool(players[my_id].get("ready", local_ready))
+	if state_dict.has("room_roster"):
+		room_roster_changed.emit(state_dict["room_roster"])
 	if state_dict.has("status"):
 		room_status = String(state_dict["status"])
 	# Keep local fill_bots_enabled choice (default OFF); only menu selection or match start changes it.
@@ -588,6 +636,10 @@ func cl_room_event(event_name: String, data: Dictionary) -> void:
 		received_room_events.pop_front()
 	_client_apply_room_event(event_name, data)
 	room_event.emit(event_name, data)
+	if event_name == "match_starting":
+		match_starting.emit(data)
+	elif event_name == "match_countdown":
+		match_countdown.emit(int(data.get("seconds_left", 0)), data)
 
 func copy_invite_link() -> String:
 	var invite_url := "http://127.0.0.1:8080/?room=%s&bracket=%s&map=%s" % [active_room.uri_encode(), local_bracket.uri_encode(), selected_map.uri_encode()]
@@ -827,6 +879,8 @@ func _reset_room(room: Dictionary) -> void:
 	room["settings"] = {"map": default_map_for_lobby(idx), "mode": "deathmatch"}
 	room["match"] = _new_match_state()
 	room["join_order"] = []
+	room.erase("countdown_until_ms")
+	room.erase("countdown_last_s")
 
 func get_room(rid: String) -> Dictionary:
 	return rooms.get(rid, {})
@@ -884,7 +938,7 @@ func _room_snapshot(rid: String) -> Dictionary:
 		var info: Dictionary = room["players"][pid]
 		pl[pid] = {
 			"name": info.get("name", ""), "team": info.get("team", "ALPHA"), "bracket": info.get("bracket", "speedball"),
-			"ready": info.get("ready", true), "room": rid, "kills": info.get("kills", 0), "deaths": info.get("deaths", 0),
+			"ready": info.get("ready", false), "room": rid, "kills": info.get("kills", 0), "deaths": info.get("deaths", 0),
 			"alive": info.get("alive", true),
 		}
 	var mode := String(room.get("settings", {}).get("mode", "deathmatch"))
@@ -901,7 +955,29 @@ func _room_snapshot(rid: String) -> Dictionary:
 		"max_per_team": MAX_PER_TEAM,
 		"match": _public_match_state(room),
 		"players": pl,
+		"room_roster": _room_roster(room),
+		"ready_count": _room_roster(room).filter(func(r): return bool(r["ready"])).size(),
+		"countdown_ms_left": maxi(0, int(room.get("countdown_until_ms", 0)) - _rules_now()) if room.has("countdown_until_ms") else 0,
 	}
+
+## v0.5 room_roster: join order, one row per player (READY is informational only).
+func _room_roster(room: Dictionary) -> Array:
+	var out: Array = []
+	var order: Array = room.get("join_order", []).duplicate()
+	for pid in room.get("players", {}).keys():
+		if not order.has(pid):
+			order.append(pid)
+	for pid in order:
+		if not room.get("players", {}).has(pid):
+			continue
+		var info: Dictionary = room["players"][pid]
+		out.append({
+			"peer": int(pid), "name": info.get("name", ""), "team": info.get("team", "ALPHA"),
+			"color": team_label(String(info.get("team", "ALPHA"))), "ready": bool(info.get("ready", false)),
+			"alive": bool(info.get("alive", true)), "kills": int(info.get("kills", 0)), "deaths": int(info.get("deaths", 0)),
+			"bracket": info.get("bracket", "speedball"),
+		})
+	return out
 
 func _broadcast_room_state(rid: String) -> void:
 	if not rooms.has(rid):
@@ -1084,13 +1160,23 @@ func _server_apply_elimination(room: Dictionary, shooter: int, victim: int, reas
 	_on_player_eliminated(room, shooter, victim)
 	_broadcast_room_state(String(room["id"]))
 
+func _server_set_ready(pid: int, is_ready: bool) -> void:
+	var rid := String(peer_room.get(pid, ""))
+	if rid.is_empty() or not players.has(pid):
+		return
+	if bool(players[pid].get("ready", false)) == is_ready:
+		return
+	players[pid]["ready"] = is_ready
+	_send_room_event(rid, "player_ready_changed", {"peer": pid, "name": players[pid].get("name", ""), "ready": is_ready})
+	_broadcast_room_state(rid)
+
 func _server_set_room_settings(pid: int, map_id: String, mode_id: String) -> void:
 	var rid := String(peer_room.get(pid, ""))
 	if rid.is_empty():
 		return
 	var room: Dictionary = rooms[rid]
-	if bool(room["match"].get("active", false)):
-		_send_peer_event(pid, "settings_rejected", {"reason": "match_in_progress", "map": room["settings"]["map"], "mode": room["settings"]["mode"]})
+	if bool(room["match"].get("active", false)) or room.has("countdown_until_ms"):
+		_send_peer_event(pid, "settings_rejected", {"reason": "match_in_progress" if bool(room["match"].get("active", false)) else "match_starting", "map": room["settings"]["map"], "mode": room["settings"]["mode"]})
 		return
 	var m := normalize_map(map_id) if map_id.strip_edges().to_lower() in ["speedball", "woodsball_crash", "woodsball", "woods", "crash", "crash_site", "heli"] else String(room["settings"]["map"])
 	var md := normalize_mode(mode_id, String(room["settings"]["mode"]))
@@ -1113,11 +1199,51 @@ func _server_request_start(pid: int, bracket_id: String) -> void:
 		_send(pid, &"notify_match_start", [rid, bracket_id, String(room["settings"]["mode"]) == "bots_test"])
 		_broadcast_room_state(rid)
 		return
-	_start_room_match(room)
+	if room.has("countdown_until_ms"):
+		_broadcast_room_state(rid) # countdown already running
+		return
+	var ms := maxi(0, match_countdown_ms)
+	var secs := int(ceil(ms / 1000.0))
+	_send_room_event(rid, "match_starting", {
+		"in_ms": ms, "seconds": secs, "by": pid, "by_name": players[pid].get("name", ""),
+		"mode": room["settings"]["mode"], "map": room["settings"]["map"],
+	})
+	if ms <= 0:
+		_start_room_match(room)
+		return
+	room["countdown_until_ms"] = _rules_now() + ms
+	room["countdown_last_s"] = secs
+	_send_room_event(rid, "match_countdown", {"seconds_left": secs, "ms_left": ms})
+	_broadcast_room_state(rid)
+
+## v0.5 pre-match countdown (match_starting -> match_countdown 3,2,1 -> round_started). Tests set match_countdown_ms.
+const MATCH_COUNTDOWN_MS: int = 3000
+var match_countdown_ms: int = MATCH_COUNTDOWN_MS
+
+func _tick_room_countdown(room: Dictionary) -> void:
+	if not room.has("countdown_until_ms"):
+		return
+	var rid := String(room["id"])
+	if room["players"].is_empty():
+		room.erase("countdown_until_ms")
+		room.erase("countdown_last_s")
+		return
+	var left := int(room["countdown_until_ms"]) - _rules_now()
+	if left <= 0:
+		room.erase("countdown_until_ms")
+		room.erase("countdown_last_s")
+		_start_room_match(room)
+		return
+	var secs := int(ceil(left / 1000.0))
+	if secs < int(room.get("countdown_last_s", secs + 1)):
+		room["countdown_last_s"] = secs
+		_send_room_event(rid, "match_countdown", {"seconds_left": secs, "ms_left": left})
 
 func _server_tick(delta: float) -> void:
 	for rid in rooms.keys():
 		var room: Dictionary = rooms[rid]
+		if room.has("countdown_until_ms"):
+			_tick_room_countdown(room)
 		if room["players"].is_empty():
 			continue
 		_tick_room_match(room, delta)
@@ -1369,6 +1495,7 @@ func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
 	room["match"] = fresh
 	for pid in room["players"].keys():
 		room["players"][pid]["alive"] = true
+		room["players"][pid]["ready"] = false # READY resets after each match
 	_rebalance_room_teams(room)
 	_broadcast_room_state(rid)
 

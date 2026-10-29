@@ -48,6 +48,19 @@ func _process(_d: float) -> bool:
 	_check(L.fill_bots_enabled and L.match_active and not L.is_online_client(), "SOLO starts the offline bots match")
 	var lc_vis: bool = (lc as CanvasLayer).visible if lc is CanvasLayer else true
 	_check(not lc_vis, "arena lobby overlay dropped in")
+	# leave_room(): clean leave back to the lobby list.
+	var left: Array = []
+	L.left_room.connect(func(r): left.append(r))
+	L.active_room = "lobby_03"
+	L.room_from_url = true
+	L.room_state = {"room": "lobby_03"}
+	L.local_ready = true
+	L.leave_room()
+	_check(left == ["lobby_03"] and flow.left_room_count == 1, "leave_room emits left_room(lobby_03)")
+	_check(not L.room_from_url and L.active_room == L.DEFAULT_ROOM and not L.match_active and L.room_state.is_empty() and not L.local_ready and L.peer == null, "leave_room clears room/match/ready state and the peer")
+	_check(flow.is_open(), "leave_room returns to the lobby list")
+	L.set_ready(true)
+	_check(L.local_ready and bool(L.players[1]["ready"]), "set_ready offline updates the local roster")
 	print("=== [PASS] lobby entry flow ===" if fails.is_empty() else "=== [FAIL] lobby entry flow: %s" % [fails])
 	quit(0 if fails.is_empty() else 1)
 	return true

@@ -27,11 +27,13 @@ func _process(_d: float) -> bool:
 	L = root.get_node("NetworkLobby")
 	L.start_dedicated_server(PORT)
 	L.outbound_capture = []
+	L.match_countdown_ms = 0 # rules tests start instantly; _test_ready_and_countdown covers the 3 s countdown
 	_test_ipc_document()
-	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_bots_test_mode", "_test_hit_validation"]:
+	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
 		if has_method(t):
 			L.start_dedicated_server(PORT + 1 + f)
 			L.outbound_capture = []
+			L.match_countdown_ms = 0
 			f += 1
 			call(t)
 	print("=== [PASS] v0.5 lobby rooms ===" if fails.is_empty() else "=== [FAIL] lobby rooms: %s" % [fails])
@@ -362,3 +364,46 @@ func _test_hit_validation() -> void:
 	_shoot(61, spos + Vector3(0, 1.4, 0), Vector3(-5, 1.2, 8))
 	L._server_on_hit_report(61, 63, Vector3(-5, 1.2, 8))
 	_check(_alive(63) and rej.call("friendly_fire") == 1, "friendly fire rejected")
+
+func _test_ready_and_countdown() -> void:
+	_begin("READY toggle + match_starting / match_countdown")
+	L.match_countdown_ms = 3000
+	L._server_register_peer(71, "P71", "", "speedball", false, "lobby_07")
+	L._server_register_peer(72, "P72", "", "speedball", false, "lobby_07")
+	var snap: Dictionary = L._room_snapshot("lobby_07")
+	var roster: Array = snap["room_roster"]
+	_check(roster.size() == 2 and int(roster[0]["peer"]) == 71 and roster[0]["ready"] == false and roster[0].has("color"), "room_roster rows in join order, not ready (%s)" % [roster])
+	(L.outbound_capture as Array).clear()
+	L._server_set_ready(71, true)
+	var syncs := _sent(72, "sync_lobby_state")
+	_check(not syncs.is_empty() and syncs[-1]["args"][0]["room_roster"][0]["ready"] == true and int(syncs[-1]["args"][0]["ready_count"]) == 1, "set_ready broadcast in room_roster to the room")
+	_check(_events("player_ready_changed", "lobby_07").size() == 1, "player_ready_changed event")
+	L._server_set_ready(71, true)
+	_check(_events("player_ready_changed", "lobby_07").size() == 1, "no-op ready toggle is not re-broadcast")
+	# Start Match does not require everyone ready (72 is not ready).
+	L._server_request_start(72, "speedball")
+	var ms := _events("match_starting", "lobby_07")
+	_check(ms.size() == 1 and int(ms[0]["data"]["in_ms"]) == 3000 and int(ms[0]["data"]["seconds"]) == 3 and int(ms[0]["data"]["by"]) == 72, "match_starting {in_ms:3000, seconds:3, by} even though not all ready")
+	_check(_events("match_countdown", "lobby_07").size() == 1 and int(_events("match_countdown", "lobby_07")[0]["data"]["seconds_left"]) == 3, "match_countdown 3")
+	_check(not bool(L.rooms["lobby_07"]["match"]["active"]) and _events("round_started", "lobby_07").is_empty(), "match not live during the countdown")
+	L._server_request_start(71, "speedball")
+	_check(_events("match_starting", "lobby_07").size() == 1, "second Start Match during the countdown is ignored")
+	L._server_set_room_settings(71, "woodsball_crash", "")
+	_check(L.rooms["lobby_07"]["settings"]["map"] == "speedball", "settings locked during the countdown")
+	_advance(1000)
+	_advance(1000)
+	var cd := _events("match_countdown", "lobby_07").map(func(e): return int(e["data"]["seconds_left"]))
+	_check(cd == [3, 2, 1], "countdown 3,2,1 (%s)" % [cd])
+	_advance(1000)
+	_check(bool(L.rooms["lobby_07"]["match"]["active"]) and _events("round_started", "lobby_07").size() == 1, "round_started after the countdown")
+	_check(_sent(71, "notify_match_start").size() == 1 and _sent(72, "notify_match_start").size() == 1, "notify_match_start to every player")
+	L._end_room_match(L.rooms["lobby_07"], "ALPHA", "test")
+	var r2: Array = L._room_snapshot("lobby_07")["room_roster"]
+	_check(r2.all(func(r): return r["ready"] == false), "READY resets after the match")
+	# A countdown is dropped when the room empties.
+	L._server_request_start(71, "speedball")
+	L._server_remove_peer(71)
+	L._server_remove_peer(72)
+	_advance(4000)
+	_check(not L.rooms["lobby_07"].has("countdown_until_ms") and not bool(L.rooms["lobby_07"]["match"]["active"]), "countdown cancelled when the room empties")
+	L.match_countdown_ms = 0

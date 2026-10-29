@@ -7,9 +7,11 @@ extends Node
 ## Kept out of speedball_arena_builder.gd (Bluey): it only calls the arena's existing public-ish methods.
 
 const LobbyBrowserScript := preload("res://scripts/ui/lobby_browser.gd")
+const WaitingRoomScript := preload("res://scripts/ui/lobby_waiting_room.gd")
 const LAYER := 60
 
 var browser: Control = null
+var waiting_room: Control = null  # Ren v0.5: in-place JOIN -> waiting room -> START MATCH
 var _layer: CanvasLayer = null
 var _menu_button: Button = null
 var solo_starts: int = 0
@@ -26,6 +28,8 @@ func _attach_to_scene() -> void:
 			break
 		await get_tree().process_frame
 	_add_menu_button()
+	NetworkLobby.match_started_signal.connect(_on_match_started)
+	NetworkLobby.left_room.connect(_on_left_room)
 	if NetworkLobby.show_lobby_browser_on_start:
 		open_browser()
 
@@ -41,6 +45,7 @@ func open_browser() -> Control:
 		browser = LobbyBrowserScript.new()
 		browser.name = "LobbyBrowser"
 		browser.api_base = LobbyBrowserScript.derive_api_base(_explicit_server_url())
+		browser.navigate_on_join = false
 		browser.lobby_join_requested.connect(_on_lobby_join_requested)
 		browser.solo_requested.connect(_on_solo_requested)
 		_layer.add_child(browser)
@@ -53,6 +58,9 @@ func open_browser() -> Control:
 		close.pressed.connect(close_browser)
 		_layer.add_child(close)
 	_layer.visible = true
+	browser.visible = true
+	if waiting_room != null and is_instance_valid(waiting_room):
+		waiting_room.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	if browser.has_method("refresh") and browser.is_inside_tree():
 		browser.call("refresh")
@@ -67,9 +75,8 @@ func _explicit_server_url() -> String:
 	return NetworkLobby.current_ws_url if NetworkLobby.server_from_url else NetworkLobby.DEFAULT_PUBLIC_WS_URL
 
 func _on_lobby_join_requested(entry: Dictionary) -> void:
-	if OS.has_feature("web"):
-		return # LobbyBrowser.join() already navigates to entry.join_url (page reload with ?room=).
-	# Desktop / editor: connect in-process to the lobby's server and room.
+	# Ren v0.5: JOIN connects to the lobby in place (web and desktop) and shows the waiting room; the match only
+	# starts when someone presses START MATCH there.
 	var url := String(entry.get("join_url", ""))
 	var server := _query_value(url, "server")
 	NetworkLobby.active_room = NetworkLobby.sanitize_room_id(String(entry.get("id", "lobby_01")))
@@ -77,8 +84,43 @@ func _on_lobby_join_requested(entry: Dictionary) -> void:
 	var m := String(entry.get("map", ""))
 	if m != "":
 		NetworkLobby.selected_map = NetworkLobby.normalize_map(m)
+	open_waiting_room(entry)
+	if NetworkLobby.is_online_client():
+		NetworkLobby.disconnect_from_lobby()
+	NetworkLobby.connect_to_lobby(server if server != "" else _explicit_server_url())
+
+func open_waiting_room(entry: Dictionary) -> Control:
+	if _layer == null:
+		open_browser()
+	if waiting_room == null or not is_instance_valid(waiting_room):
+		waiting_room = WaitingRoomScript.new()
+		waiting_room.name = "LobbyWaitingRoom"
+		waiting_room.leave_requested.connect(_on_leave_waiting_room)
+		_layer.add_child(waiting_room)
+	waiting_room.call("set_lobby", entry)
+	waiting_room.visible = true
+	if browser != null and is_instance_valid(browser):
+		browser.visible = false
+	var close := _layer.get_node_or_null("CloseLobbyBrowser")
+	if close != null:
+		close.visible = false
+	_layer.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	return waiting_room
+
+func _on_leave_waiting_room() -> void:
+	var close := _layer.get_node_or_null("CloseLobbyBrowser")
+	if close != null:
+		close.visible = true
+	open_browser()
+
+func _on_match_started(_room: String, _bracket: String, _fill_bots: bool) -> void:
+	if not is_open():
+		return
 	close_browser()
-	NetworkLobby.connect_to_lobby(server if server != "" else NetworkLobby.DEFAULT_PUBLIC_WS_URL)
+	var scene := get_tree().current_scene
+	if scene != null and scene.has_method("_set_lobby_overlay_visible"):
+		scene.call("_set_lobby_overlay_visible", false)
 
 func _on_solo_requested() -> void:
 	solo_starts += 1
@@ -119,3 +161,13 @@ static func _query_value(url: String, key: String) -> String:
 		if kv.size() == 2 and kv[0].uri_decode().to_lower() == key:
 			return kv[1].uri_decode()
 	return ""
+
+## v0.5: NetworkLobby.leave_room() -> back to the lobby list.
+var left_room_count: int = 0
+func _on_left_room(_room_id: String) -> void:
+	left_room_count += 1
+	if _layer != null:
+		var close := _layer.get_node_or_null("CloseLobbyBrowser")
+		if close != null:
+			close.visible = true
+	open_browser()
