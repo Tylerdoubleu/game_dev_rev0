@@ -655,10 +655,24 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
 	var target_hand_x: float = (0.17 - 0.105 * tuck_factor) * hand_sign + bob_x * 0.35
 	var reload_dip_y: float = -0.29 if is_reloading_pod else (-0.22 - 0.055 * tuck_factor + bob_y * 0.45)
-	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
-	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
 	var target_marker_roll: float = deg_to_rad(18.0 * hand_sign) if is_reloading_pod else deg_to_rad(-24.0 * hand_sign * tuck_factor)
 	var target_marker_pitch: float = deg_to_rad(18.0 * tuck_factor)
+	# v0.4.5 art: while firing is locked by a knee-slide or Superman dive, the marker drops out of the
+	# shooting line (muzzle down, canted outward), then rises back over the 0.15s recovery so the player
+	# can read exactly when they're able to shoot again.
+	var move_lock_w: float = 0.0 if is_reloading_pod else get_movement_fire_lock_progress()
+	if move_lock_w > 0.0:
+		var is_dive_lock: bool = get_fire_lock_reason() == "dive"
+		var lock_drop_y: float = -0.17 if is_dive_lock else -0.12
+		var lock_in_x: float = -0.07 if is_dive_lock else 0.03
+		var lock_roll: float = deg_to_rad((38.0 if is_dive_lock else -30.0) * hand_sign)
+		var lock_pitch: float = deg_to_rad(-22.0 if is_dive_lock else -30.0)
+		target_hand_x = lerpf(target_hand_x, target_hand_x + lock_in_x * hand_sign, move_lock_w)
+		reload_dip_y = lerpf(reload_dip_y, reload_dip_y + lock_drop_y, move_lock_w)
+		target_marker_roll = lerpf(target_marker_roll, lock_roll, move_lock_w)
+		target_marker_pitch = lerpf(target_marker_pitch, lock_pitch, move_lock_w)
+	marker_rig.position.x = lerp(marker_rig.position.x, target_hand_x, min(1.0, delta * 14.0))
+	marker_rig.position.y = lerp(marker_rig.position.y, reload_dip_y, min(1.0, delta * 12.0))
 	marker_rig.rotation.z = lerp(marker_rig.rotation.z, target_marker_roll, min(1.0, delta * 14.0))
 	marker_rig.rotation.x = lerp(marker_rig.rotation.x, target_marker_pitch, min(1.0, delta * 14.0))
 
