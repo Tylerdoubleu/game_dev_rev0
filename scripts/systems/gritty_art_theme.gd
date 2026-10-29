@@ -1374,32 +1374,26 @@ static func build_woodsball_crash_site_map(parent: Node3D) -> Node3D:
 	# =========================================================================
 	# 1. CENTER-50 DOWNED BLACKHAWK / HUEY HELICOPTER CRASH SITE
 	# =========================================================================
-	# Main Fuselage Cabin (angled across the 50-yard line so Z = +1.85m Flag Station sits right outside the open cargo door)
-	var heli_cabin := _spawn_rigid_cover_box(
-		root,
-		"Heli_CrashFuselage_Center50",
-		Vector3(0.0, 1.15, -0.35),
-		Vector3(8.4, 2.35, 2.15),
-		Vector3(-6.0, 10.0, 0.0),
-		heli_olive_mat
-	)
+	# Main Fuselage Cabin: hollow, walk-through crashed Blackhawk cabin (open cargo doors on both sides,
+	# shooting windows at standing eye height, roof overhead). Rigid cover with full PB-16 pocket physics.
+	var heli_cabin := _build_walkthrough_heli_fuselage(root, "Heli_CrashFuselage_Center50", Vector3(0.0, 0.0, -0.35), 10.0, heli_olive_mat, charred_metal_mat)
 
-	# Cockpit Nose Cone (+X side of fuselage)
+	# Cockpit Nose Cone (attached to the +X bulkhead, outside the walkable cabin)
 	_spawn_rigid_cover_box(
 		root,
 		"Heli_CockpitNose",
-		Vector3(4.8, 0.92, -1.05),
-		Vector3(2.6, 1.85, 1.95),
+		Vector3(5.45, 0.92, 0.6),
+		Vector3(2.6, 1.85, 2.2),
 		Vector3(0.0, 10.0, -8.0),
 		charred_metal_mat
 	)
 
-	# Broken Tail Boom (stretching toward -X / -Z with rotor pylon cover)
+	# Broken Tail Boom (off the -X bulkhead, stretching toward -X / +Z)
 	_spawn_rigid_cover_box(
 		root,
 		"Heli_BrokenTailBoom",
-		Vector3(-5.8, 0.85, 0.95),
-		Vector3(5.6, 1.55, 1.25),
+		Vector3(-7.0, 0.8, -0.1),
+		Vector3(5.4, 1.5, 1.2),
 		Vector3(4.0, -18.0, 5.0),
 		heli_olive_mat
 	)
@@ -1407,8 +1401,8 @@ static func build_woodsball_crash_site_map(parent: Node3D) -> Node3D:
 	_spawn_rigid_cover_box(
 		root,
 		"Heli_TailRotorPylon",
-		Vector3(-8.5, 1.35, 1.85),
-		Vector3(1.5, 2.65, 0.85),
+		Vector3(-9.7, 1.3, 0.75),
+		Vector3(1.4, 2.6, 0.8),
 		Vector3(0.0, -18.0, 0.0),
 		charred_metal_mat
 	)
@@ -1553,6 +1547,16 @@ static func _spawn_woods_spool_cluster(parent: Node3D, s_name: String, pos: Vect
 		_add_single_wood_spool_meshes(body, Vector3(0.0, 0.88, 0.0), 0.84, 0.84, mat)
 	return body
 
+## Player stance reference (player_controller_3d.gd): standing eye 1.58m, crouch eye 0.92m (+0.17m mask radius).
+## Tower parapets stand 1.25m above the deck: crouching fully hides the mask/hopper, standing puts the eyes
+## ~0.33m over the rail so you can look and shoot downward onto the field.
+const TOWER_DECK_TOP: float = 2.60
+const TOWER_PARAPET_H: float = 1.25
+const TOWER_HALF: float = 2.40
+const TOWER_RAMP_X: float = 1.10
+const TOWER_RAMP_W: float = 1.90
+const TOWER_RAMP_DEG: float = 20.0
+
 static func _build_wooden_assault_tower(parent: Node3D, t_name: String, base_pos: Vector3, yaw_deg: float, wood_mat: Material, dark_timber_mat: Material, camo_mat: Material, dual_ramps: bool) -> void:
 	var tower_root := Node3D.new()
 	tower_root.name = t_name
@@ -1560,62 +1564,164 @@ static func _build_wooden_assault_tower(parent: Node3D, t_name: String, base_pos
 	tower_root.rotation_degrees.y = yaw_deg
 	parent.add_child(tower_root)
 
-	var deck_h: float = 2.85
-	var deck_w: float = 5.2
-	var deck_d: float = 4.6
+	var deck_top: float = TOWER_DECK_TOP
+	var half: float = TOWER_HALF
+	var deck_t: float = 0.24
+	var rail_t: float = 0.15
+	var rail_h: float = TOWER_PARAPET_H
+	var rail_y: float = deck_top + rail_h * 0.5
+	var rail_off: float = half - rail_t * 0.5
 
-	# 4 Heavy Corner Timber Support Posts
+	# 4 corner support posts (inside the deck footprint, clear of the ramp landings)
 	var post_idx := 0
-	for px in [-2.35, 2.35]:
-		for pz in [-2.05, 2.05]:
+	for px in [-half + 0.15, half - 0.15]:
+		for pz in [-half + 0.15, half - 0.15]:
 			post_idx += 1
-			_spawn_rigid_cover_box(
-				tower_root,
-				"%s_Post_%d" % [t_name, post_idx],
-				Vector3(px, (deck_h + 2.4) * 0.5, pz),
-				Vector3(0.36, deck_h + 2.4, 0.36),
-				Vector3.ZERO,
-				dark_timber_mat
-			)
+			_spawn_rigid_cover_box(tower_root, "%s_Post_%d" % [t_name, post_idx], Vector3(px, (deck_top + 2.3) * 0.5, pz), Vector3(0.3, deck_top + 2.3, 0.3), Vector3.ZERO, dark_timber_mat)
 
-	# Elevated Wooden Deck Platform (Walkable floor at Y = 2.85m)
+	# Walkable deck (top surface exactly at TOWER_DECK_TOP so ramps land flush with no lip)
 	var deck_body := StaticBody3D.new()
 	deck_body.name = "WalkableFloor_%s_Deck" % t_name
-	deck_body.position = Vector3(0.0, deck_h, 0.0)
+	deck_body.position = Vector3(0.0, deck_top - deck_t * 0.5, 0.0)
 	var dcol := CollisionShape3D.new()
 	var dbox := BoxShape3D.new()
-	dbox.size = Vector3(deck_w, 0.28, deck_d)
+	dbox.size = Vector3(half * 2.0, deck_t, half * 2.0)
 	dcol.shape = dbox
 	deck_body.add_child(dcol)
 	var dmesh := MeshInstance3D.new()
 	var dbm := BoxMesh.new()
-	dbm.size = Vector3(deck_w, 0.28, deck_d)
+	dbm.size = dbox.size
 	dmesh.mesh = dbm
 	dmesh.material_override = wood_mat
 	deck_body.add_child(dmesh)
 	tower_root.add_child(deck_body)
 
-	# Waist/Chest-High Sniper Parapet Walls on the Tower Deck (Rigid cover with PB-16 pocket physics on the tower!)
-	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Front" % t_name, Vector3(0.0, deck_h + 0.68, -2.05), Vector3(2.8, 1.15, 0.32), Vector3.ZERO, dark_timber_mat)
-	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Back" % t_name, Vector3(0.0, deck_h + 0.68, 2.05), Vector3(2.8, 1.15, 0.32), Vector3.ZERO, dark_timber_mat)
-	if not dual_ramps:
-		_spawn_rigid_cover_box(tower_root, "%s_Parapet_Left" % t_name, Vector3(-2.05, deck_h + 0.68, 0.0), Vector3(0.32, 1.15, 2.8), Vector3.ZERO, dark_timber_mat)
+	# Parapets. Ramp side(s) get a doorway gap exactly the width of the ramp landing.
+	var gap_l: float = TOWER_RAMP_X - TOWER_RAMP_W * 0.5 - 0.05
+	var seg_w: float = (half - 0.0) + gap_l # from -half to gap_l
+	# +Z side (Back): ramp landing on +X half -> wall covers -half..gap_l
+	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Back" % t_name, Vector3(-half + seg_w * 0.5, rail_y, rail_off), Vector3(seg_w, rail_h, rail_t), Vector3.ZERO, dark_timber_mat)
+	if dual_ramps:
+		# -Z side (Front): ramp landing on -X half -> wall covers -gap_l..half
+		_spawn_rigid_cover_box(tower_root, "%s_Parapet_Front" % t_name, Vector3(half - seg_w * 0.5, rail_y, -rail_off), Vector3(seg_w, rail_h, rail_t), Vector3.ZERO, dark_timber_mat)
+	else:
+		_spawn_rigid_cover_box(tower_root, "%s_Parapet_Front" % t_name, Vector3(0.0, rail_y, -rail_off), Vector3(half * 2.0, rail_h, rail_t), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Left" % t_name, Vector3(-rail_off, rail_y, 0.0), Vector3(rail_t, rail_h, half * 2.0 - rail_t * 2.0), Vector3.ZERO, dark_timber_mat)
+	_spawn_rigid_cover_box(tower_root, "%s_Parapet_Right" % t_name, Vector3(rail_off, rail_y, 0.0), Vector3(rail_t, rail_h, half * 2.0 - rail_t * 2.0), Vector3.ZERO, dark_timber_mat)
 
-	# Overhead Camo Netting Roof above the sniper tower
+	for part in tower_root.get_children():
+		if part is StaticBody3D and (String(part.name).contains("_Parapet_") or String(part.name).contains("_Post_")):
+			part.set_meta("opening_passthrough", true)
+
+	# Camo netting roof
 	var roof := MeshInstance3D.new()
 	var rbm := BoxMesh.new()
-	rbm.size = Vector3(deck_w + 0.8, 0.08, deck_d + 0.8)
+	rbm.size = Vector3(half * 2.0 + 0.8, 0.08, half * 2.0 + 0.8)
 	roof.mesh = rbm
-	roof.position = Vector3(0.0, deck_h + 2.45, 0.0)
+	roof.position = Vector3(0.0, deck_top + 2.3, 0.0)
 	roof.material_override = camo_mat
 	tower_root.add_child(roof)
 
-	# Walkable Assault Ramp(s) (21.0 deg slope, 7.6m long, 2.0m wide) connecting ground Y=0 flush to deck Y=2.72m
-	var ramp_len: float = 7.6
-	var ramp_angle_deg: float = 21.0
-	_build_walkable_ramp(tower_root, "WalkableRamp_%s_South" % t_name, Vector3(1.25, 1.28, 2.20 + 3.45), Vector3(2.0, 0.24, ramp_len), Vector3(ramp_angle_deg, 0.0, 0.0), wood_mat)
+	# Ramps: top surface starts exactly at the deck edge (z = +/-half, y = deck_top) and meets the ground.
+	_build_tower_ramp(tower_root, "WalkableRamp_%s_South" % t_name, TOWER_RAMP_X, 1.0, half, deck_top, wood_mat, dark_timber_mat)
 	if dual_ramps:
-		_build_walkable_ramp(tower_root, "WalkableRamp_%s_North" % t_name, Vector3(-1.25, 1.28, -2.20 - 3.45), Vector3(2.0, 0.24, ramp_len), Vector3(-ramp_angle_deg, 0.0, 0.0), wood_mat)
+		_build_tower_ramp(tower_root, "WalkableRamp_%s_North" % t_name, -TOWER_RAMP_X, -1.0, half, deck_top, wood_mat, dark_timber_mat)
+
+static func _build_tower_ramp(parent: Node3D, r_name: String, x: float, dir_z: float, half: float, deck_top: float, wood_mat: Material, rail_mat: Material) -> void:
+	var ang := deg_to_rad(TOWER_RAMP_DEG)
+	var thick: float = 0.24
+	var run: float = deck_top / tan(ang)
+	var length: float = deck_top / sin(ang) + 0.35 # small overlap so the foot sinks into the ground
+	var mid_top := Vector3(x, deck_top * 0.5, dir_z * (half + run * 0.5))
+	# Surface normal for a ramp descending toward +dir_z
+	var normal := Vector3(0.0, cos(ang), dir_z * sin(ang))
+	var down_slope := Vector3(0.0, -sin(ang), dir_z * cos(ang))
+	# Put the extra 0.35m only at the ground end so the top edge sits flush with the deck (no lip)
+	var center := mid_top - normal * (thick * 0.5) + down_slope * 0.175
+	_build_walkable_ramp(parent, r_name, center, Vector3(TOWER_RAMP_W, thick, length), Vector3(rad_to_deg(ang) * dir_z, 0.0, 0.0), wood_mat)
+	# Visual side stringers (no collision so they never snag feet)
+	for sx in [-1.0, 1.0]:
+		var str_mesh := MeshInstance3D.new()
+		var sbm := BoxMesh.new()
+		sbm.size = Vector3(0.08, 0.32, length)
+		str_mesh.mesh = sbm
+		str_mesh.position = center + Vector3(sx * (TOWER_RAMP_W * 0.5 + 0.04), 0.06, 0.0)
+		str_mesh.rotation_degrees = Vector3(rad_to_deg(ang) * dir_z, 0.0, 0.0)
+		str_mesh.material_override = rail_mat
+		parent.add_child(str_mesh)
+
+static func _add_static_box_part(body: StaticBody3D, part_name: String, center: Vector3, size: Vector3, mat: Material, with_collision: bool = true) -> void:
+	if with_collision:
+		var col := CollisionShape3D.new()
+		col.name = part_name + "_Col"
+		var shape := BoxShape3D.new()
+		shape.size = size
+		col.shape = shape
+		col.position = center
+		body.add_child(col)
+	var mi := MeshInstance3D.new()
+	mi.name = part_name
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	mi.position = center
+	mi.material_override = mat
+	body.add_child(mi)
+
+## Hollow crashed-helicopter cabin. Long axis = local X (8.4m), width = local Z (2.8m).
+## Both long sides have an open cargo door (2.2m wide x 1.95m tall) so players walk straight through across
+## the 50, plus two shooting windows per side: sill at 1.12m (crouched players stay hidden, mask top 1.09m)
+## and top at 1.78m (standing eye 1.58m sits in the window to peek and shoot).
+static func _build_walkthrough_heli_fuselage(parent: Node3D, f_name: String, pos: Vector3, yaw_deg: float, hull_mat: Material, trim_mat: Material) -> StaticBody3D:
+	var body := StaticBody3D.new()
+	body.name = f_name
+	body.position = pos
+	body.rotation_degrees = Vector3(0.0, yaw_deg, 0.0)
+	body.set_meta("is_rigid_cover", true)
+	body.set_meta("rigid_cover", true)
+	body.set_meta("is_cover_bunker", true)
+	body.set_meta("walkthrough", true)
+	body.set_meta("opening_passthrough", true)
+	parent.add_child(body)
+
+	var hx: float = 4.2
+	var hz: float = 1.4
+	var t: float = 0.12
+	var roof_y: float = 2.15
+	var sill: float = 1.12
+	var win_top: float = 1.78
+	var door_hx: float = 1.1
+	var door_top: float = 1.95
+	var win_a: float = 2.0
+	var win_b: float = 3.6
+
+	for side in [-1.0, 1.0]:
+		var wz: float = side * (hz - t * 0.5)
+		var tag := "N" if side < 0.0 else "S"
+		for sx in [-1.0, 1.0]:
+			var stag := "Aft" if sx < 0.0 else "Fwd"
+			# Lower wall below windows (from bulkhead to door edge)
+			var seg_len: float = hx - door_hx
+			var seg_cx: float = sx * (door_hx + seg_len * 0.5)
+			_add_static_box_part(body, "Wall%s_%s_Lower" % [tag, stag], Vector3(seg_cx, sill * 0.5, wz), Vector3(seg_len, sill, t), hull_mat)
+			# Upper wall above windows
+			_add_static_box_part(body, "Wall%s_%s_Upper" % [tag, stag], Vector3(seg_cx, (win_top + roof_y) * 0.5, wz), Vector3(seg_len, roof_y - win_top, t), hull_mat)
+			# Window pillars: bulkhead..win_b, win_a..door edge
+			var p_out: float = hx - win_b
+			_add_static_box_part(body, "Wall%s_%s_PillarOuter" % [tag, stag], Vector3(sx * (win_b + p_out * 0.5), (sill + win_top) * 0.5, wz), Vector3(p_out, win_top - sill, t), trim_mat)
+			var p_in: float = win_a - door_hx
+			_add_static_box_part(body, "Wall%s_%s_PillarInner" % [tag, stag], Vector3(sx * (door_hx + p_in * 0.5), (sill + win_top) * 0.5, wz), Vector3(p_in, win_top - sill, t), trim_mat)
+		# Door header
+		_add_static_box_part(body, "Wall%s_DoorHeader" % tag, Vector3(0.0, (door_top + roof_y) * 0.5, wz), Vector3(door_hx * 2.0, roof_y - door_top, t), hull_mat)
+
+	# End bulkheads (cockpit side and tail side)
+	for sx in [-1.0, 1.0]:
+		_add_static_box_part(body, "Bulkhead_%s" % ("Aft" if sx < 0.0 else "Fwd"), Vector3(sx * (hx - t * 0.5), roof_y * 0.5, 0.0), Vector3(t, roof_y, hz * 2.0), trim_mat)
+	# Roof
+	_add_static_box_part(body, "Roof", Vector3(0.0, roof_y + 0.07, 0.0), Vector3(hx * 2.0 + 0.2, 0.14, hz * 2.0 + 0.2), hull_mat)
+	# Visual-only cabin floor plate (no collision, so no step-up at the doors)
+	_add_static_box_part(body, "CabinFloor", Vector3(0.0, 0.015, 0.0), Vector3(hx * 2.0 - 0.2, 0.03, hz * 2.0 - 0.2), trim_mat, false)
+	return body
 
 static func _build_walkable_ramp(parent: Node3D, r_name: String, pos: Vector3, size: Vector3, rot_deg: Vector3, mat: Material) -> void:
 	var rbody := StaticBody3D.new()

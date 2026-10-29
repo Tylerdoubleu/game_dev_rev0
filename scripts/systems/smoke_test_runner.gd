@@ -213,10 +213,46 @@ func _process(_delta: float) -> bool:
 		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
 	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Rigid Woodsball cover must still engage PB-16 player cover pocket physics")
 	assert(not bool(woods_back_center.get_meta("vinyl_flex_active", false)), "Rigid Woodsball cover must NOT trigger inflatable vinyl bunker flex")
-	# Also test elevated pocket physics on the West Flank Sniper Tower deck (Y = 2.85m) behind Tower_WestFlank_Parapet_Back
+	# v0.4.3 tower access: ramp top lands flush on the deck and the parapet has a doorway over the ramp landing
+	var deck_top: float = GrittyArtTheme.TOWER_DECK_TOP
+	var south_ramp := west_tower.get_node_or_null("WalkableRamp_Tower_WestFlank_South") as StaticBody3D
+	assert(south_ramp != null, "West tower must have a South ramp")
+	var ramp_shape := (south_ramp.get_child(0) as CollisionShape3D).shape as BoxShape3D
+	var ramp_top_pt: Vector3 = south_ramp.transform * Vector3(0.0, ramp_shape.size.y * 0.5, -ramp_shape.size.z * 0.5)
+	assert(absf(ramp_top_pt.y - deck_top) < 0.06 and absf(absf(ramp_top_pt.z) - GrittyArtTheme.TOWER_HALF) < 0.12, "Ramp top edge must meet the deck edge flush (got %s)" % str(ramp_top_pt))
+	var ramp_bot_pt: Vector3 = south_ramp.transform * Vector3(0.0, ramp_shape.size.y * 0.5, ramp_shape.size.z * 0.5)
+	assert(ramp_bot_pt.y <= 0.02, "Ramp foot must reach the ground (got %s)" % str(ramp_bot_pt))
+	var back_rail := west_tower.get_node_or_null("Tower_WestFlank_Parapet_Back") as StaticBody3D
+	var rail_shape := (back_rail.get_node("CollisionShape3D") as CollisionShape3D).shape as BoxShape3D
+	var rail_max_x: float = back_rail.position.x + rail_shape.size.x * 0.5
+	var ramp_min_x: float = GrittyArtTheme.TOWER_RAMP_X - GrittyArtTheme.TOWER_RAMP_W * 0.5
+	assert(rail_max_x < ramp_min_x, "Parapet must leave a doorway over the ramp landing")
+	# Parapet height: crouched mask top (0.92 + 0.17) hidden, standing eye (1.58) above the rail
+	var rail_top: float = back_rail.position.y + rail_shape.size.y * 0.5 - deck_top
+	assert(rail_top > 0.92 + 0.17 and rail_top < 1.58 - 0.2, "Tower parapet top (%.2f) must hide a crouched player and let a standing player see over it" % rail_top)
+	# Walk-through fuselage: cargo door gap at body height on both sides and a window at standing eye height
+	var door_blocked := false
+	var window_blocked := false
+	var lower_wall_hit := false
+	for c in heli_fuselage.get_children():
+		if c is CollisionShape3D:
+			var cs := c as CollisionShape3D
+			var sz: Vector3 = (cs.shape as BoxShape3D).size
+			var bb := AABB(cs.position - sz * 0.5, sz)
+			for zz in [-1.34, 0.0, 1.34]:
+				if bb.has_point(Vector3(0.0, 1.0, zz)):
+					door_blocked = true
+			if bb.has_point(Vector3(2.8, 1.45, 1.34)):
+				window_blocked = true
+			if bb.has_point(Vector3(2.8, 0.6, 1.34)):
+				lower_wall_hit = true
+	assert(not door_blocked, "Fuselage must be open to walk straight through the cargo doors")
+	assert(not window_blocked and lower_wall_hit, "Fuselage windows must be open at standing eye height with solid wall below")
+	print("[PASS] v0.4.3 tower ramps open onto decks, 1.25m crouch-safe parapets, walk-through fuselage with shooting windows verified")
+	# Also test elevated pocket physics on the West Flank Sniper Tower deck behind Tower_WestFlank_Parapet_Back
 	player.set("bunker_pocket_weight", 0.0)
-	player.global_position = Vector3(-25.0, 3.0, 1.35)
-	player.rotation.y = PI # Facing +Z toward Tower_WestFlank_Parapet_Back at Z = +2.05
+	player.global_position = Vector3(-26.2, deck_top + 0.02, 1.75)
+	player.rotation.y = PI # Facing +Z toward Tower_WestFlank_Parapet_Back
 	for _i in range(6):
 		player.call("_apply_bunker_cover_pocket_physics", 0.05, Vector3.ZERO, Vector2.ZERO, false)
 	assert(float(player.get("bunker_pocket_weight")) > 0.25, "Elevated Sniper Tower parapet must engage PB-16 player cover pocket physics at Y=3.0m")

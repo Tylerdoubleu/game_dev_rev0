@@ -1004,12 +1004,38 @@ func _probe_nearest_bunker_cover() -> Dictionary:
 				best_hit["horiz_dist"] = dist
 	return best_hit
 
+func _is_path_ahead_clear(move_dir: Vector3, reach: float) -> bool:
+	var w3d := get_world_3d()
+	if w3d == null or w3d.direct_space_state == null:
+		return false
+	var ahead := Vector3(move_dir.x, 0.0, move_dir.z)
+	if ahead.length_squared() < 0.01:
+		ahead = -transform.basis.z
+		ahead.y = 0.0
+	if ahead.length_squared() < 0.001:
+		return false
+	ahead = ahead.normalized()
+	for h in [0.55, 1.25]:
+		var o := global_position + Vector3(0.0, h, 0.0)
+		var q := PhysicsRayQueryParameters3D.create(o, o + ahead * reach)
+		q.exclude = [get_rid()]
+		var res: Dictionary = w3d.direct_space_state.intersect_ray(q)
+		if not res.is_empty() and _is_cover_bunker_collider(res.get("collider")):
+			return false
+	return true
+
 func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_vec: Vector2, wants_sprint: bool) -> void:
 	var hit := _probe_nearest_bunker_cover()
 	if _bunker_slam_flex_cooldown > 0.0:
 		_bunker_slam_flex_cooldown = maxf(0.0, _bunker_slam_flex_cooldown - delta)
 	if _auto_hand_switch_cooldown > 0.0:
 		_auto_hand_switch_cooldown = maxf(0.0, _auto_hand_switch_cooldown - delta)
+	# v0.4.3: Walk-through openings (heli cargo doors, tower ramp doorways). Pressing forward toward a clear
+	# opening in a pass-through structure never latches the cover pocket, so you can walk straight through.
+	if not hit.is_empty() and input_vec.y < -0.5:
+		var hcol: Object = hit.get("collider")
+		if hcol is Node and bool((hcol as Node).get_meta("opening_passthrough", false)) and _is_path_ahead_clear(move_dir, 1.1):
+			hit = {}
 	if hit.is_empty():
 		var was_tucked := bunker_pocket_weight > 0.25
 		bunker_pocket_weight = move_toward(bunker_pocket_weight, 0.0, delta * 7.5)
