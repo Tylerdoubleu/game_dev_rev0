@@ -367,7 +367,18 @@ func _test_hit_validation() -> void:
 
 func _test_ready_and_countdown() -> void:
 	_begin("READY toggle + match_starting / match_countdown")
-	L.match_countdown_ms = 3000
+	_check(L.MATCH_COUNTDOWN_MS == 5000, "default pre-match countdown is 5 s")
+	L.match_countdown_ms = L.MATCH_COUNTDOWN_MS
+	# start_rejected: a lone player cannot start a real match (empty team)...
+	L._server_register_peer(70, "P70", "", "speedball", false, "lobby_08")
+	L._server_request_start(70, "speedball")
+	var sr := _sent(70, "cl_room_event").filter(func(m): return m["args"][0] == "start_rejected")
+	_check(sr.size() == 1 and sr[0]["args"][1]["reason"] == "team_empty" and _events("match_starting", "lobby_08").is_empty(), "start_rejected(team_empty) with an empty team")
+	# ...unless bots fill is on.
+	L._server_request_start(70, "speedball", true)
+	_check(_events("match_starting", "lobby_08").size() == 1, "bots fill on: an empty team may start")
+	L._server_cancel_start(70)
+	L._server_remove_peer(70)
 	L._server_register_peer(71, "P71", "", "speedball", false, "lobby_07")
 	L._server_register_peer(72, "P72", "", "speedball", false, "lobby_07")
 	var snap: Dictionary = L._room_snapshot("lobby_07")
@@ -383,17 +394,30 @@ func _test_ready_and_countdown() -> void:
 	# Start Match does not require everyone ready (72 is not ready).
 	L._server_request_start(72, "speedball")
 	var ms := _events("match_starting", "lobby_07")
-	_check(ms.size() == 1 and int(ms[0]["data"]["in_ms"]) == 3000 and int(ms[0]["data"]["seconds"]) == 3 and int(ms[0]["data"]["by"]) == 72, "match_starting {in_ms:3000, seconds:3, by} even though not all ready")
-	_check(_events("match_countdown", "lobby_07").size() == 1 and int(_events("match_countdown", "lobby_07")[0]["data"]["seconds_left"]) == 3, "match_countdown 3")
+	_check(ms.size() == 1 and int(ms[0]["data"]["in_ms"]) == 5000 and int(ms[0]["data"]["seconds"]) == 5 and int(ms[0]["data"]["by"]) == 72, "match_starting {in_ms:5000, seconds:5, by} even though not all ready")
+	_check(_events("match_countdown", "lobby_07").size() == 1 and int(_events("match_countdown", "lobby_07")[0]["data"]["seconds_left"]) == 5, "match_countdown 5")
 	_check(not bool(L.rooms["lobby_07"]["match"]["active"]) and _events("round_started", "lobby_07").is_empty(), "match not live during the countdown")
 	L._server_request_start(71, "speedball")
 	_check(_events("match_starting", "lobby_07").size() == 1, "second Start Match during the countdown is ignored")
 	L._server_set_room_settings(71, "woodsball_crash", "")
 	_check(L.rooms["lobby_07"]["settings"]["map"] == "speedball", "settings locked during the countdown")
+	# cancel_start(): any player in the room stops the countdown and unlocks the settings.
 	_advance(1000)
-	_advance(1000)
+	L._server_cancel_start(71)
+	var mc := _events("match_start_cancelled", "lobby_07")
+	_check(mc.size() == 1 and int(mc[0]["data"]["by"]) == 71, "match_start_cancelled {by:71}")
+	_check(not L.rooms["lobby_07"].has("countdown_until_ms") and L.room_status_of(L.rooms["lobby_07"]) == "waiting", "room back to waiting")
+	_advance(6000)
+	_check(not bool(L.rooms["lobby_07"]["match"]["active"]) and _events("round_started", "lobby_07").is_empty(), "cancelled countdown never starts the match")
+	L._server_set_room_settings(71, "woodsball_crash", "")
+	_check(L.rooms["lobby_07"]["settings"]["map"] == "woodsball_crash", "settings unlocked after cancel")
+	L._server_set_room_settings(71, "speedball", "")
+	ev.clear()
+	L._server_request_start(71, "speedball")
+	for i in 4:
+		_advance(1000)
 	var cd := _events("match_countdown", "lobby_07").map(func(e): return int(e["data"]["seconds_left"]))
-	_check(cd == [3, 2, 1], "countdown 3,2,1 (%s)" % [cd])
+	_check(cd == [5, 4, 3, 2, 1], "countdown 5,4,3,2,1 (%s)" % [cd])
 	_advance(1000)
 	_check(bool(L.rooms["lobby_07"]["match"]["active"]) and _events("round_started", "lobby_07").size() == 1, "round_started after the countdown")
 	_check(_sent(71, "notify_match_start").size() == 1 and _sent(72, "notify_match_start").size() == 1, "notify_match_start to every player")

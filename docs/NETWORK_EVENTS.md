@@ -45,7 +45,8 @@ Client → server (always `rpc_id(1)`):
 | `srv_report_hit(victim_peer, hit_pos)` | The shooter's local hit. The server validates it and may emit `player_eliminated`. |
 | `srv_bot_eliminated(name)`, `srv_flag_event(...)` | Cosmetic relays (legacy centre flag). |
 | `srv_set_room_settings(map, mode)` | Change the lobby map or mode (waiting only). |
-| `request_start_match(room, bracket, fill_bots)` | Start the room's match after a 3 s countdown (`match_starting`, then `match_countdown` 3,2,1, then `round_started`). It does not wait for READY. A second press during the countdown is ignored. |
+| `request_start_match(room, bracket, fill_bots)` | Start the room's match after a 5 s countdown (`match_starting`, then `match_countdown` 5,4,3,2,1, then `round_started`). It does not wait for READY. A second press during the countdown is ignored.<br>If a team is still empty after auto-balance, the requester gets `start_rejected` (reason `team_empty`). That check is skipped when the mode is `bots_test` or the `fill_bots` arg is true.<br>Online clients don't drop in on the press; they wait for `notify_match_start`. |
+| `srv_cancel_start()` | Any player in the room cancels a running countdown. Use `NetworkLobby.cancel_start()`. The settings unlock, the room stays `waiting`, and the server emits `match_start_cancelled`. |
 | `srv_set_ready(ready)` | The READY toggle. Use `NetworkLobby.set_ready(bool)`. It is informational only and resets to false after each match. |
 
 Client helpers:
@@ -54,7 +55,7 @@ Client helpers:
 
 Server → client (authority, per peer): `sync_lobby_state(state)`, `notify_match_start(room, bracket, fill_bots)`, `cl_room_event(name, data)`, `rpc_sync_player_state(...)`, `rpc_fire_paintball(...)`, `rpc_notify_bot_eliminated`, `rpc_broadcast_flag_event`.
 
-Client signals: `match_starting(data)` and `match_countdown(seconds_left, data)`. These names are stable, and the HUD countdown banner hooks them. `room_roster_changed(roster)` fires on every `sync_lobby_state`, and `left_room(room_id)` fires after `leave_room()`.
+Client signals: `match_starting(data)`, `match_countdown(seconds_left, data)`, `match_start_cancelled(data)` and `start_rejected(reason, data)`. These names are stable, and the HUD countdown banner hooks them. `room_roster_changed(roster)` fires on every `sync_lobby_state`, and `left_room(room_id)` fires after `leave_room()`.
 
 Listen to `NetworkLobby.room_event(event_name, data)`. It fires on clients for every `cl_room_event`, and on the server for every room event.
 
@@ -80,8 +81,10 @@ Every room event includes `room`.
 | `room_settings_changed` | map, mode, by, by_name | A player changed settings (waiting only). |
 | `settings_rejected` (to one peer) | reason=`match_in_progress` / `match_starting`, map, mode | A settings change arrived after match start or during the countdown. |
 | `player_ready_changed` | peer, name, ready | A player toggled READY. The roster is re-synced too. |
-| `match_starting` | in_ms (3000), seconds (3), by, by_name, mode, map | Someone pressed Start Match. Settings lock now. |
-| `match_countdown` | seconds_left (3, 2, 1), ms_left | Sent once per second during the countdown. `round_started` follows at 0. The countdown is cancelled if the room empties. |
+| `match_starting` | in_ms (5000), seconds (5), by, by_name, mode, map | Someone pressed Start Match. Settings lock now. |
+| `match_countdown` | seconds_left (5, 4, 3, 2, 1), ms_left | Sent once per second during the countdown. `round_started` follows at 0. The countdown is cancelled if the room empties. |
+| `match_start_cancelled` | by, by_name | A player called `cancel_start()` during the countdown. The settings unlock and the room is back to `waiting`. |
+| `start_rejected` (to the requester) | room, reason=`team_empty`, red, blue | Start Match was refused. |
 | `teams_rebalanced` | moves:[{peer,name,from,to}], red, blue | Auto-balance moved players. |
 | `join_rejected` (to one peer) | room, reason=`full`/`unknown_lobby` | The join was refused. |
 | `round_started` | round, mode, score, kills, target, reset_positions:true | The match starts (round 1), or the next CTF round starts after a 4 s intermission. **Clients respawn at their team gate.** NetworkLobby already does this via `respawn_at_team_gate`. |

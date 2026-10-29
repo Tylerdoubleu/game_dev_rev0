@@ -31,6 +31,8 @@ signal mode_changed(mode_id: String)
 ## v0.5 pre-match countdown (stable names; Bluey's HUD banner hooks these). Also delivered as room_event.
 signal match_starting(data: Dictionary)
 signal match_countdown(seconds_left: int, data: Dictionary)
+signal match_start_cancelled(data: Dictionary)
+signal start_rejected(reason: String, data: Dictionary)
 ## v0.5: emitted on clients after leave_room() (LobbyEntryFlow reopens the lobby browser).
 signal left_room(room_id: String)
 ## v0.5: room_roster from the latest sync_lobby_state (Array of {peer,name,team,color,ready,alive,kills,deaths,bracket}).
@@ -557,7 +559,7 @@ func request_start_match(room_id: String, bracket_id: String, fill_bots: bool) -
 	if is_dedicated_server:
 		var sid := multiplayer.get_remote_sender_id()
 		if sid > 1:
-			_server_request_start(sid, clean_bracket)
+			_server_request_start(sid, clean_bracket, fill_bots)
 		return
 	var clean_room := sanitize_room_id(room_id) if not room_id.strip_edges().is_empty() else active_room
 	local_bracket = clean_bracket
@@ -569,6 +571,10 @@ func request_start_match(room_id: String, bracket_id: String, fill_bots: bool) -
 			active_room = clean_room
 			_send_registration()
 		request_start_match.rpc_id(1, clean_room, clean_bracket, fill_bots)
+		# Online: the server answers with match_starting -> countdown -> notify_match_start (which sets match_active
+		# and emits match_started_signal), or start_rejected.
+		match_active = false
+		return
 	match_started_signal.emit(clean_room, clean_bracket, fill_bots)
 
 ## =============================================================================================================
@@ -640,6 +646,12 @@ func cl_room_event(event_name: String, data: Dictionary) -> void:
 		match_starting.emit(data)
 	elif event_name == "match_countdown":
 		match_countdown.emit(int(data.get("seconds_left", 0)), data)
+	elif event_name == "match_start_cancelled":
+		match_active = false
+		match_start_cancelled.emit(data)
+	elif event_name == "start_rejected":
+		match_active = false
+		start_rejected.emit(String(data.get("reason", "")), data)
 
 func copy_invite_link() -> String:
 	var invite_url := "http://127.0.0.1:8080/?room=%s&bracket=%s&map=%s" % [active_room.uri_encode(), local_bracket.uri_encode(), selected_map.uri_encode()]
@@ -1188,7 +1200,30 @@ func _server_set_room_settings(pid: int, map_id: String, mode_id: String) -> voi
 	_send_room_event(rid, "room_settings_changed", {"map": m, "mode": md, "by": pid, "by_name": players[pid].get("name", "")})
 	_broadcast_room_state(rid)
 
-func _server_request_start(pid: int, bracket_id: String) -> void:
+## v0.5: any player in the room may cancel a running pre-match countdown.
+func cancel_start() -> void:
+	if is_online_client():
+		srv_cancel_start.rpc_id(1)
+
+@rpc("any_peer", "call_remote", "reliable")
+func srv_cancel_start() -> void:
+	if not is_dedicated_server:
+		return
+	_server_cancel_start(multiplayer.get_remote_sender_id())
+
+func _server_cancel_start(pid: int) -> void:
+	var rid := String(peer_room.get(pid, ""))
+	if rid.is_empty() or not rooms.has(rid):
+		return
+	var room: Dictionary = rooms[rid]
+	if not room.has("countdown_until_ms"):
+		return
+	room.erase("countdown_until_ms")
+	room.erase("countdown_last_s")
+	_send_room_event(rid, "match_start_cancelled", {"by": pid, "by_name": players.get(pid, {}).get("name", "")})
+	_broadcast_room_state(rid)
+
+func _server_request_start(pid: int, bracket_id: String, fill_bots: bool = false) -> void:
 	var rid := String(peer_room.get(pid, ""))
 	if rid.is_empty():
 		return
@@ -1202,6 +1237,12 @@ func _server_request_start(pid: int, bracket_id: String) -> void:
 	if room.has("countdown_until_ms"):
 		_broadcast_room_state(rid) # countdown already running
 		return
+	if String(room["settings"]["mode"]) != "bots_test" and not fill_bots:
+		_rebalance_room_teams(room) # a 2v0 room becomes 1v1 first; only a truly empty side is rejected
+		var c: Dictionary = room_team_counts(room)
+		if int(c["ALPHA"]) == 0 or int(c["BRAVO"]) == 0:
+			_send_peer_event(pid, "start_rejected", {"room": rid, "reason": "team_empty", "red": int(c["ALPHA"]), "blue": int(c["BRAVO"])})
+			return
 	var ms := maxi(0, match_countdown_ms)
 	var secs := int(ceil(ms / 1000.0))
 	_send_room_event(rid, "match_starting", {
@@ -1216,8 +1257,8 @@ func _server_request_start(pid: int, bracket_id: String) -> void:
 	_send_room_event(rid, "match_countdown", {"seconds_left": secs, "ms_left": ms})
 	_broadcast_room_state(rid)
 
-## v0.5 pre-match countdown (match_starting -> match_countdown 3,2,1 -> round_started). Tests set match_countdown_ms.
-const MATCH_COUNTDOWN_MS: int = 3000
+## v0.5 pre-match countdown (match_starting -> match_countdown 5,4,3,2,1 -> round_started; cancel_start() aborts). Tests set match_countdown_ms.
+const MATCH_COUNTDOWN_MS: int = 5000
 var match_countdown_ms: int = MATCH_COUNTDOWN_MS
 
 func _tick_room_countdown(room: Dictionary) -> void:
