@@ -37,6 +37,11 @@ signal start_rejected(reason: String, data: Dictionary)
 signal left_room(room_id: String)
 ## v0.5: room_roster from the latest sync_lobby_state (Array of {peer,name,team,color,ready,alive,kills,deaths,bracket}).
 signal room_roster_changed(roster: Array)
+## v0.5 end-of-round / end-of-match recaps (data includes "scoreboard": Array of per-player rows) and the return to
+## the waiting room once the match recap is over (see docs/NETWORK_EVENTS.md).
+signal round_results(data: Dictionary)
+signal match_results(data: Dictionary)
+signal returned_to_lobby(room_id: String)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -810,7 +815,14 @@ func _client_apply_room_event(event_name: String, data: Dictionary) -> void:
 				local_player_scored_kill.emit(victim_name)
 				IntelBus.intel_feed_updated.emit("ELIMINATED %s! (+1 BONUS PAINT POD AWARDED!)" % victim_name)
 			lobby_state_changed.emit(get_lobby_state_snapshot())
+		"round_ended":
+			round_results.emit(data)
+		"returned_to_lobby":
+			match_active = false
+			room_status = "waiting"
+			returned_to_lobby.emit(String(data.get("room", active_room)))
 		"match_ended":
+			match_results.emit(data)
 			match_active = false
 			var winner := String(data.get("winner", ""))
 			var loser := other_team(winner) if winner in TEAMS else "DRAW"
@@ -1179,8 +1191,38 @@ func _server_set_ready(pid: int, is_ready: bool) -> void:
 	if bool(players[pid].get("ready", false)) == is_ready:
 		return
 	players[pid]["ready"] = is_ready
-	_send_room_event(rid, "player_ready_changed", {"peer": pid, "name": players[pid].get("name", ""), "ready": is_ready})
+	if is_ready and rooms.has(rid):
+		_assign_team_on_ready(rooms[rid], pid)
+	var t := String(players[pid].get("team", "ALPHA"))
+	_send_room_event(rid, "player_ready_changed", {"peer": pid, "name": players[pid].get("name", ""), "ready": is_ready, "team": t, "color": team_label(t)})
 	_broadcast_room_state(rid)
+
+## v0.5 (Tyler): pressing READY takes a team spot: the side with fewer READY players (keep your side on a tie).
+## Skipped mid-match / during the countdown so a running match never reshuffles. Start still runs a full balance.
+func _assign_team_on_ready(room: Dictionary, pid: int) -> void:
+	if bool(room["match"].get("active", false)) or room.has("countdown_until_ms"):
+		return
+	var info: Dictionary = room["players"].get(pid, {})
+	if info.is_empty():
+		return
+	var rc := {"ALPHA": 0, "BRAVO": 0}
+	for other in room["players"].keys():
+		var o: Dictionary = room["players"][other]
+		if int(other) != pid and bool(o.get("ready", false)):
+			var ot := String(o.get("team", "ALPHA"))
+			if rc.has(ot):
+				rc[ot] = int(rc[ot]) + 1
+	var cur := String(info.get("team", "ALPHA"))
+	var target := cur
+	if int(rc["ALPHA"]) < int(rc["BRAVO"]):
+		target = "ALPHA"
+	elif int(rc["BRAVO"]) < int(rc["ALPHA"]):
+		target = "BRAVO"
+	if target == cur or int(room_team_counts(room)[target]) >= MAX_PER_TEAM:
+		return
+	info["team"] = target
+	var c := room_team_counts(room)
+	_send_room_event(String(room["id"]), "teams_rebalanced", {"moves": [{"peer": pid, "name": info.get("name", ""), "from": cur, "to": target}], "red": c["ALPHA"], "blue": c["BRAVO"], "reason": "ready"})
 
 func _server_set_room_settings(pid: int, map_id: String, mode_id: String) -> void:
 	var rid := String(peer_room.get(pid, ""))
@@ -1303,7 +1345,8 @@ const CTF_ROUNDS_TO_WIN: int = 3
 const CTF_BEST_OF: int = 5
 const DM_RESPAWN_MS: int = 1000
 const PRACTICE_RESPAWN_MS: int = 1000
-const ROUND_INTERMISSION_MS: int = 4000
+const ROUND_INTERMISSION_MS: int = 8000 # round winner + scoreboard recap before the next round
+const MATCH_RESULTS_MS: int = 12000 # match winner + scoreboard recap before everyone returns to the waiting room
 const FLAG_PICKUP_RADIUS: float = 2.35
 const FLAG_CAPTURE_RADIUS: float = 4.2
 const FLAG_AUTO_RETURN_MS: int = 30000
@@ -1394,6 +1437,9 @@ func _on_player_moved(room: Dictionary, pid: int, pos: Vector3) -> void:
 		var base := team_base_position(team)
 		if flat.distance_to(Vector2(base.x, base.z)) <= FLAG_CAPTURE_RADIUS:
 			_set_flag(room, enemy, "home", 0, team_base_position(enemy), "captured", pid)
+			var cap_info: Dictionary = room["players"].get(pid, {})
+			if not cap_info.is_empty():
+				cap_info["captures"] = int(cap_info.get("captures", 0)) + 1
 			_end_ctf_round(room, team, "capture", pid)
 
 func _set_flag(room: Dictionary, flag_team: String, state: String, carrier: int, pos: Vector3, action: String, by_pid: int) -> void:
@@ -1474,13 +1520,34 @@ func _end_ctf_round(room: Dictionary, winner: String, reason: String, by_pid: in
 	var rid := String(room["id"])
 	_send_room_event(rid, "round_ended", {
 		"round": m["round"], "winner": winner, "winner_color": team_label(winner) if winner in TEAMS else "",
-		"reason": reason, "by": by_pid, "score": _team_dict_to_colors(m["score"]),
-		"next_round_in_ms": ROUND_INTERMISSION_MS,
+		"reason": reason, "by": by_pid, "by_name": String(room["players"].get(by_pid, {}).get("name", "")),
+		"score": _team_dict_to_colors(m["score"]), "target": CTF_ROUNDS_TO_WIN, "best_of": CTF_BEST_OF,
+		"next_round_in_ms": ROUND_INTERMISSION_MS if not (winner in TEAMS and int(m["score"][winner]) >= CTF_ROUNDS_TO_WIN) else 0,
+		"match_point": winner in TEAMS and int(m["score"][winner]) >= CTF_ROUNDS_TO_WIN,
+		"scoreboard": _room_scoreboard(room),
 	})
 	if winner in TEAMS and int(m["score"][winner]) >= CTF_ROUNDS_TO_WIN:
 		_end_room_match(room, winner, "rounds")
 		return
 	_broadcast_room_state(rid)
+
+## v0.5 recap rows: red then blue, each sorted by kills (then captures, then fewest deaths).
+func _room_scoreboard(room: Dictionary) -> Array:
+	var rows: Array = []
+	for pid in room["players"].keys():
+		var info: Dictionary = room["players"][pid]
+		var t := String(info.get("team", "ALPHA"))
+		rows.append({"peer": int(pid), "name": String(info.get("name", "")), "team": t, "color": team_label(t),
+			"kills": int(info.get("kills", 0)), "deaths": int(info.get("deaths", 0)), "captures": int(info.get("captures", 0))})
+	rows.sort_custom(func(a, b):
+		if a["team"] != b["team"]:
+			return String(a["team"]) == "ALPHA"
+		if a["kills"] != b["kills"]:
+			return int(a["kills"]) > int(b["kills"])
+		if a["captures"] != b["captures"]:
+			return int(a["captures"]) > int(b["captures"])
+		return int(a["deaths"]) < int(b["deaths"]))
+	return rows
 
 func _start_room_match(room: Dictionary) -> void:
 	var rid := String(room["id"])
@@ -1494,8 +1561,10 @@ func _start_room_match(room: Dictionary) -> void:
 		var info: Dictionary = room["players"][pid]
 		info["kills"] = 0
 		info["deaths"] = 0
+		info["captures"] = 0
 		info["alive"] = true
 		info.erase("late_join")
+	room.erase("results_until_ms")
 	_broadcast_room_state(rid)
 	for pid in room["players"].keys():
 		_send(int(pid), &"notify_match_start", [rid, String(room["players"][pid].get("bracket", "speedball")), mode == "bots_test"])
@@ -1529,8 +1598,11 @@ func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
 	_send_room_event(rid, "match_ended", {
 		"winner": winner, "winner_color": team_label(winner) if winner in TEAMS else "", "reason": reason,
 		"mode": mode, "score": _team_dict_to_colors(score), "kills": _team_dict_to_colors(m["kills"]),
-		"rounds": m["round"],
+		"rounds": m["round"], "scoreboard": _room_scoreboard(room),
+		"winner_names": _room_scoreboard(room).filter(func(r): return String(r["team"]) == winner).map(func(r): return r["name"]),
+		"return_to_lobby_in_ms": MATCH_RESULTS_MS,
 	})
+	room["results_until_ms"] = _rules_now() + MATCH_RESULTS_MS
 	var fresh := _new_match_state()
 	fresh["winner"] = winner
 	room["match"] = fresh
@@ -1542,6 +1614,10 @@ func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
 
 func _tick_room_match(room: Dictionary, _delta: float) -> void:
 	var now := _rules_now()
+	if room.has("results_until_ms") and now >= int(room["results_until_ms"]):
+		room.erase("results_until_ms")
+		_send_room_event(String(room["id"]), "returned_to_lobby", {"room": String(room["id"])})
+		_broadcast_room_state(String(room["id"]))
 	var m: Dictionary = room["match"]
 	var active := bool(m.get("active", false))
 	var mode := String(m.get("mode", ""))

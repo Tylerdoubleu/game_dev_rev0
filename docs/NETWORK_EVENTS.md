@@ -80,7 +80,7 @@ Every room event includes `room`.
 |---|---|---|
 | `room_settings_changed` | map, mode, by, by_name | A player changed settings (waiting only). |
 | `settings_rejected` (to one peer) | reason=`match_in_progress` / `match_starting`, map, mode | A settings change arrived after match start or during the countdown. |
-| `player_ready_changed` | peer, name, ready | A player toggled READY. The roster is re-synced too. |
+| `player_ready_changed` | peer, name, ready, team, color | A player toggled READY. Pressing READY takes a team spot: the side with fewer READY players (ties keep your side; a `teams_rebalanced` with `reason: "ready"` is sent if you moved). The roster is re-synced too. |
 | `match_starting` | in_ms (5000), seconds (5), by, by_name, mode, map | Someone pressed Start Match. Settings lock now. |
 | `match_countdown` | seconds_left (5, 4, 3, 2, 1), ms_left | Sent once per second during the countdown. `round_started` follows at 0. The countdown is cancelled if the room empties. |
 | `match_start_cancelled` | by, by_name | A player called `cancel_start()` during the countdown. The settings unlock and the room is back to `waiting`. |
@@ -91,8 +91,11 @@ Every room event includes `room`.
 | `player_eliminated` | victim, victim_name, victim_team, shooter, shooter_name, shooter_team, victim/shooter_kills/deaths, reason, scored | A validated hit. `scored=false` while waiting (practice). |
 | `hit_rejected` (to the shooter) | victim, reason | The hit failed validation (see below). |
 | `flag_state_changed` | flag_team, flag (red/blue), state, action, carrier, carrier_name, by, by_name, pos | CTF actions: `picked_up`, `dropped` / `carrier_eliminated` / `carrier_left`, `returned`, `auto_returned` (after 30 s), `captured`, `reset`. |
-| `round_ended` | round, winner, winner_color, reason (`capture` / `elimination` / `double_elimination`), by, score{red,blue}, next_round_in_ms | A CTF round is over. |
-| `match_ended` | winner, winner_color, reason (`kills` / `rounds`), mode, score{red,blue}, kills, rounds | The match is won. The room goes back to `waiting`, and everyone is alive again. |
+| `round_ended` | round, winner, winner_color, reason (`capture` / `elimination` / `double_elimination`), by, by_name, score{red,blue}, target, best_of, next_round_in_ms (8000, or 0 when it decided the match), match_point, scoreboard | A CTF round is over. Show the round winner + scoreboard for `next_round_in_ms`; `round_started` follows. Client signal: `round_results(data)`. |
+| `match_ended` | winner, winner_color, winner_names, reason (`kills` / `rounds`), mode, score{red,blue}, kills, rounds, scoreboard, return_to_lobby_in_ms (12000) | The match is won. Show the congrats + scoreboard recap; READY resets. Client signal: `match_results(data)`. |
+| `returned_to_lobby` | room | Sent `return_to_lobby_in_ms` after `match_ended`: everyone goes back to the waiting room (LobbyEntryFlow opens it). Client signal: `returned_to_lobby(room_id)`. |
+
+`scoreboard` rows: `{peer, name, team, color, kills, deaths, captures}`, red first, then blue, each sorted by kills, captures, fewest deaths.
 
 ## Modes
 - **deathmatch**: first team to 10 kills. Respawn after 1 s.

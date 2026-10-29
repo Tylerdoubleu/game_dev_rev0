@@ -138,6 +138,17 @@ func _test_team_balance() -> void:
 		L._server_remove_peer(pid)
 	var moves: Array = L._rebalance_room_teams(L.rooms["lobby_01"])
 	_check(moves.size() == 1 and _team(5) == "BRAVO", "3v0 rebalances the latest joiner (5) to blue (%s)" % [moves])
+	# READY takes a team spot: the side with fewer READY players.
+	for pid in [61, 62, 63]:
+		_reg(pid, "lobby_09")
+		L._server_set_ready(pid, false) # _reg joins READY; start from the bench
+	var t61 := _team(61)
+	L._server_set_ready(61, true)
+	_check(_team(61) == t61, "first READY keeps its side")
+	L._server_set_ready(63, true) # 63 joined red (tie) but red already has a ready player
+	_check(_team(63) != t61, "second READY goes to the side with fewer READY players (%s vs %s)" % [_team(63), t61])
+	var prc := _events("player_ready_changed").filter(func(e): return int(e["data"]["peer"]) == 63 and bool(e["data"]["ready"]))
+	_check(prc.size() == 1 and String(prc[0]["data"]["team"]) == _team(63), "player_ready_changed carries the team")
 	_check(_events("teams_rebalanced", "lobby_01").size() == 1, "teams_rebalanced event emitted")
 	_reg(7, "lobby_01", "BRAVO")
 	_check(_team(7) == "BRAVO", "honoured team= request when it does not unbalance (2v1 -> 2v2)")
@@ -233,9 +244,13 @@ func _test_ctf_best_of_5() -> void:
 	_check(re.size() == 1 and re[0]["data"]["winner"] == "ALPHA" and re[0]["data"]["reason"] == "capture" and re[0]["data"]["score"] == {"red": 1, "blue": 0}, "round 1: red capture (%s)" % [re])
 	var fs := _events("flag_state_changed", "lobby_06").map(func(e): return e["data"]["action"])
 	_check(fs == ["picked_up", "captured"], "flag_state_changed picked_up -> captured (%s)" % [fs])
+	var sb0: Array = re[0]["data"].get("scoreboard", [])
+	var r41 := sb0.filter(func(r): return int(r["peer"]) == 41)
+	_check(sb0.size() == 4 and r41.size() == 1 and int(r41[0]["captures"]) == 1 and String(sb0[0]["color"]) == "red", "round_ended carries the scoreboard (41: 1 capture)")
+	_check(int(re[0]["data"]["next_round_in_ms"]) == L.ROUND_INTERMISSION_MS and not bool(re[0]["data"]["match_point"]), "round_ended: next round in %d ms" % L.ROUND_INTERMISSION_MS)
 	_advance(1000)
 	_check(L.rooms["lobby_06"]["match"]["phase"] == "intermission", "intermission between rounds")
-	_advance(3100)
+	_advance(L.ROUND_INTERMISSION_MS - 900)
 	_check(int(L.rooms["lobby_06"]["match"]["round"]) == 2 and _events("round_started", "lobby_06").size() == 2, "round 2 started after the intermission")
 	# Late joiner sits out the current round.
 	_reg(45, "lobby_06")
@@ -247,7 +262,7 @@ func _test_ctf_best_of_5() -> void:
 	_kill(44, 43)
 	re = _events("round_ended", "lobby_06")
 	_check(re.size() == 2 and re[1]["data"]["winner"] == "BRAVO" and re[1]["data"]["reason"] == "elimination" and re[1]["data"]["score"] == {"red": 1, "blue": 1}, "round 2: blue by elimination")
-	_advance(4100)
+	_advance(L.ROUND_INTERMISSION_MS + 100)
 	_check(_alive(41) and _alive(45) and int(L.rooms["lobby_06"]["match"]["round"]) == 3, "round 3: everyone alive again")
 	# Round 3: blue grabs the red flag, gets shot -> drop; red touches it -> returned; red then captures.
 	_state(42, Vector3(0, 0, 45.5))
@@ -261,7 +276,7 @@ func _test_ctf_best_of_5() -> void:
 	_state(43, Vector3(0, 0, 45.5))
 	re = _events("round_ended", "lobby_06")
 	_check(re.size() == 3 and re[2]["data"]["winner"] == "ALPHA" and re[2]["data"]["score"] == {"red": 2, "blue": 1}, "round 3: red capture -> 2-1")
-	_advance(4100)
+	_advance(L.ROUND_INTERMISSION_MS + 100)
 	# Round 4: dropped flag auto-returns after 30s, then red captures the match.
 	_state(44, Vector3(0, 0, 45.5))
 	_kill(45, 44, Vector3(-12, 0, 10))
@@ -274,8 +289,13 @@ func _test_ctf_best_of_5() -> void:
 	var me := _events("match_ended", "lobby_06")
 	_check(me.size() == 1 and me[0]["data"]["winner"] == "ALPHA" and me[0]["data"]["score"] == {"red": 3, "blue": 1} and int(me[0]["data"]["rounds"]) == 4, "match_ended: red wins 3-1 in 4 rounds (%s)" % [me])
 	_check(not bool(L.rooms["lobby_06"]["match"]["active"]), "room back to waiting after the match")
+	_check(int(me[0]["data"]["return_to_lobby_in_ms"]) == L.MATCH_RESULTS_MS and (me[0]["data"]["scoreboard"] as Array).size() == 5 and (me[0]["data"]["winner_names"] as Array).size() == 3, "match_ended: scoreboard recap + winners + return timer")
+	_check(bool(re[2]["data"].get("match_point", true)) == false and bool(_events("round_ended", "lobby_06")[3]["data"]["match_point"]), "deciding round_ended flagged match_point")
 	_advance(5000)
 	_check(_events("round_started", "lobby_06").size() == 4, "no extra round after the match ended")
+	_check(_events("returned_to_lobby", "lobby_06").is_empty(), "still on the match recap")
+	_advance(L.MATCH_RESULTS_MS)
+	_check(_events("returned_to_lobby", "lobby_06").size() == 1, "returned_to_lobby after the recap")
 
 func _test_bots_test_mode() -> void:
 	_begin("bots_test: bots on, no win condition")

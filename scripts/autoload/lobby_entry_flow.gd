@@ -30,6 +30,7 @@ func _attach_to_scene() -> void:
 	_add_menu_button()
 	NetworkLobby.match_started_signal.connect(_on_match_started)
 	NetworkLobby.left_room.connect(_on_left_room)
+	NetworkLobby.returned_to_lobby.connect(_on_returned_to_lobby)
 	if NetworkLobby.show_lobby_browser_on_start:
 		open_browser()
 	elif NetworkLobby.room_from_url and OS.has_feature("web"):
@@ -181,3 +182,16 @@ func _on_left_room(_room_id: String) -> void:
 		if close != null:
 			close.visible = true
 	open_browser()
+
+## v0.5: after the match recap (MATCH_RESULTS_MS) the server sends everyone back to the room's waiting room.
+var returned_count: int = 0
+func _on_returned_to_lobby(room_id: String) -> void:
+	returned_count += 1
+	var rid := room_id if room_id != "" else NetworkLobby.active_room
+	var entry := {"id": rid, "name": rid.replace("_", " ").capitalize(), "map": NetworkLobby.selected_map}
+	open_waiting_room(entry)
+	var scene := get_tree().current_scene
+	if scene != null:
+		var sb: Variant = scene.get("scoreboard_canvas")
+		if sb is CanvasLayer and is_instance_valid(sb):
+			(sb as CanvasLayer).visible = false
