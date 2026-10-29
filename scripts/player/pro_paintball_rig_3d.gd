@@ -58,6 +58,8 @@ var _mat_skin_glove: StandardMaterial3D
 
 # Procedural animation internal state
 var _stride_phase: float = 0.0
+## v0.5: 0 walking -> 1 full sprint, from the last apply_pose (tests / diagnostics)
+var last_run_factor: float = 0.0
 var _hand_alpha: float = 0.0 # 0.0 = Right-handed (+X), 1.0 = Left-handed (-X)
 # v0.4.4: feet-anchored per-stance torso/movement capsule heights shared by the local PlayerController3D
 # and every rig-driven remote avatar / bot so a crouched player is hit the same way on every client.
@@ -756,7 +758,7 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 
 	# Advance walk/sprint stride cycle
 	if horiz_speed > 0.15 and not is_sliding and not is_diving:
-		var step_freq := clampf(horiz_speed * 1.45, 2.5, 11.5)
+		var step_freq := clampf(3.2 + horiz_speed * 1.0, 3.2, 11.5)
 		_stride_phase += maxf(dt, 0.016) * step_freq
 	elif dt > 0.0:
 		_stride_phase = lerpf(_stride_phase, 0.0, clampf(dt * 6.0, 0.0, 1.0))
@@ -764,6 +766,11 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	var stride_sin := sin(_stride_phase)
 	var stride_cos := cos(_stride_phase * 2.0)
 	var move_factor := clampf(horiz_speed / 6.5, 0.0, 1.0) * (1.0 - _current_slide_alpha) * (1.0 - _current_dive_alpha)
+	# v0.5 run cycle: 0 = walk, 1 = full sprint. Drives stride length, knee lift, double-bounce bob,
+	# forward lean, torso counter-twist and the marker "port arms" carry bounce.
+	var upright := 1.0 - clampf(_current_stance_f, 0.0, 1.0)
+	var run_factor := clampf((horiz_speed - 3.5) / 3.5, 0.0, 1.0) * move_factor * upright
+	last_run_factor = run_factor
 
 	# 1. Pelvis Height & Orientation (Stance + Tuck + Slide + Superman Dive)
 	var base_pelvis_y := 0.88
@@ -778,7 +785,9 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	base_pelvis_y = lerpf(base_pelvis_y, 0.32, _current_slide_alpha)
 	base_pelvis_y = lerpf(base_pelvis_y, 0.25, _current_dive_alpha)
 
-	var bob_y := stride_cos * 0.035 * move_factor
+	# Two bounces per stride (one per foot strike); the run adds a flight phase so the bounce is sharper
+	var bounce := absf(sin(_stride_phase))
+	var bob_y := (stride_cos * 0.035 * (1.0 - run_factor) + (bounce - 0.55) * 0.085 * run_factor) * move_factor
 	pelvis_pivot.position = Vector3(_current_lean * 0.16, base_pelvis_y + bob_y, 0.0)
 
 	# Pelvis pitch/roll for slide & Superman dive
@@ -796,10 +805,18 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	# v0.4.4: deep tournament squat (pelvis 0.36m, hips ~95 deg, knees ~-133 deg) so the crouched mask sits at the
 	# same ~0.92m eye height as the local player's crouch camera and stays under 1.25m tower rails / 1.22m sills.
 	var crouch_bend := clampf(_current_stance_f, 0.0, 1.0) * 95.0 + _current_tuck * 12.0
-	var l_hip_pitch := stride_sin * 38.0 * move_factor + crouch_bend
-	var r_hip_pitch := -stride_sin * 38.0 * move_factor + crouch_bend
-	var l_knee_pitch := -(maxf(0.0, -stride_sin) * 48.0 * move_factor + crouch_bend * 1.40)
-	var r_knee_pitch := -(maxf(0.0, stride_sin) * 48.0 * move_factor + crouch_bend * 1.40)
+	# Hip swing grows from a 32 deg walk to a 50 deg sprint stride. The knee folds while that leg swings
+	# forward (cos > 0 for the left leg) and stays nearly straight on the plant, so runners visibly lift
+	# their heels instead of scissoring stiff legs.
+	var hip_amp := lerpf(32.0, 50.0, run_factor) * move_factor
+	var knee_swing := lerpf(42.0, 105.0, run_factor) * move_factor
+	var knee_plant := lerpf(6.0, 14.0, run_factor) * move_factor
+	var l_swing := maxf(0.0, cos(_stride_phase))
+	var r_swing := maxf(0.0, -cos(_stride_phase))
+	var l_hip_pitch := stride_sin * hip_amp + crouch_bend + 6.0 * run_factor
+	var r_hip_pitch := -stride_sin * hip_amp + crouch_bend + 6.0 * run_factor
+	var l_knee_pitch := -(knee_plant + pow(l_swing, 1.4) * knee_swing + crouch_bend * 1.40)
+	var r_knee_pitch := -(knee_plant + pow(r_swing, 1.4) * knee_swing + crouch_bend * 1.40)
 
 	# Knee-Slide override (lead right leg extended forward, left leg tucked sharply under)
 	if _current_slide_alpha > 0.01:
@@ -825,14 +842,14 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 
 	# 3. Torso Spine Lean, Sprint Forward Tilt, and Bunker Pocket Tuck
 	var crouch_peak := clampf(_current_stance_f, 0.0, 1.0) - clampf(_current_stance_f - 1.0, 0.0, 1.0)
-	var torso_pitch_deg := -14.0 * move_factor - 18.0 * _current_tuck * (1.0 - 0.75 * crouch_peak) - 12.0 * clampf(_current_stance_f, 0.0, 1.0) - 22.0 * crouch_peak
+	var torso_pitch_deg := -14.0 * move_factor - 12.0 * run_factor - 18.0 * _current_tuck * (1.0 - 0.75 * crouch_peak) - 12.0 * clampf(_current_stance_f, 0.0, 1.0) - 22.0 * crouch_peak
 	torso_pitch_deg = lerpf(torso_pitch_deg, -22.0, _current_slide_alpha)
 	torso_pitch_deg = lerpf(torso_pitch_deg, 18.0, _current_dive_alpha)
 
 	var torso_roll_deg := -_current_lean * 18.0
 	torso_pivot.rotation = Vector3(
 		deg_to_rad(torso_pitch_deg),
-		deg_to_rad(-stride_sin * 6.0 * move_factor),
+		deg_to_rad(-stride_sin * lerpf(6.0, 11.0, run_factor) * move_factor),
 		deg_to_rad(torso_roll_deg)
 	)
 
@@ -871,6 +888,10 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	marker_pitch_deg = lerpf(marker_pitch_deg, -48.0, _current_elim_alpha)
 	marker_pitch_deg = lerpf(marker_pitch_deg, 58.0, _current_dive_alpha)
 
+	# Sprint carry: marker rides lower and closer with a per-step bounce and a muzzle-up port-arms tilt
+	marker_y += (-0.05 + (bounce - 0.5) * 0.03) * run_factor
+	marker_z += 0.05 * run_factor
+	marker_pitch_deg += 14.0 * run_factor * (1.0 - _current_dive_alpha)
 	marker_assembly_pivot.position = Vector3(base_marker_x, marker_y, marker_z)
 	marker_assembly_pivot.rotation = Vector3(
 		deg_to_rad(marker_pitch_deg),
@@ -892,6 +913,11 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	var l_sh_yaw := 22.0 * hand_sign
 	var l_sh_roll := 16.0 - 10.0 * _current_tuck
 	var l_elb_pitch := 54.0 + 18.0 * _current_tuck
+	# Arms follow the lowered sprint carry
+	r_sh_pitch -= 9.0 * run_factor
+	l_sh_pitch -= 9.0 * run_factor
+	r_elb_pitch += 12.0 * run_factor
+	l_elb_pitch += 12.0 * run_factor
 
 	# Keep outside elbow tucked cleanly on all corner peeks (no wrong-hand flare)
 

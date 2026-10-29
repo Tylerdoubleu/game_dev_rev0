@@ -53,6 +53,8 @@ func spawn_paintball(origin: Vector3, direction: Vector3, speed_fps: float, shoo
 		if is_instance_valid(oldest["node"]):
 			oldest["node"].queue_free()
 
+	PaintImpactAudio.play(scene_root, "fire", origin, 0.06)
+
 	var mesh_inst := MeshInstance3D.new()
 	mesh_inst.mesh = _ball_mesh
 	var mat := GrittyArtThemeScript.create_oily_paint_material(color, false)
@@ -132,6 +134,15 @@ func _physics_process(delta: float) -> void:
 			query.exclude = [p["shooter"].get_rid()]
 
 		var hit: Dictionary = space_state.intersect_ray(query)
+		if not bool(p.get("whizzed", false)):
+			var ear := scene_root.get_node_or_null("Player3D") as Node3D
+			if ear != null and p["shooter"] != ear:
+				var ear_pos: Vector3 = ear.global_position + Vector3(0.0, 1.5, 0.0)
+				var seg: Vector3 = to_pos - from_pos
+				var t_c: float = clampf((ear_pos - from_pos).dot(seg) / maxf(seg.length_squared(), 0.0001), 0.0, 1.0)
+				if (from_pos + seg * t_c).distance_to(ear_pos) < 1.3:
+					p["whizzed"] = true
+					PaintImpactAudio.play(scene_root, "whiz", from_pos + seg * t_c, 0.1)
 		if hit.is_empty():
 			node.global_position = to_pos
 		else:
@@ -148,11 +159,13 @@ func _physics_process(delta: float) -> void:
 				p["bounces"] += 1
 				p["velocity"] = vel.bounce(hit_normal) * 0.45
 				node.global_position = hit_pos + hit_normal * 0.03
+				PaintImpactAudio.play(scene_root, "bounce", hit_pos, 0.18)
 				if collider and collider.has_method("on_paintball_bounce"):
 					collider.on_paintball_bounce(hit_pos)
 				continue
 
 			_spawn_splat(hit_pos, hit_normal, p["color"], collider)
+			PaintImpactAudio.play(scene_root, PaintImpactAudio.classify_surface(collider), hit_pos)
 			if collider is Node3D:
 				GrittyArtThemeScript.trigger_bunker_vinyl_flex(collider as Node3D, vel.normalized(), 0.14)
 			var local_player := scene_root.get_node_or_null("Player3D") as Node3D
