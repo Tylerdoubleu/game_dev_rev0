@@ -1556,6 +1556,8 @@ const TOWER_HALF: float = 2.40
 const TOWER_RAMP_X: float = 1.10
 const TOWER_RAMP_W: float = 1.90
 const TOWER_RAMP_DEG: float = 20.0
+const FUSELAGE_WINDOW_SILL: float = 1.22
+const FUSELAGE_WINDOW_TOP: float = 1.88
 
 static func _build_wooden_assault_tower(parent: Node3D, t_name: String, base_pos: Vector3, yaw_deg: float, wood_mat: Material, dark_timber_mat: Material, camo_mat: Material, dual_ramps: bool) -> void:
 	var tower_root := Node3D.new()
@@ -1670,8 +1672,8 @@ static func _add_static_box_part(body: StaticBody3D, part_name: String, center: 
 
 ## Hollow crashed-helicopter cabin. Long axis = local X (8.4m), width = local Z (2.8m).
 ## Both long sides have an open cargo door (2.2m wide x 1.95m tall) so players walk straight through across
-## the 50, plus two shooting windows per side: sill at 1.12m (crouched players stay hidden, mask top 1.09m)
-## and top at 1.78m (standing eye 1.58m sits in the window to peek and shoot).
+## the 50, plus two 1.6m-wide shooting windows per side: sill at 1.22m (crouched eye 0.92m / mask top 1.09m stay
+## hidden behind >=0.13m of hull) and top at 1.88m (standing eye 1.58m sits 0.36m above the sill to peek and shoot).
 static func _build_walkthrough_heli_fuselage(parent: Node3D, f_name: String, pos: Vector3, yaw_deg: float, hull_mat: Material, trim_mat: Material) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.name = f_name
@@ -1688,8 +1690,8 @@ static func _build_walkthrough_heli_fuselage(parent: Node3D, f_name: String, pos
 	var hz: float = 1.4
 	var t: float = 0.12
 	var roof_y: float = 2.15
-	var sill: float = 1.12
-	var win_top: float = 1.78
+	var sill: float = FUSELAGE_WINDOW_SILL
+	var win_top: float = FUSELAGE_WINDOW_TOP
 	var door_hx: float = 1.1
 	var door_top: float = 1.95
 	var win_a: float = 2.0
