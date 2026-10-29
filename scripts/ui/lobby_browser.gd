@@ -10,9 +10,9 @@ signal solo_requested
 signal lobbies_updated(count: int)
 
 const REFRESH_SECONDS: float = 4.0
-const DEFAULT_SERVER_URL := "wss://134-199-181-82.sslip.io/ws"  # Grok Bot's always-on DigitalOcean server
+const DEFAULT_SERVER_URL := "wss://play.jeetball.com/ws"  # Grok Bot's always-on DigitalOcean server
 const MAP_LABELS := {"speedball": "NPPL SPEEDBALL", "woodsball_crash": "WOODSBALL HELI CRASH"}
-const MODE_LABELS := {"deathmatch": "10-KILL DEATHMATCH", "deathmatch_10": "10-KILL DEATHMATCH", "ctf": "1-LIFE CTF  BO5", "ctf_bo5": "1-LIFE CTF  BO5", "bot_test": "TEST VS BOTS", "test": "TEST VS BOTS"}
+const MODE_LABELS := {"deathmatch": "10-KILL DEATHMATCH", "deathmatch_10": "10-KILL DEATHMATCH", "ctf": "1-LIFE CTF  BO5", "ctf_bo5": "1-LIFE CTF  BO5", "bots_test": "TEST VS BOTS", "bot_test": "TEST VS BOTS", "test": "TEST VS BOTS"}
 const STATUS_COLORS := {"waiting": Color(0.45, 0.95, 0.35), "in_match": Color(1.0, 0.72, 0.2), "full": Color(1.0, 0.3, 0.25)}
 const NEON := Color(0.95, 1.0, 0.15)
 const RED_TEAM := Color(1.0, 0.32, 0.25)
