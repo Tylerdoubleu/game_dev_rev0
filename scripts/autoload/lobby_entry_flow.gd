@@ -3,7 +3,7 @@ extends Node
 ## lobby link), and from a "BROWSE ONLINE LOBBIES" button added to the arena's lobby menu.
 ##   JOIN  -> LobbyBrowser navigates to the lobby's join_url (web) / connects directly (desktop).
 ##   SOLO  -> the existing offline flow: NPC presence ON + DROP IN (5 OpFor bots).
-## A link with ?room= skips the browser and NetworkLobby auto-joins that room as before.
+## A link with ?room= skips the browser: NetworkLobby auto-joins that room and the waiting room opens for it.
 ## Kept out of speedball_arena_builder.gd (Bluey): it only calls the arena's existing public-ish methods.
 
 const LobbyBrowserScript := preload("res://scripts/ui/lobby_browser.gd")
@@ -32,6 +32,16 @@ func _attach_to_scene() -> void:
 	NetworkLobby.left_room.connect(_on_left_room)
 	if NetworkLobby.show_lobby_browser_on_start:
 		open_browser()
+	elif NetworkLobby.room_from_url and OS.has_feature("web"):
+		# A shared ?room= link lands in that lobby's waiting room (NetworkLobby already auto-connects), never
+		# straight into the arena; the match starts from START MATCH like an in-place JOIN.
+		open_room_link_waiting_room()
+
+## Waiting room for the room named by the page link (?room=&map=), e.g. an old join_url or a friend's invite.
+func open_room_link_waiting_room() -> Control:
+	var rid := NetworkLobby.active_room
+	var entry := {"id": rid, "name": rid.replace("_", " ").capitalize(), "map": NetworkLobby.selected_map}
+	return open_waiting_room(entry)
 
 func is_open() -> bool:
 	return browser != null and is_instance_valid(browser) and _layer != null and _layer.visible

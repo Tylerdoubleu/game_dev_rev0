@@ -48,6 +48,12 @@ func _process(_d: float) -> bool:
 	_check(L.fill_bots_enabled and L.match_active and not L.is_online_client(), "SOLO starts the offline bots match")
 	var lc_vis: bool = (lc as CanvasLayer).visible if lc is CanvasLayer else true
 	_check(not lc_vis, "arena lobby overlay dropped in")
+	# ?room= link: opens that room's waiting room instead of dropping into the arena.
+	L.active_room = "lobby_04"
+	L.selected_map = "woodsball_crash"
+	var wr: Control = flow.open_room_link_waiting_room()
+	_check(wr != null and wr.visible and flow._layer.visible and not flow.browser.visible, "?room= link opens the waiting room (not the arena)")
+	_check(String(wr.get("lobby_name")) == "LOBBY 04", "room-link waiting room titled for its lobby (%s)" % wr.get("lobby_name"))
 	# leave_room(): clean leave back to the lobby list.
 	var left: Array = []
 	L.left_room.connect(func(r): left.append(r))
