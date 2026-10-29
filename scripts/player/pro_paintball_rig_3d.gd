@@ -59,6 +59,26 @@ var _mat_skin_glove: StandardMaterial3D
 # Procedural animation internal state
 var _stride_phase: float = 0.0
 var _hand_alpha: float = 0.0 # 0.0 = Right-handed (+X), 1.0 = Left-handed (-X)
+# v0.4.4: feet-anchored per-stance torso/movement capsule heights shared by the local PlayerController3D
+# and every rig-driven remote avatar / bot so a crouched player is hit the same way on every client.
+const STANCE_CAPSULE_STANDING: float = 1.38
+const STANCE_CAPSULE_CROUCH: float = 1.00
+const STANCE_CAPSULE_SLIDE: float = 0.70
+const STANCE_CAPSULE_PRONE: float = 0.50 # = 2 x 0.25 radius (capsule minimum)
+const STANCE_CAPSULE_DIVE: float = 0.50
+const RIG_TORSO_RADIUS: float = 0.23
+
+## Continuous capsule height for a blended stance (0 = standing, 1 = crouch, 2 = prone) plus slide/dive alphas.
+static func stance_capsule_height(stance_f: float, slide_alpha: float = 0.0, dive_alpha: float = 0.0) -> float:
+	var h: float
+	if stance_f <= 1.0:
+		h = lerpf(STANCE_CAPSULE_STANDING, STANCE_CAPSULE_CROUCH, clampf(stance_f, 0.0, 1.0))
+	else:
+		h = lerpf(STANCE_CAPSULE_CROUCH, STANCE_CAPSULE_PRONE, clampf(stance_f - 1.0, 0.0, 1.0))
+	h = lerpf(h, STANCE_CAPSULE_SLIDE, clampf(slide_alpha, 0.0, 1.0))
+	h = lerpf(h, STANCE_CAPSULE_DIVE, clampf(dive_alpha, 0.0, 1.0))
+	return h
+
 var _current_lean: float = 0.0
 var _current_tuck: float = 0.0
 var _current_stance_f: float = 0.0
@@ -651,8 +671,8 @@ func build_sub_hitboxes_on(body: CollisionObject3D) -> Dictionary:
 		col_torso = CollisionShape3D.new()
 		col_torso.name = "Hitbox_Torso"
 		var c_torso := CapsuleShape3D.new()
-		c_torso.radius = 0.23
-		c_torso.height = 1.24
+		c_torso.radius = RIG_TORSO_RADIUS
+		c_torso.height = STANCE_CAPSULE_STANDING
 		col_torso.shape = c_torso
 		body.add_child(col_torso)
 	col_torso.set_meta("hit_zone", "torso")
@@ -748,12 +768,14 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	# 1. Pelvis Height & Orientation (Stance + Tuck + Slide + Superman Dive)
 	var base_pelvis_y := 0.88
 	if _current_stance_f <= 1.0:
-		base_pelvis_y = lerpf(0.88, 0.58, _current_stance_f)
+		base_pelvis_y = lerpf(0.88, 0.36, _current_stance_f)
 	else:
-		base_pelvis_y = lerpf(0.58, 0.26, _current_stance_f - 1.0)
+		base_pelvis_y = lerpf(0.36, 0.26, _current_stance_f - 1.0)
 
-	base_pelvis_y -= _current_tuck * 0.14
-	base_pelvis_y = lerpf(base_pelvis_y, 0.42, _current_slide_alpha)
+	# Pocket tuck drops a standing player ~0.14m but a crouched one only a little (local camera: -0.16 vs -0.06)
+	var crouch_amt := clampf(_current_stance_f, 0.0, 1.0) - clampf(_current_stance_f - 1.0, 0.0, 1.0)
+	base_pelvis_y -= _current_tuck * lerpf(0.14, 0.05, crouch_amt)
+	base_pelvis_y = lerpf(base_pelvis_y, 0.32, _current_slide_alpha)
 	base_pelvis_y = lerpf(base_pelvis_y, 0.25, _current_dive_alpha)
 
 	var bob_y := stride_cos * 0.035 * move_factor
@@ -771,11 +793,13 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	pelvis_pivot.rotation.y = deg_to_rad(stride_sin * 5.0 * move_factor - _current_slide_alpha * 22.0)
 
 	# 2. Legs (Walk/Sprint Stride, Crouch Knee Bend, Knee-Slide, Prone/Dive Extension)
-	var crouch_bend := clampf(_current_stance_f, 0.0, 1.0) * 46.0 + _current_tuck * 22.0
+	# v0.4.4: deep tournament squat (pelvis 0.36m, hips ~95 deg, knees ~-133 deg) so the crouched mask sits at the
+	# same ~0.92m eye height as the local player's crouch camera and stays under 1.25m tower rails / 1.22m sills.
+	var crouch_bend := clampf(_current_stance_f, 0.0, 1.0) * 95.0 + _current_tuck * 12.0
 	var l_hip_pitch := stride_sin * 38.0 * move_factor + crouch_bend
 	var r_hip_pitch := -stride_sin * 38.0 * move_factor + crouch_bend
-	var l_knee_pitch := -(maxf(0.0, -stride_sin) * 48.0 * move_factor + crouch_bend * 1.45)
-	var r_knee_pitch := -(maxf(0.0, stride_sin) * 48.0 * move_factor + crouch_bend * 1.45)
+	var l_knee_pitch := -(maxf(0.0, -stride_sin) * 48.0 * move_factor + crouch_bend * 1.40)
+	var r_knee_pitch := -(maxf(0.0, stride_sin) * 48.0 * move_factor + crouch_bend * 1.40)
 
 	# Knee-Slide override (lead right leg extended forward, left leg tucked sharply under)
 	if _current_slide_alpha > 0.01:
@@ -800,7 +824,8 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	right_boot_cleat.rotation.x = deg_to_rad(-r_hip_pitch * 0.35 - r_knee_pitch * 0.35)
 
 	# 3. Torso Spine Lean, Sprint Forward Tilt, and Bunker Pocket Tuck
-	var torso_pitch_deg := -14.0 * move_factor - 18.0 * _current_tuck - 12.0 * clampf(_current_stance_f, 0.0, 1.0)
+	var crouch_peak := clampf(_current_stance_f, 0.0, 1.0) - clampf(_current_stance_f - 1.0, 0.0, 1.0)
+	var torso_pitch_deg := -14.0 * move_factor - 18.0 * _current_tuck * (1.0 - 0.75 * crouch_peak) - 12.0 * clampf(_current_stance_f, 0.0, 1.0) - 22.0 * crouch_peak
 	torso_pitch_deg = lerpf(torso_pitch_deg, -22.0, _current_slide_alpha)
 	torso_pitch_deg = lerpf(torso_pitch_deg, 18.0, _current_dive_alpha)
 
@@ -901,8 +926,8 @@ func apply_pose(delta: float, params: Dictionary) -> void:
 	_sync_sub_hitboxes()
 
 func _sync_sub_hitboxes() -> void:
-	if _sub_hitboxes.is_empty():
-		return
+	if _sub_hitboxes.is_empty() or not is_inside_tree():
+		return # remote avatars are built before add_child; the first in-tree apply_pose syncs them
 
 	var col_mask := _sub_hitboxes.get("mask", null) as CollisionShape3D
 	if col_mask != null and is_instance_valid(col_mask) and neck_head_pivot != null:
@@ -915,8 +940,15 @@ func _sync_sub_hitboxes() -> void:
 	if col_torso != null and is_instance_valid(col_torso) and pelvis_pivot != null:
 		var body_parent := col_torso.get_parent_node_3d()
 		if body_parent != null:
-			col_torso.position = body_parent.to_local(pelvis_pivot.global_position + Vector3(0.0, 0.16, 0.0))
-			col_torso.rotation = torso_pivot.rotation
+			# v0.4.4: feet-anchored, stance-scaled capsule (same heights as the local player's movement capsule)
+			var cap := col_torso.shape as CapsuleShape3D
+			var h := stance_capsule_height(_current_stance_f, _current_slide_alpha, _current_dive_alpha)
+			if cap != null:
+				cap.radius = RIG_TORSO_RADIUS
+				cap.height = maxf(h, RIG_TORSO_RADIUS * 2.0)
+				h = cap.height
+			col_torso.position = body_parent.to_local(global_transform * Vector3(pelvis_pivot.position.x, h * 0.5, 0.0))
+			col_torso.rotation = Vector3(0.0, 0.0, deg_to_rad(-_current_lean * 8.0))
 
 	var col_hopper := _sub_hitboxes.get("hopper", null) as CollisionShape3D
 	if col_hopper != null and is_instance_valid(col_hopper) and hopper_unit_pivot != null:

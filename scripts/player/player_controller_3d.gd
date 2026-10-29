@@ -12,6 +12,7 @@ extends CharacterBody3D
 
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
 const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
+const StanceRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
 
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
@@ -110,6 +111,15 @@ var _sustained_back_escape_timer: float = 0.0
 
 # PB-16 (#20): Exposed Hopper/Marker/Mask/Pack Sub-Hitboxes & 2.4x Wrong-Hand Exposure
 var hitbox_mask: CollisionShape3D = null
+# v0.4.4: stance-scaled movement capsule / torso hitbox (feet stay planted at the body origin)
+const TORSO_RADIUS: float = 0.25
+const HEADROOM_PROBE_RADIUS: float = 0.22
+const HEADROOM_PROBE_FOOT_LIFT: float = 0.15
+const HEAD_CLEARANCE: float = 0.19 # mask sphere (0.17) + skin above the eye/head pivot
+var torso_col: CollisionShape3D = null
+var torso_capsule: CapsuleShape3D = null
+var torso_capsule_height: float = StanceRigScript.STANCE_CAPSULE_STANDING
+var headroom_blocked: bool = false
 var hitbox_hopper_marker: CollisionShape3D = null
 var hitbox_pod_pack: CollisionShape3D = null
 var hopper_exposure_multiplier: float = 1.0
@@ -142,11 +152,14 @@ func _build_player_nodes() -> void:
 	var col := CollisionShape3D.new()
 	col.name = "Hitbox_Torso"
 	var capsule := CapsuleShape3D.new()
-	capsule.radius = 0.25
-	capsule.height = 1.38
+	capsule.radius = TORSO_RADIUS
+	capsule.height = StanceRigScript.STANCE_CAPSULE_STANDING
 	col.shape = capsule
-	col.position = Vector3(0, 0.69, 0)
+	col.position = Vector3(0, capsule.height * 0.5, 0)
 	add_child(col)
+	torso_col = col
+	torso_capsule = capsule
+	torso_capsule_height = capsule.height
 
 	# PB-16 (#20): Separate Mask, Hopper/Marker, and Pod Pack sub-hitboxes
 	hitbox_mask = CollisionShape3D.new()
@@ -431,18 +444,18 @@ func _update_movement_and_stance(delta: float) -> void:
 		dive_timer -= delta
 		if dive_timer <= 0.0:
 			dive_timer = 0.0
-			stance = _resolve_held_stance()
+			stance = _clamp_stance_to_headroom(_resolve_held_stance(), true)
 			_emit_hud()
 	elif slide_timer > 0.0:
 		slide_timer -= delta
 		if slide_timer <= 0.0:
 			slide_timer = 0.0
-			stance = _resolve_held_stance()
+			stance = _clamp_stance_to_headroom(_resolve_held_stance(), true)
 			_emit_hud()
 	else:
 		# Pure hold-to-crouch (C) and hold-to-prone (Ctrl) when not sliding/diving
 		var prev_stance := stance
-		stance = _resolve_held_stance()
+		stance = _clamp_stance_to_headroom(_resolve_held_stance())
 		if stance != prev_stance:
 			_emit_hud()
 
@@ -488,7 +501,84 @@ func _update_movement_and_stance(delta: float) -> void:
 	else:
 		velocity.y = 0.0
 
+	_update_stance_capsule(delta)
 	move_and_slide()
+
+## Target movement-capsule / torso-hitbox height for the current stance (shared table with ProPaintballRig3D).
+func get_stance_capsule_target() -> float:
+	if dive_timer > 0.0:
+		return StanceRigScript.STANCE_CAPSULE_DIVE
+	if slide_timer > 0.0:
+		return StanceRigScript.STANCE_CAPSULE_SLIDE
+	if stance == Stance.CROUCHING:
+		return StanceRigScript.STANCE_CAPSULE_CROUCH
+	if stance == Stance.PRONE:
+		return StanceRigScript.STANCE_CAPSULE_PRONE
+	return StanceRigScript.STANCE_CAPSULE_STANDING
+
+## Smoothly resize the capsule around planted feet: only the center moves (height * 0.5), never the floor contact.
+func _update_stance_capsule(delta: float) -> void:
+	if torso_capsule == null or torso_col == null:
+		return
+	var target: float = get_stance_capsule_target()
+	torso_capsule_height = lerpf(torso_capsule_height, target, minf(1.0, delta * 15.0))
+	if absf(torso_capsule_height - target) < 0.003:
+		torso_capsule_height = target
+	var h: float = maxf(torso_capsule_height, TORSO_RADIUS * 2.0)
+	if not is_equal_approx(torso_capsule.height, h):
+		torso_capsule.height = h
+		torso_col.position = Vector3(0.0, h * 0.5, 0.0)
+
+## Total body clearance (feet to top of mask) a stance needs.
+func _stance_clearance(s: Stance) -> float:
+	match s:
+		Stance.CROUCHING:
+			return maxf(StanceRigScript.STANCE_CAPSULE_CROUCH, HEIGHT_CROUCH + HEAD_CLEARANCE)
+		Stance.PRONE:
+			return maxf(StanceRigScript.STANCE_CAPSULE_PRONE, HEIGHT_PRONE + HEAD_CLEARANCE)
+	return maxf(StanceRigScript.STANCE_CAPSULE_STANDING, HEIGHT_STANDING + HEAD_CLEARANCE)
+
+func _current_clearance() -> float:
+	var head_top: float = (head_pivot.position.y + HEAD_CLEARANCE) if head_pivot != null else 0.0
+	return maxf(torso_capsule_height, head_top)
+
+## True when a slim capsule from just above the feet up to `clearance` overlaps nothing (ceiling / roof / canopy).
+func has_headroom_for(clearance: float) -> bool:
+	if not is_inside_tree():
+		return true
+	var probe_h: float = clearance - HEADROOM_PROBE_FOOT_LIFT
+	if probe_h <= HEADROOM_PROBE_RADIUS * 2.0:
+		return true
+	var shape := CapsuleShape3D.new()
+	shape.radius = HEADROOM_PROBE_RADIUS
+	shape.height = probe_h
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = shape
+	q.transform = Transform3D(Basis(), global_position + Vector3(0.0, HEADROOM_PROBE_FOOT_LIFT + probe_h * 0.5, 0.0))
+	q.exclude = [get_rid()]
+	q.collision_mask = collision_mask
+	return get_world_3d().direct_space_state.intersect_shape(q, 1).is_empty()
+
+## Keep the lowest-necessary stance when there is no room to rise (fuselage roof, canopy, low overhang).
+func _clamp_stance_to_headroom(desired: Stance, from_low_move: bool = false) -> Stance:
+	if desired == stance and not from_low_move:
+		if headroom_blocked and desired == _resolve_held_stance():
+			headroom_blocked = false
+		return desired # no stance change requested: never probe (avoids spurious drops on ramps/walls)
+	var need: float = _stance_clearance(desired)
+	if need <= _current_clearance() + 0.02 or has_headroom_for(need):
+		if headroom_blocked and desired == _resolve_held_stance():
+			headroom_blocked = false
+		return desired
+	var fallback: Stance = Stance.PRONE
+	if desired == Stance.STANDING:
+		var crouch_need: float = _stance_clearance(Stance.CROUCHING)
+		if crouch_need <= _current_clearance() + 0.02 or has_headroom_for(crouch_need):
+			fallback = Stance.CROUCHING
+	if not headroom_blocked:
+		headroom_blocked = true
+		status_banner_sent.emit("NO HEADROOM — staying low until clear", Color(1.0, 0.75, 0.3))
+	return fallback
 
 func _update_lean_bob_and_viewmodel(delta: float) -> void:
 	var target_lean: float = 0.0
