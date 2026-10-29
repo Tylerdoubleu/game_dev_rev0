@@ -30,7 +30,7 @@ func _process(_d: float) -> bool:
 			"players": {11: {"name": "Tyler", "team": "ALPHA", "bracket": "speedball", "room": "lobby_07", "ready": true}, 12: {"name": "Friend", "team": "BRAVO", "bracket": "pump", "room": "lobby_07"}, 13: {"name": "Other", "team": "BRAVO", "room": "lobby_02"}}})
 	if f == 8:
 		var wr: Control = flow.waiting_room
-		_check(wr._red_list.get_child_count() == 1 and wr._blue_list.get_child_count() == 1, "rosters show only this room's players by team")
+		_check(wr._red_list.get_child_count() == 1 and wr._blue_list.get_child_count() == 0 and wr._bench_list.get_child_count() == 1, "ready player sits on their team; not-ready player waits in NOT READY (other rooms hidden)")
 		_check(wr._map_btns["woodsball_crash"].button_pressed and wr._mode_btns["ctf"].button_pressed and wr._gun_btns["pump"].button_pressed, "current field / game type / gun highlighted")
 		_check(not wr._start_btn.disabled and wr._start_btn.text == "START MATCH", "START MATCH enabled while waiting")
 		wr._on_countdown(5, {})

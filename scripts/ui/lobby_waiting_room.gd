@@ -24,6 +24,8 @@ var _red_list: VBoxContainer
 var _blue_list: VBoxContainer
 var _red_head: Label
 var _blue_head: Label
+var _bench_list: VBoxContainer
+var _bench_head: Label
 var _map_btns := {}
 var _mode_btns := {}
 var _gun_btns := {}
@@ -86,6 +88,8 @@ func apply_state(s: Dictionary) -> void:
 		return
 	for c in _red_list.get_children(): c.queue_free()
 	for c in _blue_list.get_children(): c.queue_free()
+	for c in _bench_list.get_children(): c.queue_free()
+	var bench := 0
 	var room := String(s.get("room", ""))
 	var red := 0
 	var blue := 0
@@ -97,10 +101,15 @@ func apply_state(s: Dictionary) -> void:
 			continue
 		var is_red := String(p.get("team", "ALPHA")).to_upper() in ["ALPHA", "RED"]
 		var gun := String(p.get("bracket", "speedball")).to_upper()
-		var ready_mark := "[READY]  " if bool(p.get("ready", false)) else "[ - ]  "
-		var line := "%s%s%s   (%s)" % [ready_mark, String(p.get("name", "PLAYER")).to_upper(), "  (YOU)" if int(pid) == me else "", gun]
+		var is_ready := bool(p.get("ready", false))
+		var line := "%s%s   (%s)" % [String(p.get("name", "PLAYER")).to_upper(), "  (YOU)" if int(pid) == me else "", gun]
 		if int(pid) == me and _ready_btn != null:
-			_ready_btn.set_pressed_no_signal(bool(p.get("ready", false)))
+			_ready_btn.set_pressed_no_signal(is_ready)
+		# Tyler v0.5: you only take your (auto-assigned) team spot once you press READY.
+		if not is_ready:
+			_bench_list.add_child(_label(line, 16, Color(0.72, 0.73, 0.68)))
+			bench += 1
+			continue
 		var l := _label(line, 17, (RED_TEAM if is_red else BLUE_TEAM).lightened(0.35))
 		if is_red:
 			_red_list.add_child(l); red += 1
@@ -108,6 +117,7 @@ func apply_state(s: Dictionary) -> void:
 			_blue_list.add_child(l); blue += 1
 	_red_head.text = "RED  %d / 5" % red
 	_blue_head.text = "BLUE  %d / 5" % blue
+	_bench_head.text = "NOT READY  %d" % bench
 	_highlight(_map_btns, String(s.get("selected_map", s.get("map", ""))))
 	_highlight(_mode_btns, String(s.get("mode", "")))
 	_highlight(_gun_btns, String(s.get("bracket", "")))
@@ -263,9 +273,10 @@ func _build_ui() -> void:
 	var teams := HBoxContainer.new()
 	teams.add_theme_constant_override("separation", 14)
 	col.add_child(teams)
-	for side in [[RED_TEAM, true], [BLUE_TEAM, false]]:
+	for side in [[RED_TEAM, 0], [Color(0.5, 0.5, 0.46), 1], [BLUE_TEAM, 2]]:
 		var p := PanelContainer.new()
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		p.size_flags_stretch_ratio = 0.8 if side[1] == 1 else 1.0
 		p.custom_minimum_size = Vector2(0, 230)
 		p.add_theme_stylebox_override("panel", _style(Color(0.16, 0.165, 0.15), side[0].darkened(0.35), 2))
 		teams.add_child(p)
@@ -275,11 +286,11 @@ func _build_ui() -> void:
 		v.add_child(h)
 		var list := VBoxContainer.new()
 		v.add_child(list)
-		if side[1]:
-			_red_head = h; _red_list = list
-		else:
-			_blue_head = h; _blue_list = list
-	col.add_child(_label("TEAMS AUTO-BALANCE WHEN PLAYERS JOIN AND AT MATCH START", 13, Color(0.55, 0.56, 0.5)))
+		match side[1]:
+			0: _red_head = h; _red_list = list
+			1: _bench_head = h; _bench_list = list
+			2: _blue_head = h; _blue_list = list
+	col.add_child(_label("PRESS READY TO TAKE YOUR SPOT. TEAMS ARE PICKED FOR YOU AND STAY EVEN.", 13, Color(0.55, 0.56, 0.5)))
 
 	_picker_row(col, "FIELD", MAPS, _map_btns, _pick_map)
 	_picker_row(col, "GAME TYPE", MODES, _mode_btns, _pick_mode)
