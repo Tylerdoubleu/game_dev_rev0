@@ -29,7 +29,7 @@ func _process(_d: float) -> bool:
 	L.outbound_capture = []
 	L.match_countdown_ms = 0 # rules tests start instantly; _test_ready_and_countdown covers the 3 s countdown
 	_test_ipc_document()
-	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
+	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_ctf_round_timer", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
 		if has_method(t):
 			L.start_dedicated_server(PORT + 1 + f)
 			L.outbound_capture = []
@@ -296,6 +296,33 @@ func _test_ctf_best_of_5() -> void:
 	_check(_events("returned_to_lobby", "lobby_06").is_empty(), "still on the match recap")
 	_advance(L.MATCH_RESULTS_MS)
 	_check(_events("returned_to_lobby", "lobby_06").size() == 1, "returned_to_lobby after the recap")
+
+func _test_ctf_round_timer() -> void:
+	_begin("ctf: round timer, captures in roster, respawn delay")
+	for pid in [71, 72, 73, 74]:
+		_reg(pid, "lobby_08")
+	L._server_set_room_settings(71, "", "ctf")
+	L._server_request_start(71, "speedball")
+	var rs := _events("round_started", "lobby_08")
+	_check(rs.size() == 1 and int(rs[0]["data"]["round_time_ms"]) == L.CTF_ROUND_TIME_MS and int(rs[0]["data"]["respawn_ms"]) == 0, "round_started: round_time_ms + respawn_ms 0 in CTF")
+	var pub: Dictionary = L._public_match_state(L.rooms["lobby_08"])
+	_check(int(pub["round_ms_left"]) == L.CTF_ROUND_TIME_MS and int(pub["respawn_ms"]) == 0, "snapshot: round_ms_left (%s)" % pub["round_ms_left"])
+	var blue_pid := 72 if _team(72) == "BRAVO" else (73 if _team(73) == "BRAVO" else 74)
+	var red_pid := 71 if _team(71) == "ALPHA" else 73
+	_kill(red_pid, blue_pid)
+	_advance(L.CTF_ROUND_TIME_MS - 1000)
+	_check(_events("round_ended", "lobby_08").is_empty(), "round still live before the time limit")
+	_advance(1100)
+	var re := _events("round_ended", "lobby_08")
+	_check(re.size() == 1 and re[0]["data"]["reason"] == "time" and re[0]["data"]["winner"] == "ALPHA", "time-out: more players alive (red) wins the round (%s)" % [re])
+	_advance(L.ROUND_INTERMISSION_MS + 100)
+	_state(red_pid, Vector3(0, 0, -45.5))
+	_state(red_pid, Vector3(0, 0, 45.5))
+	var row: Array = L._room_roster(L.rooms["lobby_08"]).filter(func(r): return int(r["peer"]) == red_pid)
+	_check(row.size() == 1 and int(row[0]["captures"]) == 1, "room_roster shows live captures")
+	var pe := _events("player_eliminated", "lobby_08")
+	_check(pe.size() == 1 and int(pe[0]["data"]["respawn_in_ms"]) == 0, "player_eliminated carries respawn_in_ms")
+	L._server_set_room_settings(71, "", "deathmatch")
 
 func _test_bots_test_mode() -> void:
 	_begin("bots_test: bots on, no win condition")

@@ -963,6 +963,7 @@ func _room_snapshot(rid: String) -> Dictionary:
 		pl[pid] = {
 			"name": info.get("name", ""), "team": info.get("team", "ALPHA"), "bracket": info.get("bracket", "speedball"),
 			"ready": info.get("ready", false), "room": rid, "kills": info.get("kills", 0), "deaths": info.get("deaths", 0),
+			"captures": info.get("captures", 0),
 			"alive": info.get("alive", true),
 		}
 	var mode := String(room.get("settings", {}).get("mode", "deathmatch"))
@@ -999,6 +1000,7 @@ func _room_roster(room: Dictionary) -> Array:
 			"peer": int(pid), "name": info.get("name", ""), "team": info.get("team", "ALPHA"),
 			"color": team_label(String(info.get("team", "ALPHA"))), "ready": bool(info.get("ready", false)),
 			"alive": bool(info.get("alive", true)), "kills": int(info.get("kills", 0)), "deaths": int(info.get("deaths", 0)),
+			"captures": int(info.get("captures", 0)),
 			"bracket": info.get("bracket", "speedball"),
 		})
 	return out
@@ -1179,7 +1181,7 @@ func _server_apply_elimination(room: Dictionary, shooter: int, victim: int, reas
 		"shooter": shooter, "shooter_name": s.get("name", "Enemy"), "shooter_team": s.get("team", ""),
 		"victim_kills": v.get("kills", 0), "victim_deaths": v.get("deaths", 0),
 		"shooter_kills": s.get("kills", 0), "shooter_deaths": s.get("deaths", 0),
-		"reason": reason, "scored": scored,
+		"reason": reason, "scored": scored, "respawn_in_ms": _respawn_ms(room),
 	})
 	_on_player_eliminated(room, shooter, victim)
 	_broadcast_room_state(String(room["id"]))
@@ -1344,6 +1346,7 @@ const DM_KILLS_TO_WIN: int = 10
 const CTF_ROUNDS_TO_WIN: int = 3
 const CTF_BEST_OF: int = 5
 const DM_RESPAWN_MS: int = 1000
+const CTF_ROUND_TIME_MS: int = 180000 # 3 min; on time-out the team with more players alive wins the round, else a draw
 const PRACTICE_RESPAWN_MS: int = 1000
 const ROUND_INTERMISSION_MS: int = 8000 # round winner + scoreboard recap before the next round
 const MATCH_RESULTS_MS: int = 12000 # match winner + scoreboard recap before everyone returns to the waiting room
@@ -1390,7 +1393,17 @@ func _public_match_state(room: Dictionary) -> Dictionary:
 		"score": _team_dict_to_colors(m.get("score", {})), "kills": _team_dict_to_colors(m.get("kills", {})),
 		"target": CTF_ROUNDS_TO_WIN if mode == "ctf" else (DM_KILLS_TO_WIN if mode == "deathmatch" else 0),
 		"best_of": CTF_BEST_OF if mode == "ctf" else 1, "flags": flags,
+		"round_time_ms": CTF_ROUND_TIME_MS if mode == "ctf" else 0,
+		"round_ms_left": maxi(0, int(m.get("round_ends_ms", 0)) - _rules_now()) if String(m.get("phase", "")) == "live" and int(m.get("round_ends_ms", 0)) > 0 else 0,
+		"respawn_ms": _respawn_ms(room),
 	}
+
+## Respawn delay for this room right now: DM 1 s, practice (waiting) 1 s, CTF 0 = no respawn until the next round.
+func _respawn_ms(room: Dictionary) -> int:
+	var m: Dictionary = room.get("match", {})
+	if not bool(m.get("active", false)):
+		return PRACTICE_RESPAWN_MS
+	return 0 if String(m.get("mode", "")) == "ctf" else DM_RESPAWN_MS
 
 func _room_mode(room: Dictionary) -> String:
 	var m: Dictionary = room["match"]
@@ -1579,11 +1592,13 @@ func _start_round(room: Dictionary, rebalance: bool) -> void:
 	m["phase"] = "live"
 	m["phase_until_ms"] = 0
 	m["flags"] = _new_flags()
+	m["round_ends_ms"] = _rules_now() + CTF_ROUND_TIME_MS if String(m["mode"]) == "ctf" else 0
 	for pid in room["players"].keys():
 		var info: Dictionary = room["players"][pid]
 		info["alive"] = true
 		info.erase("late_join")
 	_send_room_event(rid, "round_started", {
+		"round_time_ms": CTF_ROUND_TIME_MS if String(m["mode"]) == "ctf" else 0, "respawn_ms": _respawn_ms(room),
 		"round": m["round"], "mode": m["mode"], "score": _team_dict_to_colors(m["score"]),
 		"kills": _team_dict_to_colors(m["kills"]), "reset_positions": true,
 		"target": CTF_ROUNDS_TO_WIN if String(m["mode"]) == "ctf" else (DM_KILLS_TO_WIN if String(m["mode"]) == "deathmatch" else 0),
@@ -1635,6 +1650,11 @@ func _tick_room_match(room: Dictionary, _delta: float) -> void:
 		if now - int(info.get("dead_since_ms", 0)) >= wait_ms:
 			info["alive"] = true
 			revived = true
+	if active and mode == "ctf" and String(m["phase"]) == "live" and int(m.get("round_ends_ms", 0)) > 0 and now >= int(m["round_ends_ms"]):
+		var ac := _alive_counts(room)
+		var tw := "" if int(ac["ALPHA"]) == int(ac["BRAVO"]) else ("ALPHA" if int(ac["ALPHA"]) > int(ac["BRAVO"]) else "BRAVO")
+		_end_ctf_round(room, tw, "time", 0)
+		return
 	if active and mode == "ctf" and String(m["phase"]) == "live":
 		for t in TEAMS:
 			var fl: Dictionary = m["flags"][t]

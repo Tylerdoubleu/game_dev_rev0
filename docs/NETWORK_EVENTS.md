@@ -91,9 +91,11 @@ Every room event includes `room`.
 | `player_eliminated` | victim, victim_name, victim_team, shooter, shooter_name, shooter_team, victim/shooter_kills/deaths, reason, scored | A validated hit. `scored=false` while waiting (practice). |
 | `hit_rejected` (to the shooter) | victim, reason | The hit failed validation (see below). |
 | `flag_state_changed` | flag_team, flag (red/blue), state, action, carrier, carrier_name, by, by_name, pos | CTF actions: `picked_up`, `dropped` / `carrier_eliminated` / `carrier_left`, `returned`, `auto_returned` (after 30 s), `captured`, `reset`. |
-| `round_ended` | round, winner, winner_color, reason (`capture` / `elimination` / `double_elimination`), by, by_name, score{red,blue}, target, best_of, next_round_in_ms (8000, or 0 when it decided the match), match_point, scoreboard | A CTF round is over. Show the round winner + scoreboard for `next_round_in_ms`; `round_started` follows. Client signal: `round_results(data)`. |
+| `round_ended` | round, winner, winner_color, reason (`capture` / `elimination` / `double_elimination` / `time`), by, by_name, score{red,blue}, target, best_of, next_round_in_ms (8000, or 0 when it decided the match), match_point, scoreboard | A CTF round is over. Show the round winner + scoreboard for `next_round_in_ms`; `round_started` follows. Client signal: `round_results(data)`. |
 | `match_ended` | winner, winner_color, winner_names, reason (`kills` / `rounds`), mode, score{red,blue}, kills, rounds, scoreboard, return_to_lobby_in_ms (12000) | The match is won. Show the congrats + scoreboard recap; READY resets. Client signal: `match_results(data)`. |
 | `returned_to_lobby` | room | Sent `return_to_lobby_in_ms` after `match_ended`: everyone goes back to the waiting room (LobbyEntryFlow opens it). Client signal: `returned_to_lobby(room_id)`. |
+
+Round timer / respawn (v0.5): CTF rounds last `CTF_ROUND_TIME_MS` = 180000 ms. On time-out the team with more players alive wins the round (`reason: "time"`); equal = draw (no point). `round_started` carries `round_time_ms` and `respawn_ms`; `sync_lobby_state.match` carries `round_time_ms`, `round_ms_left` (0 outside a live CTF round) and `respawn_ms` (DM 1000, practice 1000, CTF 0 = none until next round); `player_eliminated` carries `respawn_in_ms`. `room_roster` rows and `players` entries carry live `captures`.
 
 `scoreboard` rows: `{peer, name, team, color, kills, deaths, captures}`, red first, then blue, each sorted by kills, captures, fewest deaths.
 
