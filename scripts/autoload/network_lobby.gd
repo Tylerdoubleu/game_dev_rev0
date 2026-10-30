@@ -840,7 +840,7 @@ func _client_apply_room_event(event_name: String, data: Dictionary) -> void:
 			break_horn.emit(data)
 		"break_line_reset":
 			break_line_reset.emit(data)
-			_respawn_local_player_at_gate()
+			_clamp_local_player_behind_line(float(data.get("line_z", 0.0)), String(data.get("team", local_team)))
 		"callout_pinged":
 			callout_pinged.emit(data)
 		"returned_to_lobby":
@@ -881,6 +881,27 @@ func _client_apply_room_event(event_name: String, data: Dictionary) -> void:
 		"join_rejected":
 			connection_status_changed.emit("ROOM [%s] REJECTED: %s" % [String(data.get("room", active_room)).to_upper(), String(data.get("reason", "?"))], true)
 
+
+## v0.6 break: hard hold. Push the local player back onto their start line (no teleport, no penalty) and kill
+## any velocity carrying them over it.
+func _clamp_local_player_behind_line(line_z: float, team: String) -> void:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return
+	var p: Variant = tree.current_scene.get("player")
+	if not (p is Node3D and is_instance_valid(p)):
+		return
+	var n := p as Node3D
+	var pos := n.global_position
+	if team == "ALPHA":
+		pos.z = max(pos.z, line_z)
+	else:
+		pos.z = min(pos.z, line_z)
+	n.global_position = pos
+	if n is CharacterBody3D:
+		var b := n as CharacterBody3D
+		if (team == "ALPHA" and b.velocity.z < 0.0) or (team != "ALPHA" and b.velocity.z > 0.0):
+			b.velocity.z = 0.0
 
 ## Server round_started (CTF rounds / match start): put the local player back on their breakout gate.
 func _respawn_local_player_at_gate() -> void:
@@ -1440,7 +1461,8 @@ func _room_mode(room: Dictionary) -> String:
 	var m: Dictionary = room["match"]
 	return String(m["mode"]) if bool(m.get("active", false)) else String(room["settings"]["mode"])
 
-## v0.6 break: anyone past their own start line before the horn is sent back to their gate (max every 500 ms).
+## v0.6 break: hard hold. Anyone past their own start line before the horn is pushed back onto the line (no
+## false-start penalty, no teleport to the gate). Rate-limited to every 150 ms so a held W can't outrun it.
 func _check_break_line(room: Dictionary, pid: int, pos: Vector3) -> void:
 	var info: Dictionary = room["players"].get(pid, {})
 	if info.is_empty():
@@ -1450,7 +1472,7 @@ func _check_break_line(room: Dictionary, pid: int, pos: Vector3) -> void:
 	if not crossed:
 		return
 	var now := _rules_now()
-	if now - int(info.get("break_reset_ms", -100000)) < 500:
+	if now - int(info.get("break_reset_ms", -100000)) < 150:
 		return
 	info["break_reset_ms"] = now
 	info["break_false_starts"] = int(info.get("break_false_starts", 0)) + 1
