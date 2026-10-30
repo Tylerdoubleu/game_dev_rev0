@@ -30,3 +30,7 @@
 ## Player hit (`paint/player_hit.wav`, plays on the server-confirmed `player_eliminated`; `splat_body.wav` is back to the v0.5 local paint-touch splat)
 - Source: `player_hit_tyler_raw.wav`, supplied by Tyler 2026-10-30 (7.0 s, 48 kHz stereo).
 - Cut: 3.352 s to 4.752 s (the clip Tyler pointed at), mono 44.1 kHz 16-bit, 150 ms fade-out, peak -1 dB.
+
+## Footsteps v2 (`movement/step_turf_1..4.wav`, `step_sprint_1..2.wav`)
+- Source: `footstep_tyler_raw.wav`, supplied by Tyler 2026-10-30 (1.0 s, one footstep), replacing the Dry Grass Steps cuts.
+- Cuts all start on the footfall (0.07 s) with an exponential fade: walk 0.40-0.45 s, sprint 0.30 s. Variety comes from small EQ differences (bass/treble/low-pass) rather than pitch shifting. Mono 44.1 kHz 16-bit, peak -1 dB.
