@@ -24,8 +24,12 @@ const STREAMS := {
 	"land": [preload("res://assets/audio/movement/land_soft.wav")],
 }
 ## Kept deliberately low so paint, markers and the horn stay on top.
-const VOLUME_DB := {"step": -17.0, "step_sprint": -14.0, "breath": -21.0, "slide": -11.0, "effort_slide": -15.0,
+const VOLUME_DB := {"step": -29.0, "step_sprint": -26.0, "breath": -21.0, "slide": -11.0, "effort_slide": -15.0,
 	"effort_dive": -12.0, "dive_land": -9.0, "land": -14.0}
+## Tyler: footsteps "way down, subtle and muffled" - they go through their own bus with a low-pass filter.
+const STEP_BUS := "Footsteps"
+const STEP_LOWPASS_HZ := 850.0
+const STEP_KINDS := ["step", "step_sprint"]
 const WALK_STRIDE := 1.5        # metres between footsteps when walking
 const SPRINT_STRIDE := 2.1      # longer strides at sprint pace
 const SPRINT_SPEED_MIN := 6.6   # above WALK_SPEED 5.6, below SPRINT_SPEED 8.4
@@ -53,7 +57,21 @@ func _init(body: Node3D = null) -> void:
 	target = body
 	name = "MovementFoley"
 
+static func ensure_step_bus() -> String:
+	var idx := AudioServer.get_bus_index(STEP_BUS)
+	if idx < 0:
+		AudioServer.add_bus()
+		idx = AudioServer.bus_count - 1
+		AudioServer.set_bus_name(idx, STEP_BUS)
+		AudioServer.set_bus_send(idx, "Master")
+		var lp := AudioEffectLowPassFilter.new()
+		lp.cutoff_hz = STEP_LOWPASS_HZ
+		lp.resonance = 0.4
+		AudioServer.add_bus_effect(idx, lp)
+	return STEP_BUS
+
 func _ready() -> void:
+	ensure_step_bus()
 	for i in 6:
 		var p := AudioStreamPlayer3D.new()
 		p.unit_size = 4.0
@@ -148,6 +166,7 @@ func play(kind: String, extra_db := 0.0) -> void:
 		i = (i + 1 + randi() % (list.size() - 1)) % list.size()
 	_last_pick[kind] = i
 	p.stream = list[i]
+	p.bus = STEP_BUS if kind in STEP_KINDS else "Master"
 	p.volume_db = float(VOLUME_DB.get(kind, -15.0)) + extra_db + randf_range(-1.5, 1.0)
 	p.pitch_scale = randf_range(0.97, 1.03)
 	if target != null and target.is_inside_tree():
