@@ -107,10 +107,10 @@ func apply_state(s: Dictionary) -> void:
 			_ready_btn.set_pressed_no_signal(is_ready)
 		# Tyler v0.5: you only take your (auto-assigned) team spot once you press READY.
 		if not is_ready:
-			_bench_list.add_child(_label(line, 16, Color(0.72, 0.73, 0.68)))
+			_bench_list.add_child(TournamentSkin.marker(line, 17, Color(0.8, 0.81, 0.76)))
 			bench += 1
 			continue
-		var l := _label(line, 17, (RED_TEAM if is_red else BLUE_TEAM).lightened(0.35))
+		var l := TournamentSkin.marker(line, 18, (RED_TEAM if is_red else BLUE_TEAM).lightened(0.45))
 		if is_red:
 			_red_list.add_child(l); red += 1
 		else:
@@ -194,24 +194,11 @@ func _press_leave() -> void:
 
 # ---------------------------------------------------------------- UI ----------
 
-func _style(bg: Color, border: Color, bw := 2) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = border
-	sb.set_border_width_all(bw)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 12; sb.content_margin_right = 12
-	sb.content_margin_top = 6; sb.content_margin_bottom = 6
-	return sb
+func _style(bg: Color, _border: Color = Color.BLACK, _bw := 2) -> StyleBox:
+	return TournamentSkin.card(bg)
 
 func _label(t: String, size: int, c: Color) -> Label:
-	var l := Label.new()
-	l.text = t
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", c)
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	l.add_theme_constant_override("outline_size", 4)
-	return l
+	return TournamentSkin.label(t, size, c)
 
 func _toggle(t: String) -> Button:
 	var b := Button.new()
@@ -219,16 +206,7 @@ func _toggle(t: String) -> Button:
 	b.toggle_mode = true
 	b.custom_minimum_size = Vector2(0, 42)
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	b.add_theme_font_size_override("font_size", 16)
-	b.add_theme_color_override("font_color", Color(0.82, 0.83, 0.78))
-	b.add_theme_color_override("font_pressed_color", Color(0.06, 0.06, 0.05))
-	b.add_theme_color_override("font_hover_pressed_color", Color(0.06, 0.06, 0.05))
-	b.add_theme_stylebox_override("normal", _style(Color(0.2, 0.205, 0.19), Color(0.33, 0.33, 0.3)))
-	b.add_theme_stylebox_override("hover", _style(Color(0.26, 0.27, 0.24), NEON.darkened(0.3)))
-	b.add_theme_stylebox_override("pressed", _style(NEON, NEON.darkened(0.45)))
-	b.add_theme_stylebox_override("hover_pressed", _style(NEON.lightened(0.15), Color.WHITE))
-	b.add_theme_stylebox_override("disabled", _style(Color(0.15, 0.15, 0.14), Color(0.1, 0.1, 0.1)))
-	return b
+	return TournamentSkin.style_toggle(b, 16)
 
 func _picker_row(col: VBoxContainer, title: String, options: Array, store: Dictionary, cb: Callable) -> void:
 	col.add_child(_label(title, 14, Color(0.6, 0.62, 0.56)))
@@ -247,16 +225,14 @@ func _picker_row(col: VBoxContainer, title: String, options: Array, store: Dicti
 
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var bg := ColorRect.new()
-	bg.color = Color(0.07, 0.075, 0.07, 0.96)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	add_child(TournamentSkin.backdrop())
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 	var board := PanelContainer.new()
-	board.custom_minimum_size = Vector2(1080, 0)
-	board.add_theme_stylebox_override("panel", _style(Color(0.13, 0.135, 0.12), Color(0.32, 0.3, 0.25), 3))
+	board.name = "Board"
+	board.custom_minimum_size = Vector2(1100, 0)
+	board.add_theme_stylebox_override("panel", TournamentSkin.board_style())
 	center.add_child(board)
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 10)
@@ -264,10 +240,10 @@ func _build_ui() -> void:
 
 	var head := HBoxContainer.new()
 	col.add_child(head)
-	_title = _label("%s  -  WAITING ROOM" % lobby_name, 36, NEON)
+	_title = TournamentSkin.label("%s  -  WAITING ROOM" % lobby_name, 40, NEON, TournamentSkin.STENCIL, 8)
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(_title)
-	_status = _label("CONNECTING...", 15, Color(1.0, 0.72, 0.3))
+	_status = TournamentSkin.led("CONNECTING...", 17)
 	head.add_child(_status)
 
 	var teams := HBoxContainer.new()
@@ -278,11 +254,11 @@ func _build_ui() -> void:
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		p.size_flags_stretch_ratio = 0.8 if side[1] == 1 else 1.0
 		p.custom_minimum_size = Vector2(0, 230)
-		p.add_theme_stylebox_override("panel", _style(Color(0.16, 0.165, 0.15), side[0].darkened(0.35), 2))
+		p.add_theme_stylebox_override("panel", TournamentSkin.card(side[0].darkened(0.62).lerp(Color(0.25, 0.25, 0.23), 0.35), 14, 10))
 		teams.add_child(p)
 		var v := VBoxContainer.new()
 		p.add_child(v)
-		var h := _label("", 22, side[0])
+		var h := TournamentSkin.label("", 24, side[0].lightened(0.2), TournamentSkin.STENCIL, 5)
 		v.add_child(h)
 		var list := VBoxContainer.new()
 		v.add_child(list)
@@ -305,8 +281,7 @@ func _build_ui() -> void:
 	leave.name = "LeaveButton"
 	leave.text = "LEAVE LOBBY"
 	leave.custom_minimum_size = Vector2(200, 54)
-	leave.add_theme_font_size_override("font_size", 18)
-	leave.add_theme_stylebox_override("normal", _style(Color(0.35, 0.36, 0.33), Color(0.2, 0.2, 0.2)))
+	TournamentSkin.style_button(leave, Color(0.58, 0.58, 0.55), 18)
 	leave.pressed.connect(_press_leave)
 	foot.add_child(leave)
 	_ready_btn = _toggle("READY  [ ]")
@@ -321,21 +296,19 @@ func _build_ui() -> void:
 	_start_btn = Button.new()
 	_start_btn.name = "StartMatchButton"
 	_start_btn.custom_minimum_size = Vector2(340, 54)
-	_start_btn.add_theme_font_size_override("font_size", 22)
-	_start_btn.add_theme_color_override("font_color", Color(0.06, 0.06, 0.05))
-	_start_btn.add_theme_color_override("font_disabled_color", Color(0.4, 0.4, 0.38))
-	_start_btn.add_theme_stylebox_override("normal", _style(Color(0.45, 0.95, 0.35), Color(0.2, 0.45, 0.15)))
-	_start_btn.add_theme_stylebox_override("hover", _style(Color(0.6, 1.0, 0.5), Color.WHITE))
-	_start_btn.add_theme_stylebox_override("disabled", _style(Color(0.18, 0.18, 0.17), Color(0.1, 0.1, 0.1)))
+	TournamentSkin.style_button(_start_btn, Color(0.45, 0.95, 0.35), 24)
 	_start_btn.pressed.connect(_press_start)
 	foot.add_child(_start_btn)
-	_countdown = _label("", 64, NEON)
+	_countdown = TournamentSkin.led("", 72, TournamentSkin.AMBER)
 	_countdown.name = "CountdownLabel"
 	_countdown.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_countdown.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP)
 	_countdown.position = Vector2(-300, 24)
 	_countdown.custom_minimum_size = Vector2(600, 80)
+	_countdown.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
 	_countdown.add_theme_constant_override("outline_size", 10)
 	_countdown.visible = false
 	add_child(_countdown)
+	TournamentSkin.dress_board(self, board, [[Vector2(0.5, 0.93), 110.0, Color(TournamentSkin.PINK, 0.85), 15.0]])
+	move_child(_countdown, -1)
 	_refresh_controls()

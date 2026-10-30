@@ -113,7 +113,7 @@ func set_lobbies(list: Array, error_text: String = "") -> void:
 		_status_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.3))
 	else:
 		_status_label.text = "%d LOBBIES  -  %d OPEN" % [list.size(), open]
-		_status_label.add_theme_color_override("font_color", Color(0.8, 0.82, 0.78))
+		_status_label.add_theme_color_override("font_color", TournamentSkin.AMBER)
 	_quick_btn.disabled = pick_quick_join(list).is_empty()
 	lobbies_updated.emit(list.size())
 
@@ -130,52 +130,29 @@ func quick_join() -> void:
 
 # ---------------------------------------------------------------- UI ----------
 
-func _panel_style(bg: Color, border: Color, bw: int = 2) -> StyleBoxFlat:
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = bg
-	sb.border_color = border
-	sb.set_border_width_all(bw)
-	sb.set_corner_radius_all(3)
-	sb.content_margin_left = 14
-	sb.content_margin_right = 14
-	sb.content_margin_top = 8
-	sb.content_margin_bottom = 8
-	return sb
+func _panel_style(bg: Color, _border: Color = Color.BLACK, _bw: int = 2) -> StyleBox:
+	return TournamentSkin.card(bg)
 
 func _label(text: String, size: int, color: Color) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.add_theme_font_size_override("font_size", size)
-	l.add_theme_color_override("font_color", color)
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
-	l.add_theme_constant_override("outline_size", 4)
-	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	return l
+	return TournamentSkin.label(text, size, color)
 
 func _button(text: String, accent: Color) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.add_theme_font_size_override("font_size", 18)
-	b.add_theme_color_override("font_color", Color(0.06, 0.06, 0.05))
-	b.add_theme_color_override("font_disabled_color", Color(0.35, 0.35, 0.33))
-	b.add_theme_stylebox_override("normal", _panel_style(accent, accent.darkened(0.45)))
-	b.add_theme_stylebox_override("hover", _panel_style(accent.lightened(0.2), Color.WHITE))
-	b.add_theme_stylebox_override("pressed", _panel_style(accent.darkened(0.2), accent.darkened(0.6)))
-	b.add_theme_stylebox_override("disabled", _panel_style(Color(0.18, 0.18, 0.17), Color(0.1, 0.1, 0.1)))
-	return b
+	return TournamentSkin.style_button(b, accent, 18)
 
+## v0.6 (Ren): Gritty 2000s tournament reskin: netting backdrop, plywood scoreboard, stencil title with
+## a paint hit, masking-taped vinyl lobby cards, amber LED counts.
 func _build_ui() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var bg := ColorRect.new()
-	bg.color = Color(0.07, 0.075, 0.07, 0.94)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	add_child(bg)
+	add_child(TournamentSkin.backdrop())
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(center)
 	var board := PanelContainer.new()
-	board.custom_minimum_size = Vector2(1080, 0)
-	board.add_theme_stylebox_override("panel", _panel_style(Color(0.13, 0.135, 0.12), Color(0.32, 0.3, 0.25), 3))
+	board.name = "Board"
+	board.custom_minimum_size = Vector2(1100, 0)
+	board.add_theme_stylebox_override("panel", TournamentSkin.board_style())
 	center.add_child(board)
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 10)
@@ -183,22 +160,22 @@ func _build_ui() -> void:
 
 	var header := HBoxContainer.new()
 	col.add_child(header)
-	var title := _label("TOURNAMENT BOARD", 40, NEON)
+	var title := TournamentSkin.label("TOURNAMENT BOARD", 48, TournamentSkin.NEON, TournamentSkin.STENCIL, 8)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
-	_status_label = _label("CONNECTING...", 18, Color(0.8, 0.82, 0.78))
+	_status_label = TournamentSkin.led("CONNECTING...", 20)
 	header.add_child(_status_label)
-	col.add_child(_label("PICK A FIELD  -  5 V 5  -  TEAMS AUTO-SPLIT ON JOIN", 16, Color(0.62, 0.64, 0.58)))
+	col.add_child(TournamentSkin.label("PICK A FIELD  //  5 V 5  //  TEAMS AUTO-SPLIT ON JOIN", 15, TournamentSkin.MUTED))
 
 	var cols := HBoxContainer.new()
-	for spec in [["LOBBY", 150], ["FIELD", 270], ["GAME", 210], ["RED", 90], ["BLUE", 90], ["STATUS", 120], ["", 110]]:
-		var h := _label(spec[0], 14, Color(0.55, 0.56, 0.5))
+	for spec in [["", 10], ["LOBBY", 150], ["FIELD", 270], ["GAME", 210], ["RED", 90], ["BLUE", 90], ["STATUS", 120], ["", 110]]:
+		var h := TournamentSkin.label(spec[0], 14, TournamentSkin.MUTED, TournamentSkin.STENCIL, 2)
 		h.custom_minimum_size.x = spec[1]
 		cols.add_child(h)
 	col.add_child(cols)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 520)
+	scroll.custom_minimum_size = Vector2(0, 500)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	col.add_child(scroll)
 	_rows = VBoxContainer.new()
@@ -210,42 +187,55 @@ func _build_ui() -> void:
 	footer.add_theme_constant_override("separation", 12)
 	col.add_child(footer)
 	_quick_btn = _button("QUICK-JOIN", NEON)
-	_quick_btn.custom_minimum_size = Vector2(260, 54)
+	_quick_btn.custom_minimum_size = Vector2(260, 56)
+	_quick_btn.add_theme_font_size_override("font_size", 22)
 	_quick_btn.pressed.connect(quick_join)
 	footer.add_child(_quick_btn)
-	var solo := _button("SOLO TEST VS BOTS", Color(0.55, 0.62, 0.5))
-	solo.custom_minimum_size = Vector2(260, 54)
+	var solo := _button("SOLO TEST VS BOTS", Color(0.62, 0.7, 0.55))
+	solo.custom_minimum_size = Vector2(260, 56)
 	solo.pressed.connect(func(): solo_requested.emit())
 	footer.add_child(solo)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	footer.add_child(spacer)
-	var refresh_btn := _button("REFRESH", Color(0.4, 0.42, 0.38))
-	refresh_btn.custom_minimum_size = Vector2(150, 54)
+	var refresh_btn := _button("REFRESH", Color(0.55, 0.56, 0.52))
+	refresh_btn.custom_minimum_size = Vector2(150, 56)
 	refresh_btn.pressed.connect(refresh)
 	footer.add_child(refresh_btn)
+	TournamentSkin.dress_board(self, board, [[Vector2(0.555, 0.08), 120.0, Color(TournamentSkin.PINK, 0.9), 20.0], [Vector2(0.62, 0.92), 110.0, Color(TournamentSkin.NEON, 0.65), -40.0]])
 
 func _make_row(e: Dictionary) -> Control:
 	var status := String(e.get("status", "waiting"))
 	var sc: Color = STATUS_COLORS.get(status, Color.GRAY)
 	var row := PanelContainer.new()
 	row.name = "Row_" + String(e.get("id", "lobby"))
-	row.add_theme_stylebox_override("panel", _panel_style(Color(0.17, 0.175, 0.16), sc.darkened(0.55), 2))
+	row.add_theme_stylebox_override("panel", TournamentSkin.card(Color(0.3, 0.31, 0.28), 8, 5))
 	var h := HBoxContainer.new()
 	row.add_child(h)
+	var stripe := ColorRect.new()  # spray-painted status stripe down the card edge
+	stripe.color = sc
+	stripe.custom_minimum_size = Vector2(6, 0)
+	h.add_child(stripe)
+	var gap := Control.new()
+	gap.custom_minimum_size.x = 4
+	h.add_child(gap)
 	var maxp := int(e.get("max_per_team", 5))
 	var p: Dictionary = e.get("players", {})
 	var mode_key := String(e.get("mode", ""))
 	var cells := [
-		[String(e.get("name", e.get("id", "LOBBY"))).to_upper(), 150, Color(0.92, 0.93, 0.88)],
-		[MAP_LABELS.get(String(e.get("map", "")), String(e.get("map", "")).to_upper()), 270, Color(0.85, 0.86, 0.8)],
-		[MODE_LABELS.get(mode_key, "ANY  (LOBBY PICKS)" if mode_key == "" else mode_key.to_upper()), 210, Color(0.75, 0.77, 0.7)],
-		["%d / %d" % [int(p.get("red", 0)), maxp], 90, RED_TEAM],
-		["%d / %d" % [int(p.get("blue", 0)), maxp], 90, BLUE_TEAM],
-		[status.replace("_", " ").to_upper(), 120, sc],
+		[String(e.get("name", e.get("id", "LOBBY"))).to_upper(), 150, TournamentSkin.CHALK, TournamentSkin.STENCIL],
+		[MAP_LABELS.get(String(e.get("map", "")), String(e.get("map", "")).to_upper()), 270, Color(0.85, 0.86, 0.8), TournamentSkin.STENCIL],
+		[MODE_LABELS.get(mode_key, "ANY  (LOBBY PICKS)" if mode_key == "" else mode_key.to_upper()), 210, Color(0.78, 0.8, 0.72), TournamentSkin.STENCIL],
+		["%d/%d" % [int(p.get("red", 0)), maxp], 90, RED_TEAM.lightened(0.15), TournamentSkin.LED],
+		["%d/%d" % [int(p.get("blue", 0)), maxp], 90, BLUE_TEAM.lightened(0.15), TournamentSkin.LED],
+		[status.replace("_", " ").to_upper(), 120, sc, TournamentSkin.LED],
 	]
 	for c in cells:
-		var l := _label(c[0], 18, c[2])
+		var l: Label
+		if c[3] == TournamentSkin.LED:
+			l = TournamentSkin.led(c[0], 22, c[2])
+		else:
+			l = TournamentSkin.label(c[0], 18, c[2])
 		l.custom_minimum_size.x = c[1]
 		l.clip_text = true
 		h.add_child(l)
