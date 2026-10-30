@@ -58,6 +58,13 @@ func _process(_d: float) -> bool:
 		root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": 999, "shooter": 1})
 		root.get_node("NetworkLobby").emit_signal("room_event", "round_started", {})
 		_check(dir.player_hit_count == h0 + 1, "player_eliminated plays the player-hit sound (and only that event)")
+		var hm = dir.get_node("HitMarker")
+		var m0: int = hm.show_count
+		var me: int = int(root.get_node("NetworkLobby").call("_my_peer_id"))
+		root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": 999, "shooter": me, "scored": true})
+		_check(hm.show_count == m0 + 1, "hit marker shows when my shot is the confirmed elimination")
+		root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": me, "shooter": 999, "scored": true})
+		_check(hm.show_count == m0 + 1, "no hit marker when I'm the one eliminated")
 	if f == 31:
 		root.get_node("MovementAudioDirector").debug_menu_open = true
 	if f == 40:

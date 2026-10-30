@@ -45,6 +45,9 @@ func _ready() -> void:
 	music.stream = stream
 	music.volume_db = SILENT_DB
 	add_child(music)
+	var hm := HitMarker.new()
+	hm.name = "HitMarker"
+	add_child(hm)
 	get_tree().node_added.connect(_on_node_added)
 	_hook_lobby.call_deferred()
 
