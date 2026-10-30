@@ -11,3 +11,4 @@
 - `dry_grass_steps_cc0_raw.wav`: "Dry Grass Steps", supplied by Tyler on 2026-10-30. It mixes the CC0 Freesound sounds jordir/360561 and Mystikuum/377323 and contains two footsteps.
   - Those two steps, pitched by up to ±6%, make `step_turf_1.wav` through `step_turf_4.wav`.
   - Shorter cuts of the same two steps make `step_sprint_1.wav` and `step_sprint_2.wav`.
+  - Ren, v0.6: every step is trimmed to start right on the footfall (no lead-in silence) and to end before the next step, 0.26 s for walking and 0.21 s for sprinting, with a short fade, so steps don't lag or pile up at sprint pace.
