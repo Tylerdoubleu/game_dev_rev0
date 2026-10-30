@@ -20,3 +20,8 @@
 - Source: `metal_bunker_hit_tyler_raw.wav`, supplied by Tyler 2026-10-30 (FL Studio 21 export, 24.5 s of repeated hits).
 - Cut: first hit only (0.15 s to 0.45 s), mono 44.1 kHz 16-bit, 80 ms fade-out, peak-normalized to -1 dB.
 - License: supplied by Tyler; confirm origin before commercial release if not his own recording.
+
+## Break countdown + air horn (`break/countdown_beep_1.wav`, `countdown_beep_2.wav`, `air_horn.wav`)
+- Source: `air_horn_tyler_raw.wav`, supplied by Tyler 2026-10-30 (7.8 s, three horn blasts, 48 kHz 24-bit).
+- Cuts: blast 1 at 1.42 s, blast 2 at 3.49 s, blast 3 at 5.77 s; mono 44.1 kHz 16-bit, 80 ms fade-out, peak -1 dB.
+- Use: beep 1 on "2", beep 2 on "1", full horn on GO (played -8 dB / -8 dB / -3 dB).

@@ -7,6 +7,9 @@ extends Node
 const HORN := preload("res://assets/audio/break/air_horn.wav")
 const PLAYER_SCRIPT := "res://scripts/player/player_controller_3d.gd"
 const HORN_DB := -3.0
+## Tyler's 3-2-1 lead-in: a short horn beep on 2 and on 1, then the full air horn on GO (break_horn).
+const COUNTDOWN_BEEPS := {2: preload("res://assets/audio/break/countdown_beep_1.wav"), 1: preload("res://assets/audio/break/countdown_beep_2.wav")}
+const BEEP_DB := -8.0
 const MENU_MUSIC := preload("res://assets/audio/music/menu_loop.ogg")
 const MENU_MUSIC_DB := -12.0
 const MUSIC_FADE_DB_PER_SEC := 30.0   # ~1 s fade in / out
@@ -14,6 +17,9 @@ const SILENT_DB := -60.0
 
 var horn_count := 0
 var _horn: AudioStreamPlayer
+var _beep: AudioStreamPlayer
+var beep_count := 0
+var _beeped: Dictionary = {}   # seconds_left values already beeped this break (snapshots resend them)
 var music: AudioStreamPlayer
 ## Tests can force the menu state instead of opening the real lobby UI (null = ask LobbyEntryFlow).
 var debug_menu_open = null
@@ -23,6 +29,9 @@ func _ready() -> void:
 	_horn.stream = HORN
 	_horn.volume_db = HORN_DB
 	add_child(_horn)
+	_beep = AudioStreamPlayer.new()
+	_beep.volume_db = BEEP_DB
+	add_child(_beep)
 	music = AudioStreamPlayer.new()
 	music.name = "MenuMusic"
 	var stream := MENU_MUSIC.duplicate() as AudioStreamOggVorbis
@@ -37,9 +46,21 @@ func _hook_lobby() -> void:
 	var nl := get_node_or_null("/root/NetworkLobby")
 	if nl != null and nl.has_signal("break_horn") and not nl.is_connected("break_horn", play_horn):
 		nl.connect("break_horn", play_horn)
+	if nl != null and nl.has_signal("break_countdown") and not nl.is_connected("break_countdown", play_countdown_beep):
+		nl.connect("break_countdown", play_countdown_beep)
+
+func play_countdown_beep(seconds_left: int, _data: Dictionary = {}) -> void:
+	if not COUNTDOWN_BEEPS.has(seconds_left) or _beeped.has(seconds_left):
+		return
+	_beeped[seconds_left] = true
+	beep_count += 1
+	if _beep != null and _beep.is_inside_tree():
+		_beep.stream = COUNTDOWN_BEEPS[seconds_left]
+		_beep.play()
 
 func play_horn(_data: Dictionary = {}) -> void:
 	horn_count += 1
+	_beeped.clear()
 	if _horn != null and _horn.is_inside_tree():
 		_horn.play()
 

@@ -95,5 +95,6 @@ h = saw(466 * f_wob) + saw(470 * f_wob) * 0.8 + saw(311 * f_wob) * 0.7 + saw(233
 h = np.tanh(h * 1.6)
 h = biquad(h, "lp", 3800) + biquad(h, "bp", 1200, 1.2) * 0.5
 e = np.minimum(1, t / 0.04) * np.where(t > sec - 0.18, (sec - t) / 0.18, 1.0)
-save("assets/audio/break/air_horn.wav", h * e, 0.85)
+# air_horn.wav is now Tyler's recording; do not regenerate.
+# save("assets/audio/break/air_horn.wav", h * e, 0.85)
 print("ok")
