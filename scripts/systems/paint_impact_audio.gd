@@ -2,8 +2,10 @@ class_name PaintImpactAudio
 extends RefCounted
 ## v0.5 (Ren): positional paint audio. Wet splats tuned per surface (inflatable vinyl, wood/spools/timber,
 ## heli metal, turf, player padding), a hollow rubbery "thock" when a ball bounces without breaking,
-## a pneumatic marker pop, and a near-miss whiz. Sounds are procedurally synthesized WAVs in
-## res://assets/audio/paint/. Played through a small round-robin pool of AudioStreamPlayer3D nodes.
+## a marker shot, and a near-miss whiz. Splats/thock/whiz are procedurally synthesized WAVs in
+## res://assets/audio/paint/. v0.6: the marker shot is a real recording Tyler supplied, cut into five
+## variants (marker_fire_1..5.wav) that rotate without repeats. Played through a small round-robin pool
+## of AudioStreamPlayer3D nodes.
 
 const STREAMS := {
 	"vinyl": preload("res://assets/audio/paint/splat_vinyl.wav"),
@@ -15,6 +17,20 @@ const STREAMS := {
 	"fire": preload("res://assets/audio/paint/marker_fire.wav"),
 	"whiz": preload("res://assets/audio/paint/flyby_whiz.wav"),
 }
+## Real-recording variants for kinds that rotate (no clip plays twice in a row).
+const VARIANTS := {
+	"fire": [
+		preload("res://assets/audio/paint/marker_fire_1.wav"),
+		preload("res://assets/audio/paint/marker_fire_2.wav"),
+		preload("res://assets/audio/paint/marker_fire_3.wav"),
+		preload("res://assets/audio/paint/marker_fire_4.wav"),
+		preload("res://assets/audio/paint/marker_fire_5.wav"),
+	],
+}
+## Recorded sounds already vary naturally, so they get only a light pitch wobble.
+const MAX_PITCH_JITTER := {"fire": 0.03}
+static var _last_variant: Dictionary = {}
+
 const VOLUME_DB := {"vinyl": -4.0, "wood": -4.0, "metal": -6.0, "turf": -9.0, "body": -2.0, "bounce": -5.0, "fire": -8.0, "whiz": -7.0}
 const POOL_SIZE: int = 24
 const POOL_NAME: String = "PaintImpactAudioPool"
@@ -62,8 +78,19 @@ static func play(scene_root: Node, kind: String, pos: Vector3, pitch_jitter: flo
 	var player := pool.get_child(idx) as AudioStreamPlayer3D
 	if not player.is_inside_tree():
 		return
-	player.stream = STREAMS[kind]
+	player.stream = _pick_stream(kind)
+	pitch_jitter = minf(pitch_jitter, float(MAX_PITCH_JITTER.get(kind, pitch_jitter)))
 	player.volume_db = float(VOLUME_DB.get(kind, -6.0)) + randf_range(-1.5, 1.0)
 	player.pitch_scale = 1.0 + randf_range(-pitch_jitter, pitch_jitter)
 	player.global_position = pos
 	player.play()
+
+static func _pick_stream(kind: String) -> AudioStream:
+	if not VARIANTS.has(kind):
+		return STREAMS[kind]
+	var list: Array = VARIANTS[kind]
+	var i := randi() % list.size()
+	if list.size() > 1 and i == int(_last_variant.get(kind, -1)):
+		i = (i + 1 + randi() % (list.size() - 1)) % list.size()
+	_last_variant[kind] = i
+	return list[i]

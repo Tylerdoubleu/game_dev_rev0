@@ -14,14 +14,17 @@ const STREAMS := {
 		preload("res://assets/audio/movement/step_turf_3.wav"), preload("res://assets/audio/movement/step_turf_4.wav")],
 	"step_sprint": [preload("res://assets/audio/movement/step_sprint_1.wav"), preload("res://assets/audio/movement/step_sprint_2.wav")],
 	"breath": [preload("res://assets/audio/movement/breath_sprint_1.wav"), preload("res://assets/audio/movement/breath_sprint_2.wav")],
-	"slide": [preload("res://assets/audio/movement/slide_scrape.wav")],
-	"effort_slide": [preload("res://assets/audio/movement/effort_slide.wav")],
-	"effort_dive": [preload("res://assets/audio/movement/effort_dive.wav")],
-	"dive_land": [preload("res://assets/audio/movement/dive_land.wav")],
+	## v0.6: Tyler's recorded slide/dive efforts rotate for both moves; the synthesized scrape/effort/thud are retired.
+	"slide": [preload("res://assets/audio/movement/slide_dive_1.wav"), preload("res://assets/audio/movement/slide_dive_2.wav"),
+		preload("res://assets/audio/movement/slide_dive_3.wav"), preload("res://assets/audio/movement/slide_dive_4.wav")],
+	"effort_slide": [],
+	"effort_dive": [preload("res://assets/audio/movement/slide_dive_1.wav"), preload("res://assets/audio/movement/slide_dive_2.wav"),
+		preload("res://assets/audio/movement/slide_dive_3.wav"), preload("res://assets/audio/movement/slide_dive_4.wav")],
+	"dive_land": [],
 	"land": [preload("res://assets/audio/movement/land_soft.wav")],
 }
 ## Kept deliberately low so paint, markers and the horn stay on top.
-const VOLUME_DB := {"step": -17.0, "step_sprint": -14.0, "breath": -21.0, "slide": -10.0, "effort_slide": -15.0,
+const VOLUME_DB := {"step": -17.0, "step_sprint": -14.0, "breath": -21.0, "slide": -11.0, "effort_slide": -15.0,
 	"effort_dive": -12.0, "dive_land": -9.0, "land": -14.0}
 const WALK_STRIDE := 1.5        # metres between footsteps when walking
 const SPRINT_STRIDE := 2.1      # longer strides at sprint pace
@@ -44,6 +47,7 @@ var _was_sliding := false
 var _was_diving := false
 var _dive_airborne := false
 var _dive_landed := false
+var _last_pick: Dictionary = {}
 
 func _init(body: Node3D = null) -> void:
 	target = body
@@ -137,7 +141,13 @@ func play(kind: String, extra_db := 0.0) -> void:
 	var p := _players[_next]
 	_next = (_next + 1) % _players.size()
 	var list: Array = STREAMS[kind]
-	p.stream = list[randi() % list.size()]
+	if list.is_empty():
+		return
+	var i := randi() % list.size()
+	if list.size() > 1 and i == int(_last_pick.get(kind, -1)):
+		i = (i + 1 + randi() % (list.size() - 1)) % list.size()
+	_last_pick[kind] = i
+	p.stream = list[i]
 	p.volume_db = float(VOLUME_DB.get(kind, -15.0)) + extra_db + randf_range(-1.5, 1.0)
 	p.pitch_scale = randf_range(0.93, 1.07)
 	if target != null and target.is_inside_tree():
