@@ -124,3 +124,21 @@ Hit (`srv_report_hit`) rejections, in order:
 - **CTF visuals are still the legacy single centre flag.** Please render the two base flags from `flag_state_changed` and `room_state.match.flags`.
 - In CTF, a local death still respawns the player locally, but the server keeps them dead until `round_started`, so their shots and hits are rejected. That calls for a spectate/dead HUD state, driven by `players[me].alive == false`.
 - Ren: `LobbyBrowser.MODE_LABELS` has no `bots_test` key. The API sends `bots_test`.
+
+## v0.6: the break (3-2-1 + horn) and callout pings
+
+**Phases:** `waiting` → `break` → `live` → `intermission` → … The server runs the break; clients only display it.
+
+| Event | Scope | Fields | Client signal |
+|---|---|---|---|
+| `round_started` | room | adds `break_ms` (3000; 0 in bots_test) and `break_line_z` (40.0) | `round_started` |
+| `break_countdown` | room | `round`, `seconds_left` (3, 2, 1), `ms_left` | `break_countdown(seconds_left, data)` |
+| `break_horn` | room | `round`, `mode` | `break_horn(data)`, play the horn and release the start line |
+| `break_line_reset` | the player who crossed early | `room`, `team`, `gate`, `line_z` | `break_line_reset(data)`, the client also snaps the player back to the gate |
+| `callout_pinged` | pinger's team only (pinger included) | `room`, `peer`, `name`, `team`, `color`, `callout` (≤24 chars), `count` (0..5), `pos` | `callout_pinged(data)` |
+
+- Start lines: ALPHA must stay at `z >= 40`, BRAVO at `z <= -40` until the horn. A crossing resets the player at most every 500 ms.
+- Shots and hit reports during the break are rejected with reason `before_horn`.
+- The CTF round clock (`round_ms_left`) starts at the horn, not at `round_started`.
+- Client API: `NetworkLobby.ping_callout(callout: String, world_pos: Vector3, count := 1)`. Alive players only, with a 1.2 s cooldown per player. Extra pings are dropped silently.
+- Tests set `NetworkLobby.break_countdown_ms = 0` to skip the break.

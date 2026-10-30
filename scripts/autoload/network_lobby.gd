@@ -42,6 +42,12 @@ signal room_roster_changed(roster: Array)
 signal round_results(data: Dictionary)
 signal match_results(data: Dictionary)
 signal returned_to_lobby(room_id: String)
+## v0.6 break + callouts: break_countdown(seconds_left) 3,2,1 -> break_horn (round goes live); callout_pinged(data)
+## arrives only for your own team. break_line_reset(data) = you crossed your start line before the horn.
+signal break_countdown(seconds_left: int, data: Dictionary)
+signal break_horn(data: Dictionary)
+signal break_line_reset(data: Dictionary)
+signal callout_pinged(data: Dictionary)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -544,6 +550,17 @@ func srv_flag_event(event_type: String, player_name: String, team: String, world
 		return
 	_send_room(rid, &"rpc_broadcast_flag_event", [event_type.substr(0, 12), player_name.substr(0, 20), team, world_pos, rid], sid)
 
+## v0.6 bunker callout ping ("1 in Snake 2"): goes to your own team only. callout = bunker name, count = 0..5 enemies.
+func ping_callout(callout: String, world_pos: Vector3, count: int = 1) -> void:
+	if is_online_client():
+		srv_ping_callout.rpc_id(1, callout, world_pos, count)
+
+@rpc("any_peer", "call_remote", "reliable")
+func srv_ping_callout(callout: String, world_pos: Vector3, count: int) -> void:
+	if not is_dedicated_server:
+		return
+	_server_ping_callout(multiplayer.get_remote_sender_id(), callout, world_pos, count)
+
 @rpc("any_peer", "call_remote", "reliable")
 func srv_set_ready(is_ready: bool) -> void:
 	if not is_dedicated_server:
@@ -817,6 +834,15 @@ func _client_apply_room_event(event_name: String, data: Dictionary) -> void:
 			lobby_state_changed.emit(get_lobby_state_snapshot())
 		"round_ended":
 			round_results.emit(data)
+		"break_countdown":
+			break_countdown.emit(int(data.get("seconds_left", 0)), data)
+		"break_horn":
+			break_horn.emit(data)
+		"break_line_reset":
+			break_line_reset.emit(data)
+			_respawn_local_player_at_gate()
+		"callout_pinged":
+			callout_pinged.emit(data)
 		"returned_to_lobby":
 			match_active = false
 			room_status = "waiting"
@@ -1155,7 +1181,7 @@ func _server_on_hit_report(shooter: int, victim: int, hit_pos: Vector3) -> void:
 	var rid := String(peer_room.get(shooter, ""))
 	if rid.is_empty() or shooter == victim or String(peer_room.get(victim, "")) != rid:
 		return
-	var verdict := _server_validate_hit(shooter, victim, hit_pos)
+	var verdict := {"ok": false, "reason": "before_horn"} if _in_break(rid) else _server_validate_hit(shooter, victim, hit_pos)
 	if not bool(verdict.get("ok", false)):
 		var info: Dictionary = players.get(shooter, {})
 		info["rejected_hits"] = int(info.get("rejected_hits", 0)) + 1
@@ -1346,6 +1372,11 @@ const DM_KILLS_TO_WIN: int = 10
 const CTF_ROUNDS_TO_WIN: int = 3
 const CTF_BEST_OF: int = 5
 const DM_RESPAWN_MS: int = 1000
+const BREAK_COUNTDOWN_MS: int = 3000 # v0.6: 3-2-1 at the start line, then the horn; no scored shots before it
+const BREAK_LINE_Z: float = 40.0 # start line: ALPHA must stay at z >= +40, BRAVO at z <= -40 until the horn
+const CALLOUT_COOLDOWN_MS: int = 1200
+## Tests set this to 0 so rounds go live instantly.
+var break_countdown_ms: int = BREAK_COUNTDOWN_MS
 const CTF_ROUND_TIME_MS: int = 180000 # 3 min; on time-out the team with more players alive wins the round, else a draw
 const PRACTICE_RESPAWN_MS: int = 1000
 const ROUND_INTERMISSION_MS: int = 8000 # round winner + scoreboard recap before the next round
@@ -1409,6 +1440,54 @@ func _room_mode(room: Dictionary) -> String:
 	var m: Dictionary = room["match"]
 	return String(m["mode"]) if bool(m.get("active", false)) else String(room["settings"]["mode"])
 
+## v0.6 break: anyone past their own start line before the horn is sent back to their gate (max every 500 ms).
+func _check_break_line(room: Dictionary, pid: int, pos: Vector3) -> void:
+	var info: Dictionary = room["players"].get(pid, {})
+	if info.is_empty():
+		return
+	var team := String(info.get("team", "ALPHA"))
+	var crossed := pos.z < BREAK_LINE_Z if team == "ALPHA" else pos.z > -BREAK_LINE_Z
+	if not crossed:
+		return
+	var now := _rules_now()
+	if now - int(info.get("break_reset_ms", -100000)) < 500:
+		return
+	info["break_reset_ms"] = now
+	info["break_false_starts"] = int(info.get("break_false_starts", 0)) + 1
+	_send_peer_event(pid, "break_line_reset", {"room": String(room["id"]), "team": team, "gate": team_base_position(team), "line_z": BREAK_LINE_Z if team == "ALPHA" else -BREAK_LINE_Z})
+
+func _in_break(rid: String) -> bool:
+	if not rooms.has(rid):
+		return false
+	var m: Dictionary = rooms[rid]["match"]
+	return bool(m.get("active", false)) and String(m.get("phase", "")) == "break"
+
+## v0.6 callouts: relayed to the pinger's own team only (pinger included), rate-limited, alive players only.
+func _server_ping_callout(pid: int, callout: String, world_pos: Vector3, count: int) -> void:
+	var rid := String(peer_room.get(pid, ""))
+	if rid.is_empty() or not rooms.has(rid) or not players.has(pid):
+		return
+	var info: Dictionary = players[pid]
+	if not bool(info.get("alive", true)):
+		return
+	var now := _rules_now()
+	if now - int(info.get("callout_ms", -100000)) < CALLOUT_COOLDOWN_MS:
+		return
+	info["callout_ms"] = now
+	var clean := callout.strip_edges().substr(0, 24)
+	if clean.is_empty():
+		return
+	var team := String(info.get("team", "ALPHA"))
+	var data := {"room": rid, "peer": pid, "name": String(info.get("name", "")), "team": team, "color": team_label(team),
+		"callout": clean, "count": clampi(count, 0, 5),
+		"pos": Vector3(clampf(world_pos.x, -60.0, 60.0), clampf(world_pos.y, -5.0, 20.0), clampf(world_pos.z, -60.0, 60.0))}
+	for other in rooms[rid]["players"].keys():
+		if String(rooms[rid]["players"][other].get("team", "")) == team:
+			_send_peer_event(int(other), "callout_pinged", data)
+	callouts_sent += 1
+
+var callouts_sent: int = 0
+
 func _is_live(room: Dictionary) -> bool:
 	return bool(room["match"].get("active", false)) and String(room["match"].get("phase", "")) == "live"
 
@@ -1427,6 +1506,9 @@ func _on_player_left_room(room: Dictionary, pid: int) -> void:
 		_check_ctf_elimination(room)
 
 func _on_player_moved(room: Dictionary, pid: int, pos: Vector3) -> void:
+	if bool(room["match"].get("active", false)) and String(room["match"].get("phase", "")) == "break":
+		_check_break_line(room, pid, pos)
+		return
 	if not _is_live(room) or String(room["match"]["mode"]) != "ctf":
 		return
 	var info: Dictionary = room["players"].get(pid, {})
@@ -1589,20 +1671,25 @@ func _start_round(room: Dictionary, rebalance: bool) -> void:
 	if rebalance:
 		_rebalance_room_teams(room)
 	m["round"] = int(m["round"]) + 1
-	m["phase"] = "live"
-	m["phase_until_ms"] = 0
+	var brk := maxi(0, break_countdown_ms) if String(m["mode"]) != "bots_test" else 0
+	m["phase"] = "break" if brk > 0 else "live"
+	m["phase_until_ms"] = _rules_now() + brk if brk > 0 else 0
+	m["break_last_s"] = int(ceil(brk / 1000.0))
 	m["flags"] = _new_flags()
-	m["round_ends_ms"] = _rules_now() + CTF_ROUND_TIME_MS if String(m["mode"]) == "ctf" else 0
+	m["round_ends_ms"] = _rules_now() + brk + CTF_ROUND_TIME_MS if String(m["mode"]) == "ctf" else 0
 	for pid in room["players"].keys():
 		var info: Dictionary = room["players"][pid]
 		info["alive"] = true
 		info.erase("late_join")
 	_send_room_event(rid, "round_started", {
 		"round_time_ms": CTF_ROUND_TIME_MS if String(m["mode"]) == "ctf" else 0, "respawn_ms": _respawn_ms(room),
+		"break_ms": brk, "break_line_z": BREAK_LINE_Z,
 		"round": m["round"], "mode": m["mode"], "score": _team_dict_to_colors(m["score"]),
 		"kills": _team_dict_to_colors(m["kills"]), "reset_positions": true,
 		"target": CTF_ROUNDS_TO_WIN if String(m["mode"]) == "ctf" else (DM_KILLS_TO_WIN if String(m["mode"]) == "deathmatch" else 0),
 	})
+	if brk > 0:
+		_send_room_event(rid, "break_countdown", {"round": m["round"], "seconds_left": int(m["break_last_s"]), "ms_left": brk})
 	_broadcast_room_state(rid)
 
 func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
@@ -1638,6 +1725,19 @@ func _tick_room_match(room: Dictionary, _delta: float) -> void:
 	var mode := String(m.get("mode", ""))
 	if active and String(m["phase"]) == "intermission" and now >= int(m["phase_until_ms"]):
 		_start_round(room, true)
+		return
+	if active and String(m["phase"]) == "break":
+		var left_ms := int(m["phase_until_ms"]) - now
+		if left_ms <= 0:
+			m["phase"] = "live"
+			m["phase_until_ms"] = 0
+			_send_room_event(String(room["id"]), "break_horn", {"round": m["round"], "mode": mode})
+			_broadcast_room_state(String(room["id"]))
+			return
+		var secs := int(ceil(left_ms / 1000.0))
+		if secs < int(m.get("break_last_s", 0)):
+			m["break_last_s"] = secs
+			_send_room_event(String(room["id"]), "break_countdown", {"round": m["round"], "seconds_left": secs, "ms_left": left_ms})
 		return
 	var revived := false
 	for pid in room["players"].keys():
@@ -1704,7 +1804,9 @@ func _server_accept_shot(pid: int, origin: Vector3, dir: Vector3, speed: float) 
 	if info.is_empty():
 		return false
 	var reason := ""
-	if not bool(info.get("alive", true)):
+	if _in_break(String(peer_room.get(pid, ""))):
+		reason = "before_horn"
+	elif not bool(info.get("alive", true)):
 		reason = "shooter_dead"
 	elif not is_remote_fire_allowed(pid):
 		reason = "fire_lock"

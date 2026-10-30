@@ -27,13 +27,15 @@ func _process(_d: float) -> bool:
 	L = root.get_node("NetworkLobby")
 	L.start_dedicated_server(PORT)
 	L.outbound_capture = []
+	L.break_countdown_ms = 0
 	L.match_countdown_ms = 0 # rules tests start instantly; _test_ready_and_countdown covers the 3 s countdown
 	_test_ipc_document()
-	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_ctf_round_timer", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
+	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_ctf_round_timer", "_test_break_and_callouts", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
 		if has_method(t):
 			L.start_dedicated_server(PORT + 1 + f)
 			L.outbound_capture = []
 			L.match_countdown_ms = 0
+			L.break_countdown_ms = 0
 			f += 1
 			call(t)
 	print("=== [PASS] v0.5 lobby rooms ===" if fails.is_empty() else "=== [FAIL] lobby rooms: %s" % [fails])
@@ -323,6 +325,51 @@ func _test_ctf_round_timer() -> void:
 	var pe := _events("player_eliminated", "lobby_08")
 	_check(pe.size() == 1 and int(pe[0]["data"]["respawn_in_ms"]) == 0, "player_eliminated carries respawn_in_ms")
 	L._server_set_room_settings(71, "", "deathmatch")
+
+func _test_break_and_callouts() -> void:
+	_begin("v0.6 break (3-2-1 + horn) and team-only callout pings")
+	L.break_countdown_ms = L.BREAK_COUNTDOWN_MS
+	for pid in [81, 82, 83, 84]:
+		_reg(pid, "lobby_10")
+	L._server_set_room_settings(81, "", "ctf")
+	L._server_request_start(81, "speedball")
+	var m: Dictionary = L.rooms["lobby_10"]["match"]
+	_check(m["phase"] == "break" and _events("break_countdown", "lobby_10").size() == 1 and int(_events("break_countdown", "lobby_10")[0]["data"]["seconds_left"]) == 3, "round opens in the break: 3")
+	var red := 81 if _team(81) == "ALPHA" else 82
+	var blue := 82 if red == 81 else 81
+	_state(red, Vector3(0, 0, 44))
+	_state(blue, Vector3(0, 0, -44))
+	_shoot(red, Vector3(0, 1.4, 44), Vector3(0, 1.2, -44))
+	_check(int(L.rejected_shots.get("before_horn", 0)) == 1, "shot before the horn rejected")
+	L._server_on_hit_report(red, blue, Vector3(0, 1.2, -44))
+	_check(_alive(blue) and _events("player_eliminated", "lobby_10").is_empty(), "hit before the horn rejected")
+	(L.outbound_capture as Array).clear()
+	_state(red, Vector3(0, 0, 30))
+	var rs := _sent(red, "cl_room_event").filter(func(x): return x["args"][0] == "break_line_reset")
+	_check(rs.size() == 1 and int(L.players[red]["break_false_starts"]) == 1, "false start past the line -> break_line_reset")
+	_advance(1100)
+	_advance(1000)
+	var cd := _events("break_countdown", "lobby_10").map(func(e): return int(e["data"]["seconds_left"]))
+	_check(cd == [3, 2, 1], "countdown 3, 2, 1 (%s)" % [cd])
+	_check(_events("break_horn", "lobby_10").is_empty(), "no horn yet")
+	_advance(1000)
+	_check(_events("break_horn", "lobby_10").size() == 1 and L.rooms["lobby_10"]["match"]["phase"] == "live", "horn -> live")
+	_check(int(L._public_match_state(L.rooms["lobby_10"])["round_ms_left"]) == L.CTF_ROUND_TIME_MS - 100, "round clock starts at the horn")
+	# Callouts: same team only, rate-limited.
+	(L.outbound_capture as Array).clear()
+	L._server_ping_callout(red, "Snake 2", Vector3(10, 0, -5), 1)
+	var mates: Array = []
+	var others: Array = []
+	for pid in [81, 82, 83, 84]:
+		var got := _sent(pid, "cl_room_event").filter(func(x): return x["args"][0] == "callout_pinged")
+		if _team(pid) == _team(red):
+			mates.append(got.size())
+		else:
+			others.append(got.size())
+	_check(mates == [1, 1] and others == [0, 0], "callout reaches only the pinger's team (%s / %s)" % [mates, others])
+	L._server_ping_callout(red, "Snake 2", Vector3(10, 0, -5), 1)
+	_check(int(L.callouts_sent) == 1, "second ping inside the cooldown dropped")
+	L.break_countdown_ms = 0
 
 func _test_bots_test_mode() -> void:
 	_begin("bots_test: bots on, no win condition")
