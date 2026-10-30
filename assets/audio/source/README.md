@@ -12,3 +12,5 @@
   - Those two steps, pitched by up to ±6%, make `step_turf_1.wav` through `step_turf_4.wav`.
   - Shorter cuts of the same two steps make `step_sprint_1.wav` and `step_sprint_2.wav`.
   - Ren, v0.6: every step is trimmed to start right on the footfall (no lead-in silence) and to end before the next step, 0.26 s for walking and 0.21 s for sprinting, with a short fade, so steps don't lag or pile up at sprint pace.
+- `menu_music_greater_vantage_raw.mp3`: menu music supplied by Tyler on 2026-10-30. The tags read "14 metal", Greater Vantage Music, album "demo reel", and the track is 56 s long. The license still needs confirming before a commercial release.
+  - Converted to `assets/audio/music/menu_loop.ogg`: OGG Vorbis, leading and trailing silence trimmed, -3 dB. It's meant to loop on the menus.
