@@ -25,3 +25,7 @@
 - Source: `air_horn_tyler_raw.wav`, supplied by Tyler 2026-10-30 (7.8 s, three horn blasts, 48 kHz 24-bit).
 - Cuts: blast 1 at 1.42 s, blast 2 at 3.49 s, blast 3 at 5.77 s; mono 44.1 kHz 16-bit, 80 ms fade-out, peak -1 dB.
 - Use: beep 1 on "2", beep 2 on "1", full horn on GO (played -8 dB / -8 dB / -3 dB).
+
+## Player hit (`paint/splat_body.wav`)
+- Source: `player_hit_tyler_raw.wav`, supplied by Tyler 2026-10-30 (7.0 s, 48 kHz stereo).
+- Cut: 3.352 s to 4.752 s (the clip Tyler pointed at), mono 44.1 kHz 16-bit, 150 ms fade-out, peak -1 dB.
