@@ -138,7 +138,7 @@ Hit (`srv_report_hit`) rejections, in order:
 | `callout_pinged` | pinger's team only (pinger included) | `room`, `peer`, `name`, `team`, `color`, `callout` (≤24 chars), `count` (0..5), `pos` | `callout_pinged(data)` |
 
 - Start lines: ALPHA must stay at `z >= 40`, BRAVO at `z <= -40` until the horn. Jumping early is simply prevented: the server pushes anyone over the line back onto it (at most every 150 ms). No FALSE START, no penalty.
-- Shots and hit reports during the break are rejected with reason `before_horn`.
+- Shots and hit reports during the break are rejected with reason `before_horn`, and during the round recap (intermission) with `round_over`.
 - The CTF round clock (`round_ms_left`) starts at the horn, not at `round_started`.
 - Client API: `NetworkLobby.ping_callout(callout: String, world_pos: Vector3, count := 1)`. Alive players only, with a 1.2 s cooldown per player. Extra pings are dropped silently.
 - Tests set `NetworkLobby.break_countdown_ms = 0` to skip the break.

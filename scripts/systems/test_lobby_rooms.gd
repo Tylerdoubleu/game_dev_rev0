@@ -369,6 +369,12 @@ func _test_break_and_callouts() -> void:
 	_check(mates == [1, 1] and others == [0, 0], "callout reaches only the pinger's team (%s / %s)" % [mates, others])
 	L._server_ping_callout(red, "Snake 2", Vector3(10, 0, -5), 1)
 	_check(int(L.callouts_sent) == 1, "second ping inside the cooldown dropped")
+	# Round recap (intermission): no shots or hits count.
+	L.rooms["lobby_10"]["match"]["phase"] = "intermission"
+	var before := int(L.rejected_shots.get("round_over", 0))
+	_shoot(red, Vector3(0, 1.4, 44), Vector3(0, 1.2, -44))
+	L._server_on_hit_report(red, blue, Vector3(0, 1.2, -44))
+	_check(int(L.rejected_shots.get("round_over", 0)) == before + 1 and _alive(blue), "shots and hits during the round recap rejected (round_over)")
 	L.break_countdown_ms = 0
 
 func _test_bots_test_mode() -> void:

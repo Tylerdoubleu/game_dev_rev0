@@ -1202,7 +1202,7 @@ func _server_on_hit_report(shooter: int, victim: int, hit_pos: Vector3) -> void:
 	var rid := String(peer_room.get(shooter, ""))
 	if rid.is_empty() or shooter == victim or String(peer_room.get(victim, "")) != rid:
 		return
-	var verdict := {"ok": false, "reason": "before_horn"} if _in_break(rid) else _server_validate_hit(shooter, victim, hit_pos)
+	var verdict := {"ok": false, "reason": "before_horn"} if _in_break(rid) else ({"ok": false, "reason": "round_over"} if _in_intermission(rid) else _server_validate_hit(shooter, victim, hit_pos))
 	if not bool(verdict.get("ok", false)):
 		var info: Dictionary = players.get(shooter, {})
 		info["rejected_hits"] = int(info.get("rejected_hits", 0)) + 1
@@ -1483,6 +1483,13 @@ func _in_break(rid: String) -> bool:
 		return false
 	var m: Dictionary = rooms[rid]["match"]
 	return bool(m.get("active", false)) and String(m.get("phase", "")) == "break"
+
+## v0.6.1: the round recap (intermission) is dead time too - no shots or hits until the next break's horn.
+func _in_intermission(rid: String) -> bool:
+	if not rooms.has(rid):
+		return false
+	var m: Dictionary = rooms[rid]["match"]
+	return bool(m.get("active", false)) and String(m.get("phase", "")) == "intermission"
 
 ## v0.6 callouts: relayed to the pinger's own team only (pinger included), rate-limited, alive players only.
 func _server_ping_callout(pid: int, callout: String, world_pos: Vector3, count: int) -> void:
@@ -1828,6 +1835,8 @@ func _server_accept_shot(pid: int, origin: Vector3, dir: Vector3, speed: float) 
 	var reason := ""
 	if _in_break(String(peer_room.get(pid, ""))):
 		reason = "before_horn"
+	elif _in_intermission(String(peer_room.get(pid, ""))):
+		reason = "round_over"
 	elif not bool(info.get("alive", true)):
 		reason = "shooter_dead"
 	elif not is_remote_fire_allowed(pid):
