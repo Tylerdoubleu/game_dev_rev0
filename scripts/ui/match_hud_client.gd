@@ -29,7 +29,6 @@ const MATCH_END_BANNER_TIME: float = 9.0
 const TEAM_BANNER_TIME: float = 3.5
 const ROUND_SUMMARY_MIN: float = 2.5
 const BREAK_LINE_Z_DEFAULT: float = 40.0
-const FALSE_START_TIME: float = 1.4
 const BREAK_GO_TIME: float = 1.2
 ## v0.6 hook for the horn (Ren owns the sound): emitted once when the break horn releases the start line.
 ## NetworkLobby.break_horn(data) carries the same moment straight from the server.
@@ -64,8 +63,7 @@ var break_active: bool = false
 var break_left: float = 0.0
 var break_line_z: float = BREAK_LINE_Z_DEFAULT
 var break_go_left: float = 0.0
-var false_start_left: float = 0.0
-var false_starts: int = 0
+var break_line_resets: int = 0 # quiet snap-backs accepted (no UI)
 var break_horns_heard: int = 0
 var break_label: Label
 var stats_label: Label
@@ -431,20 +429,18 @@ func on_break_horn(data: Dictionary = {}) -> void:
 		break_horn_sounded.emit(data)
 	_refresh_all()
 
-## NetworkLobby.break_line_reset(data): you crossed early; the server / NetworkLobby already snap you back to the gate.
+## NetworkLobby.break_line_reset(data): the server snapped us back (NetworkLobby moves us to the gate). Accepted
+## quietly - no message, flash or penalty; the start line is a physical wall client-side so this should not happen.
 func on_break_line_reset(data: Dictionary = {}) -> void:
-	false_starts += 1
-	false_start_left = FALSE_START_TIME
+	break_line_resets += 1
 	if data.has("line_z"):
 		break_line_z = absf(float(data["line_z"]))
 	if break_active and player != null and player.has_method("set_break_hold"):
 		player.call("set_break_hold", true, my_break_line())
 	_refresh_all()
 
-## Big centre text: FALSE START flash > 3 / 2 / 1 > GO!
+## Big centre text: 3 / 2 / 1 > GO!
 func break_text() -> String:
-	if false_start_left > 0.0:
-		return "FALSE START"
 	if break_active:
 		return str(maxi(1, int(ceil(break_left))))
 	if break_go_left > 0.0:
@@ -846,8 +842,6 @@ func _process(delta: float) -> void:
 		break_left = maxf(0.0, break_left - delta)
 	if break_go_left > 0.0:
 		break_go_left = maxf(0.0, break_go_left - delta)
-	if false_start_left > 0.0:
-		false_start_left = maxf(0.0, false_start_left - delta)
 	for e in kill_feed:
 		e["age"] = float(e["age"]) + delta
 	while not kill_feed.is_empty() and float(kill_feed[-1]["age"]) > KILL_FEED_TTL:
@@ -1001,7 +995,7 @@ func _refresh_all() -> void:
 		var bt := break_text()
 		break_label.text = bt
 		break_label.visible = not bt.is_empty()
-		break_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.25) if bt == "FALSE START" else (Color(0.32, 1.0, 0.5) if bt == "GO!" else GOLD))
+		break_label.add_theme_color_override("font_color", Color(0.32, 1.0, 0.5) if bt == "GO!" else GOLD)
 	_refresh_flag_hud()
 	_refresh_spectate_label()
 

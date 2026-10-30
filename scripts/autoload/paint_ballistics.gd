@@ -168,10 +168,6 @@ func _physics_process(delta: float) -> void:
 			PaintImpactAudio.play(scene_root, PaintImpactAudio.classify_surface(collider), hit_pos)
 			if collider is Node3D:
 				GrittyArtThemeScript.trigger_bunker_vinyl_flex(collider as Node3D, vel.normalized(), 0.14)
-			var local_player := scene_root.get_node_or_null("Player3D") as Node3D
-			if local_player != null and p["shooter"] != local_player and collider != local_player:
-				if local_player.global_position.distance_to(hit_pos) < 1.85 and local_player.has_method("add_visor_splatter"):
-					local_player.call("add_visor_splatter", 0.30, p["color"], "NEAR-MISS BUNKER SPRAY ON VISOR")
 			if collider and collider.has_method("on_paintball_break"):
 				collider.on_paintball_break(hit_pos, p["shooter"])
 			elif collider is Node and collider.get_parent() and collider.get_parent().has_method("on_paintball_break"):

@@ -2,8 +2,9 @@ extends Node
 ## v0.6 tournament-style bunker callouts ("ACE: 2 in Red Snake 2").
 ##  - every bunker on each map has a short callout name (<= 24 chars), mirrored by side: Home_* (+Z, ALPHA) = "Red ...",
 ##    OpFor_* (-Z, BRAVO) = "Blue ...", 50-line bunkers have no side. Snake side = -X, dorito side = +X for both teams.
-##  - [V] / mouse thumb button (action "callout_bunker") pings the bunker under the crosshair, else the named bunker
-##    nearest the aim ray; N = visible, alive enemies near it (min 1, max 5).
+##  - [F] / mouse thumb button (action "callout_bunker"; replaces the old F "PINGED: <node>" intel ping) pings the bunker under the crosshair, else the named bunker
+##    nearest the aim ray; N = visible, alive enemies near it (min 1, max 5). A practice bot under the crosshair is
+##    still marked spotted (IntelBus.enemy_spotted), like the old F ping did.
 ##  - online: NetworkLobby.ping_callout(callout, pos, count) -> the server relays callout_pinged(data) to the pinger's
 ##    team (pinger included) and we render only from that signal; offline: rendered locally (same renderer).
 ##  - render: Label3D world marker over the bunker + HUD line "<callsign>: N in <Bunker>" for MARKER_TIME seconds.
@@ -63,6 +64,7 @@ var last_ping_ms: int = -100000
 var clock_override_ms: int = -1 # tests
 var online_override: int = -1 # tests: -1 = ask NetworkLobby, 0 = offline, 1 = online
 var send_override: Callable = Callable() # tests: capture the online send instead of NetworkLobby.ping_callout
+var spotted_bots: int = 0 # practice bots marked spotted by a callout aimed at them
 var pings_sent: int = 0
 var pings_local: int = 0
 var pings_rendered: int = 0
@@ -200,12 +202,25 @@ func pick_bunker(origin: Vector3, dir: Vector3) -> Dictionary:
 			q.exclude = [(player as CollisionObject3D).get_rid()]
 		var hit := w3d.direct_space_state.intersect_ray(q)
 		if not hit.is_empty():
+			_spot_bot(hit.get("collider"), hit.get("position", Vector3.ZERO))
 			var cname := callout_for_collider(hit.get("collider"), map_id, builder)
 			if not cname.is_empty():
 				for e in entries:
 					if String(e["callout"]) == cname:
 						return e
 	return nearest_along_ray(entries, origin, dir)
+
+## Old F-ping behaviour folded in: aiming at a practice bot marks it spotted for the bot AI / highlight.
+func _spot_bot(collider: Variant, at: Vector3) -> void:
+	var n: Node = collider as Node
+	for _i in range(3):
+		if n == null:
+			return
+		if "bot_name" in n:
+			spotted_bots += 1
+			IntelBus.enemy_spotted.emit(String(n.name), at, 3.5)
+			return
+		n = n.get_parent()
 
 ## Alive, visible enemies: online the remote avatars of the other team, offline the OpFor practice bots.
 func enemy_nodes() -> Array:

@@ -218,8 +218,6 @@ func _setup_input_map() -> void:
 	_bind_key("lean_right", KEY_E)
 	_bind_key("swap_shoulder", KEY_X)
 	_bind_key("reload_pod", KEY_R)
-	_bind_key("ping_intel", KEY_F)
-	_bind_key("wipe_visor", KEY_G)
 	_bind_key("bracket_speedball", KEY_1)
 	_bind_key("bracket_woodsball", KEY_2)
 	_bind_key("bracket_pump", KEY_3)
@@ -229,8 +227,9 @@ func _setup_input_map() -> void:
 	_bind_mouse("fire_primary", MOUSE_BUTTON_LEFT)
 	_bind_mouse("fire_secondary_walk", MOUSE_BUTTON_RIGHT)
 	_bind_mouse("swap_shoulder", MOUSE_BUTTON_MIDDLE)
-	# v0.6 bunker callout ("1 in Red Snake 2"): Z (prone_dive) and MMB (swap_shoulder) are taken -> V + mouse thumb button
-	_bind_key("callout_bunker", KEY_V)
+	# v0.6 bunker callout ("1 in Red Snake 2"): Z (prone_dive) and MMB (swap_shoulder) are taken -> F (replaces the old
+	# "ping_intel" F ping, folded into the callout) + mouse thumb button
+	_bind_key("callout_bunker", KEY_F)
 	_bind_mouse("callout_bunker", MOUSE_BUTTON_XBUTTON1)
 
 func _bind_key(action: String, keycode: Key) -> void:

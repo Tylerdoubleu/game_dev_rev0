@@ -121,24 +121,25 @@ func _run() -> void:
 	var has_v := false
 	var has_x1 := false
 	for ev in cb:
-		if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_V:
+		if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_F:
 			has_v = true
 		if ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON1:
 			has_x1 = true
-	_check(has_v and has_x1, "callout_bunker = V + mouse thumb (XBUTTON1)")
+	_check(has_v and has_x1, "callout_bunker = F + mouse thumb (XBUTTON1)")
 	var clash: Array = []
 	for a in InputMap.get_actions():
 		if String(a) == "callout_bunker" or String(a).begins_with("ui_"):
 			continue
 		for ev in InputMap.action_get_events(a):
-			if (ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_V) or (ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON1):
+			if (ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_F) or (ev is InputEventMouseButton and (ev as InputEventMouseButton).button_index == MOUSE_BUTTON_XBUTTON1):
 				clash.append(String(a))
-	_check(clash.is_empty(), "V / XBUTTON1 used by no other action %s" % str(clash))
+	_check(clash.is_empty(), "F / XBUTTON1 used by no other action (old ping_intel folded in) %s" % str(clash))
 	var z_taken := false
 	for ev in InputMap.action_get_events("prone_dive"):
 		if ev is InputEventKey and (ev as InputEventKey).physical_keycode == KEY_Z:
 			z_taken = true
 	_check(z_taken, "Z stays on prone_dive (it was taken), MMB stays on swap_shoulder")
+	_check(not InputMap.has_action("ping_intel") and not InputMap.has_action("wipe_visor"), "old F ping_intel folded into the callout; G wipe_visor removed")
 
 	print("[2] naming tables: mirrored by side")
 	for stem in CalloutsScript.SIDE_STEMS.keys():
@@ -167,6 +168,33 @@ func _run() -> void:
 	_check(String(r3.get("callout", "")) == "Red Snake 2" or String(r3.get("callout", "")) == "Red God Can", "aim down the snake -> %s" % r3.get("callout", ""))
 	var r4: Dictionary = bc.call("pick_bunker", Vector3(0, 1.6, 30), Vector3(0, 1, 0))
 	_check(r4.is_empty(), "aiming at the sky picks nothing")
+	var bot_gd := GDScript.new()
+	bot_gd.source_code = "extends StaticBody3D\nvar bot_name: String = \"OpFor Test\"\n"
+	bot_gd.reload()
+	var bot := StaticBody3D.new()
+	bot.set_script(bot_gd)
+	bot.name = "OpFor_Snake50"
+	var bshape := CollisionShape3D.new()
+	var bbox := BoxShape3D.new()
+	bbox.size = Vector3(0.8, 1.8, 0.8)
+	bshape.shape = bbox
+	bshape.position = Vector3(0, 0.9, 0)
+	bot.add_child(bshape)
+	arena.add_child(bot) # Godot renames it if a real practice bot already holds the name
+	bot.global_position = Vector3(6.0, 0.0, 28.0)
+	await _frames(2)
+	if bot.is_inside_tree():
+		var spotted := [0]
+		var cb_spot := func(n: String, _p: Vector3, _d: float) -> void:
+			if n == String(bot.name):
+				spotted[0] += 1
+		root.get_node("IntelBus").enemy_spotted.connect(cb_spot)
+		var bo := bot.global_position + Vector3(0, 1.0, 0) + (Vector3(0, 0, 1) * 6.0)
+		var s0 := int(bc.get("spotted_bots"))
+		var rb: Dictionary = bc.call("pick_bunker", bo, (bot.global_position + Vector3(0, 1.0, 0) - bo).normalized())
+		_check(int(bc.get("spotted_bots")) == s0 + 1 and spotted[0] == 1, "crosshair on a practice bot still marks it spotted (old F ping) and calls the bunker: %s" % rb.get("callout", ""))
+		root.get_node("IntelBus").enemy_spotted.disconnect(cb_spot)
+	bot.queue_free()
 	var syn := [{"callout": "A", "pos": Vector3(0, 0, -10)}, {"callout": "B", "pos": Vector3(3, 0, -20)}, {"callout": "C", "pos": Vector3(0, 0, 10)}]
 	_check(String(CalloutsScript.nearest_along_ray(syn, Vector3(0, 1, 0), Vector3(0.14, 0, -1)).get("callout", "")) == "B", "nearest_along_ray prefers the bunker the ray passes closest to")
 	_check(String(CalloutsScript.nearest_along_ray(syn, Vector3(0, 1, 0), Vector3(0, 0, 1)).get("callout", "")) == "C", "behind the shooter is never picked")

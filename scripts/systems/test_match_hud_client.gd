@@ -536,8 +536,35 @@ func _walk(actions: Array, frames: int) -> void:
 		Input.action_release(a)
 	await _frames(2)
 
+## Drive moves at the start line and record z every physics frame.
+func _line_attempt(hold: Array, tap: String, frames: int, start_z: float) -> Dictionary:
+	player.global_position = Vector3(6.0, player.global_position.y, start_z)
+	player.set("velocity", Vector3.ZERO)
+	player.set("ground_speed", 0.0)
+	player.set("slide_timer", 0.0)
+	player.set("dive_timer", 0.0)
+	player.set("yaw", 0.0)
+	await _frames(2)
+	var zs: Array[float] = []
+	for a in hold:
+		Input.action_press(a)
+	for i in range(frames):
+		if not tap.is_empty() and i == 6:
+			Input.action_press(tap)
+		if not tap.is_empty() and i == 9:
+			Input.action_release(tap)
+		await physics_frame
+		zs.append(float(player.global_position.z))
+	for a in hold:
+		Input.action_release(a)
+	await _frames(2)
+	var mn := 1e9
+	for z in zs:
+		mn = minf(mn, z)
+	return {"min_z": mn, "tail": zs.slice(zs.size() - 12)}
+
 func _break_flow() -> void:
-	print("[10] v0.6 break: round_started.break_ms/break_line_z hold, 3-2-1, FALSE START, horn -> GO! + release + clock")
+	print("[10] v0.6 break: round_started.break_ms/break_line_z hold (invisible wall), 3-2-1, no false-start UI, horn -> GO! + release + clock")
 	var nl := _lobby()
 	nl.local_team = "ALPHA"
 	player.set("awaiting_respawn_choice", false)
@@ -563,18 +590,26 @@ func _break_flow() -> void:
 	_ev("break_countdown", {"round": 1, "seconds_left": 1, "ms_left": 1000})
 	await _frames(1)
 	_check(_lbl("BreakCountdown") == "1", "break_countdown(1) -> 1")
-	# hold: can't cross the line (walk / sprint at it), can't shoot, can still look
-	player.global_position = Vector3(6.0, player.global_position.y, 41.0)
-	player.set("yaw", 0.0)
-	await _walk(["move_forward", "sprint"], 50)
-	var z := float(player.global_position.z)
-	_check(z >= 39.99, "sprinting at the line from z=41 stops at the line: z=%.2f" % z)
-	player.global_position = Vector3(0.0, player.global_position.y, 39.0)
+	# hold: the start line is an invisible wall - walk / sprint / slide / dive into it just stop, no jitter
+	for att in [["walk", ["move_forward"], "", 70], ["sprint", ["move_forward", "sprint"], "", 70], ["slide", ["move_forward", "sprint"], "crouch_slide", 70], ["dive", ["move_forward", "sprint"], "prone_dive", 80]]:
+		var r: Dictionary = await _line_attempt(att[1], att[2], att[3], 43.0)
+		var tail: Array = r["tail"]
+		var jitter := 0.0
+		for i in range(1, tail.size()):
+			jitter = maxf(jitter, absf(float(tail[i]) - float(tail[i - 1])))
+		_check(float(r["min_z"]) >= 40.0 - 0.001, "%s into the line from z=43: never past it (min z=%.3f)" % [att[0], float(r["min_z"])])
+		_check(float(r["min_z"]) <= 40.05, "%s actually reached the line (min z=%.3f)" % [att[0], float(r["min_z"])])
+		_check(jitter < 0.005, "%s: no jitter pinned at the line (max step %.4f)" % [att[0], jitter])
+	player.global_position = Vector3(6.0, player.global_position.y, 39.0)
 	await _frames(2)
-	_check(float(player.global_position.z) >= 39.99, "a red player past the line is clamped back to it: %.2f" % float(player.global_position.z))
-	player.global_position = Vector3(0.0, player.global_position.y, 44.0)
+	_check(float(player.global_position.z) >= 39.999, "a red player past the line is clamped back to it: %.2f" % float(player.global_position.z))
+	_check(int(mc.get("break_line_resets")) == 0 and String(mc.call("break_text")) == "1", "no message / flash from hitting the wall")
+	player.global_position = Vector3(6.0, player.global_position.y, 44.0)
 	await _walk(["move_back"], 20)
 	_check(float(player.global_position.z) > 44.2, "moving away from the line still works: %.2f" % float(player.global_position.z))
+	player.global_position = Vector3(6.0, player.global_position.y, 40.0)
+	await _walk(["move_right"], 20)
+	_check(absf(float(player.global_position.x) - 6.0) > 0.3 and float(player.global_position.z) >= 39.999, "strafing along the line works: x=%.2f z=%.3f" % [float(player.global_position.x), float(player.global_position.z)])
 	var shots0 := int(player.get("_shot_counter"))
 	var blocked0 := int(player.get("break_blocked_trigger_pulls"))
 	player.call("_handle_trigger_press", false)
@@ -582,10 +617,9 @@ func _break_flow() -> void:
 	_check(not bool(player.get("awaiting_respawn_choice")) and not bool(player.get("spectating")) and not bool(player.get("lobby_open")), "look is not locked (only crossing + firing are)")
 	_ev("break_line_reset", {"team": "ALPHA", "gate": nl.team_base_position("ALPHA") if nl.has_method("team_base_position") else Vector3.ZERO, "line_z": 40.0})
 	await _frames(1)
-	_check(String(mc.call("break_text")) == "FALSE START" and _lbl("BreakCountdown") == "FALSE START" and int(mc.get("false_starts")) == 1, "break_line_reset -> FALSE START flash")
-	_check(bool(player.get("break_hold_active")), "still held after a false start")
-	mc.call("_process", 1.5)
-	_check(String(mc.call("break_text")) != "FALSE START", "FALSE START flash fades")
+	_check(int(mc.get("break_line_resets")) == 1 and String(mc.call("break_text")) == "1" and _lbl("BreakCountdown") == "1", "break_line_reset accepted quietly (countdown unchanged, no flash): %s" % _lbl("BreakCountdown"))
+	_check(not _banner().to_upper().contains("FALSE"), "no FALSE START banner: %s" % _banner())
+	_check(bool(player.get("break_hold_active")), "still held after a snap-back")
 	_ev("break_horn", {"round": 1, "mode": "ctf"})
 	await _frames(1)
 	_check(horns[0] == 1, "break_horn_sounded hook fired once")
@@ -597,9 +631,10 @@ func _break_flow() -> void:
 	_check(String(mc.call("round_timer_text")) == "2:59", "and ticks after it: %s" % mc.call("round_timer_text"))
 	mc.call("_process", 0.5)
 	_check(String(mc.call("break_text")) == "", "GO! clears")
-	player.global_position = Vector3(6.0, player.global_position.y, 41.0)
-	await _walk(["move_forward"], 40)
-	_check(float(player.global_position.z) < 39.5, "after the horn the player crosses the line: z=%.2f" % float(player.global_position.z))
+	for att in [["walk", ["move_forward"], "", 50], ["sprint", ["move_forward", "sprint"], "", 50], ["slide", ["move_forward", "sprint"], "crouch_slide", 50], ["dive", ["move_forward", "sprint"], "prone_dive", 60]]:
+		var r: Dictionary = await _line_attempt(att[1], att[2], att[3], 41.0)
+		_check(float(r["min_z"]) < 39.5, "after the horn %s crosses the line freely: min z=%.2f" % [att[0], float(r["min_z"])])
+		await _frames(40)
 	print("  -- break from a snapshot (late join) + duplicate horn")
 	_sync_x("ctf", "break", 2, {"red": 1, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 0, "respawn_ms": 0}, [])
 	_check(bool(mc.get("break_active")) and bool(player.get("break_hold_active")) and String(mc.call("round_timer_text")) == "", "snapshot phase=break -> hold, no clock")

@@ -151,8 +151,7 @@ func _process(_delta: float) -> bool:
 	assert(float(player.get("bunker_pocket_weight")) == 0.0, "Sprinting or moving away must immediately release the PB-16 Bunker Cover Pocket")
 	print("[PASS] PB-16 Soft Bunker Cover Pocket + Corner Edge-Detent + Instant Sprint Breakaway verified")
 
-	# 7. Verify Exposed Hopper/Marker Sub-Hitboxes (2.4x Wrong-Hand Exposure), [G] Squeegee Wipe, Bunker Vinyl Flex & 3P Marker Tilts
-	assert(InputMap.has_action("wipe_visor"), "InputMap must bind [G] to wipe_visor")
+	# 7. Verify Exposed Hopper/Marker Sub-Hitboxes (2.4x Wrong-Hand Exposure), Bunker Vinyl Flex & 3P Marker Tilts
 	assert(player.get_node_or_null("Hitbox_HopperMarker") != null and player.get_node_or_null("Hitbox_Mask") != null and player.get_node_or_null("Hitbox_PodPack") != null, "Player3D must have Hitbox_HopperMarker, Hitbox_Mask, and Hitbox_PodPack sub-hitboxes")
 	# Settle at Left edge of Home_BackCenter, then force wrong hand (Right Hand) via manual override and verify 2.4x hopper exposure
 	player.global_position = Vector3(-1.35, 0.1, 39.25)
@@ -160,20 +159,14 @@ func _process(_delta: float) -> bool:
 	player.set("_at_bunker_edge_side", -1.0)
 	player.set("_manual_hand_override_in_pocket", true)
 	player.set("is_left_handed", false)
-	player.call("_update_exposed_profile_hitboxes_and_visor", 0.05)
+	player.call("_update_exposed_profile_hitboxes", 0.05)
 	assert(absf(float(player.get("hopper_exposure_multiplier")) - 1.0) < 0.05, "Hopper hitbox size must stay 1.0x without wrong-hand penalty")
-
-	# Verify Visor Splatter & [G] Squeegee Wipe
-	player.call("add_visor_splatter", 0.45, Color(0.98, 0.84, 0.10), "TEST SPLATTER")
-	assert(float(player.get("visor_splatter_alpha")) > 0.4, "add_visor_splatter must increase visor_splatter_alpha")
-	player.call("trigger_squeegee_wipe")
-	assert(float(player.get("visor_splatter_alpha")) == 0.0 and float(player.get("squeegee_wipe_timer")) > 0.0, "trigger_squeegee_wipe [G] must clear visor_splatter_alpha and start wipe animation")
 
 	# Verify Inflatable Bunker Vinyl Flex (#15) & Articulated 3P MarkerPivot3D (#16)
 	var home_bc := arena.get_node_or_null("Home_BackCenter") as Node3D
 	assert(home_bc != null and bool(home_bc.get_meta("vinyl_flex_active", false)), "Locking into Home_BackCenter cover pocket must trigger inflatable vinyl bunker flex")
 	assert(bot.get_node_or_null("MarkerPivot3D/HopperPivot3D") != null, "OpFor 3P avatar must have articulated MarkerPivot3D/HopperPivot3D")
-	print("[PASS] Exposed Hopper/Marker Sub-Hitboxes (2.4x) + [G] Visor Squeegee + Bunker Vinyl Flex + 3P Marker Tilts verified")
+	print("[PASS] Exposed Hopper/Marker Sub-Hitboxes (2.4x) + Bunker Vinyl Flex + 3P Marker Tilts verified")
 
 	# Test First to 10 Deaths loses
 	while gm.local_deaths < 10:

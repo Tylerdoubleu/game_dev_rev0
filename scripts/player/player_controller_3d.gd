@@ -187,14 +187,7 @@ var hitbox_pod_pack: CollisionShape3D = null
 var hopper_exposure_multiplier: float = 1.0
 var last_hit_zone: String = "TORSO / JERSEY"
 
-# PB-12 (#13): Visor Paint Obstruction (Near-Miss / Bunker-Rub), Sprint Fogging & [G] Squeegee Wipe
-const SQUEEGEE_WIPE_DURATION: float = 0.60
-var visor_splatter_alpha: float = 0.0
-var visor_splatter_color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT
-var visor_fog_alpha: float = 0.0
-var squeegee_wipe_timer: float = 0.0
-var squeegee_glove_mesh: MeshInstance3D = null
-var _bunker_rub_cooldown: float = 0.0
+
 
 func _ready() -> void:
 	_build_player_nodes()
@@ -337,19 +330,6 @@ func _build_player_nodes() -> void:
 	carried_flag_mesh.visible = false
 	camera.add_child(carried_flag_mesh)
 
-	squeegee_glove_mesh = MeshInstance3D.new()
-	squeegee_glove_mesh.name = "SqueegeeWipeGlove3D"
-	var sq_box := BoxMesh.new()
-	sq_box.size = Vector3(0.38, 0.055, 0.04)
-	squeegee_glove_mesh.mesh = sq_box
-	squeegee_glove_mesh.position = Vector3(-0.45, 0.06, -0.26)
-	squeegee_glove_mesh.rotation_degrees = Vector3(0.0, 0.0, -18.0)
-	var sq_mat := StandardMaterial3D.new()
-	sq_mat.albedo_color = Color(0.14, 0.82, 0.96)
-	sq_mat.roughness = 0.35
-	squeegee_glove_mesh.material_override = sq_mat
-	squeegee_glove_mesh.visible = false
-	camera.add_child(squeegee_glove_mesh)
 
 func _on_bracket_changed(bracket_or_id: Variant) -> void:
 	if bracket_or_id == null:
@@ -409,12 +389,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("reload_pod"):
 		_start_pod_reload()
 
-	if event.is_action_pressed("ping_intel"):
-		_ping_crosshair_target()
-
-	if InputMap.has_action("wipe_visor") and event.is_action_pressed("wipe_visor"):
-		trigger_squeegee_wipe()
-
 	if event.is_action_pressed("bracket_speedball"):
 		GearRuleEnforcer.set_active_bracket("speedball")
 	elif event.is_action_pressed("bracket_woodsball"):
@@ -454,7 +428,7 @@ func _physics_process(delta: float) -> void:
 		ground_speed = 0.0
 	_enforce_arena_bounds_and_permafall_guard()
 	_update_lean_bob_and_viewmodel(delta)
-	_update_exposed_profile_hitboxes_and_visor(delta)
+	_update_exposed_profile_hitboxes(delta)
 	_update_pod_reload(delta)
 	_update_shot_spread(delta)
 
@@ -1087,19 +1061,6 @@ func _spawn_spilled_paint_burst(count: int) -> void:
 		var spill_col := GrittyArtThemeScript.NEON_YELLOW_PAINT if (i % 2 == 0) else GrittyArtThemeScript.HOT_PINK_PAINT
 		PaintBallistics.spawn_paintball(origin, dir, 32.0, self, spill_col)
 
-func _ping_crosshair_target() -> void:
-	var space_state: PhysicsDirectSpaceState3D = get_world_3d().direct_space_state
-	var from_pos := camera.global_position
-	var to_pos := from_pos - camera.global_transform.basis.z * 140.0
-	var query := PhysicsRayQueryParameters3D.create(from_pos, to_pos)
-	query.exclude = [get_rid()]
-	var hit: Dictionary = space_state.intersect_ray(query)
-	if not hit.is_empty():
-		var col: Object = hit["collider"]
-		var label: String = col.name if col else "Bunker"
-		IntelBus.report_spot(label, hit["position"], 3.5)
-		status_banner_sent.emit("PINGED: %s" % label, Color(1.0, 0.9, 0.2))
-
 func _get_stance_label() -> String:
 	var base_lbl := "STANDING"
 	if dive_timer > 0.0:
@@ -1137,12 +1098,7 @@ func _emit_hud() -> void:
 		"breakout_boost": breakout_boost_timer > 0.0,
 		"bunker_tucked": bunker_pocket_weight > 0.25,
 		"bunker_name": active_bunker_name,
-		"hopper_exposure": hopper_exposure_multiplier,
-		"visor_splatter_alpha": visor_splatter_alpha,
-		"visor_splatter_color": visor_splatter_color,
-		"visor_fog_alpha": visor_fog_alpha,
-		"squeegee_wiping": squeegee_wipe_timer > 0.0,
-		"squeegee_pct": clampf(1.0 - (squeegee_wipe_timer / SQUEEGEE_WIPE_DURATION), 0.0, 1.0) if squeegee_wipe_timer > 0.0 else 0.0
+		"hopper_exposure": hopper_exposure_multiplier
 	})
 
 func set_lobby_open_state(is_open: bool) -> void:
@@ -1216,9 +1172,7 @@ func resolve_hit_subzone(world_hit_pos: Vector3) -> Dictionary:
 func is_wrong_hand_peek() -> bool:
 	return false
 
-func _update_exposed_profile_hitboxes_and_visor(delta: float) -> void:
-	if _bunker_rub_cooldown > 0.0:
-		_bunker_rub_cooldown = maxf(0.0, _bunker_rub_cooldown - delta)
+func _update_exposed_profile_hitboxes(_delta: float) -> void:
 	var hand_sign: float = -1.0 if is_left_handed else 1.0
 	hopper_exposure_multiplier = 1.0
 	if hitbox_mask != null and head_pivot != null:
@@ -1235,42 +1189,6 @@ func _update_exposed_profile_hitboxes_and_visor(delta: float) -> void:
 	if hitbox_pod_pack != null and head_pivot != null:
 		hitbox_pod_pack.position = Vector3(head_pivot.position.x * 0.4, maxf(0.32, head_pivot.position.y - 0.68), 0.20)
 
-	# Thermal lens breath fogging when sprinting or diving hard
-	var horiz_speed := Vector2(velocity.x, velocity.z).length()
-	if horiz_speed > 8.0 or dive_timer > 0.0:
-		visor_fog_alpha = clampf(visor_fog_alpha + delta * 0.085, 0.0, 0.42)
-	else:
-		visor_fog_alpha = maxf(0.0, visor_fog_alpha - delta * 0.045)
-
-	# [G] Squeegee wipe animation
-	if squeegee_wipe_timer > 0.0:
-		squeegee_wipe_timer = maxf(0.0, squeegee_wipe_timer - delta)
-		var pct := 1.0 - (squeegee_wipe_timer / SQUEEGEE_WIPE_DURATION)
-		visor_splatter_alpha = lerpf(visor_splatter_alpha, 0.0, minf(1.0, delta * 12.0))
-		visor_fog_alpha = lerpf(visor_fog_alpha, 0.0, minf(1.0, delta * 14.0))
-		if squeegee_glove_mesh != null:
-			squeegee_glove_mesh.visible = true
-			squeegee_glove_mesh.position = Vector3(lerpf(-0.42, 0.42, pct), lerpf(0.10, -0.06, sin(pct * PI)), -0.24)
-		if squeegee_wipe_timer <= 0.0:
-			visor_splatter_alpha = 0.0
-			visor_fog_alpha = 0.0
-			if squeegee_glove_mesh != null:
-				squeegee_glove_mesh.visible = false
-		_emit_hud()
-
-func add_visor_splatter(amount: float, color: Color = GrittyArtThemeScript.NEON_YELLOW_PAINT, reason: String = "VISOR SPLATTER") -> void:
-	visor_splatter_alpha = clampf(visor_splatter_alpha + amount, 0.0, 0.88)
-	visor_splatter_color = color
-	if not reason.is_empty():
-		status_banner_sent.emit("%s — Press [G] to Squeegee Wipe Lens!" % reason, Color(0.98, 0.88, 0.22))
-	_emit_hud()
-
-func trigger_squeegee_wipe() -> void:
-	squeegee_wipe_timer = SQUEEGEE_WIPE_DURATION
-	visor_splatter_alpha = 0.0
-	visor_fog_alpha = 0.0
-	status_banner_sent.emit("SQUEEGEE WIPE! [G] Thermal Lens & Hopper Cleared", Color(0.38, 0.98, 0.72))
-	_emit_hud()
 
 func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	if _respawn_flash_timer > 0.2 or awaiting_respawn_choice or spectating or GameManager.match_ended:
@@ -1285,8 +1203,7 @@ func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 func on_paintball_bounce(hit_pos: Vector3) -> void:
 	var sub := resolve_hit_subzone(hit_pos)
 	var zone_lbl: String = String(sub.get("zone", "JERSEY"))
-	add_visor_splatter(0.18, GrittyArtThemeScript.NEON_YELLOW_PAINT, "")
-	status_banner_sent.emit("LUCKY BOUNCE OFF YOUR %s — Wipe Spray with [G] & Keep Playing!" % zone_lbl, Color(0.45, 0.95, 1.0))
+	status_banner_sent.emit("LUCKY BOUNCE OFF YOUR %s — Keep Playing!" % zone_lbl, Color(0.45, 0.95, 1.0))
 
 func _on_remote_player_hit_local(shooter_name: String) -> void:
 	_handle_local_elimination(shooter_name)
@@ -1298,10 +1215,8 @@ func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> 
 			breakout_boost_timer = 0.0
 			breakout_penalty_timer = 0.0
 		return
-	if _was_moving_before_horn:
-		breakout_penalty_timer = 1.2
-		status_banner_sent.emit("FALSE START OFF THE GATE! (1.2s Speed Penalty — Wait for the Horn!)", Color(1.0, 0.42, 0.28))
-	else:
+	# v0.6: no false starts - the start line is a wall, so creeping before the horn is neither flagged nor penalised.
+	if not _was_moving_before_horn:
 		breakout_boost_timer = 1.5
 		status_banner_sent.emit("BUZZER! CLEAN BREAKOUT! (+15% Sprint Burst for 1.5s — Go Get Center Flag!)", Color(0.30, 1.0, 0.50))
 	_emit_hud()
@@ -1637,14 +1552,6 @@ func _apply_bunker_cover_pocket_physics(delta: float, move_dir: Vector3, input_v
 		velocity.x = move_toward(velocity.x, n.x * radial_pull, delta * 18.0)
 		velocity.z = move_toward(velocity.z, n.z * radial_pull, delta * 18.0)
 		_edge_breakaway_hold_timer = 0.0
-
-	# Wet bunker-rub visor smear if sliding/rubbing hard into a paint-splattered bunker (#13)
-	if col != null and dist < 0.48 and Vector2(velocity.x, velocity.z).length() > 3.2 and _bunker_rub_cooldown <= 0.0:
-		for bchild in col.get_children():
-			if bchild is Decal:
-				_bunker_rub_cooldown = 1.8
-				add_visor_splatter(0.24, (bchild as Decal).modulate, "BUNKER RUB SMEAR ON VISOR")
-				break
 
 	var switched_bunker: bool = (_active_bunker_node != col)
 	if _active_bunker_node != null and switched_bunker and is_instance_valid(_active_bunker_node):
