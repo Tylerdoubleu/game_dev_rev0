@@ -54,6 +54,10 @@ func _process(_d: float) -> bool:
 		var before: int = dir.horn_count
 		root.get_node("NetworkLobby").emit_signal("break_horn", {})
 		_check(dir.horn_count == before + 1, "break_horn from NetworkLobby plays the air horn")
+		var h0: int = dir.player_hit_count
+		root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": 999, "shooter": 1})
+		root.get_node("NetworkLobby").emit_signal("room_event", "round_started", {})
+		_check(dir.player_hit_count == h0 + 1, "player_eliminated plays the player-hit sound (and only that event)")
 	if f == 31:
 		root.get_node("MovementAudioDirector").debug_menu_open = true
 	if f == 40:

@@ -10,6 +10,12 @@ const HORN_DB := -3.0
 ## Tyler's 3-2-1 lead-in: a short horn beep on 2 and on 1, then the full air horn on GO (break_horn).
 const COUNTDOWN_BEEPS := {2: preload("res://assets/audio/break/countdown_beep_1.wav"), 1: preload("res://assets/audio/break/countdown_beep_2.wav")}
 const BEEP_DB := -8.0
+## Tyler's player-hit sound, played only on the server's confirmed player_eliminated (bounces, pre-horn and
+## recap hits never trigger it). Full volume when you're the one hit, positional at the victim otherwise.
+const PLAYER_HIT := preload("res://assets/audio/paint/player_hit.wav")
+const PLAYER_HIT_DB := -2.0
+const PLAYER_HIT_3D_DB := 2.0
+var player_hit_count := 0
 const MENU_MUSIC := preload("res://assets/audio/music/menu_loop.ogg")
 const MENU_MUSIC_DB := -12.0
 const MUSIC_FADE_DB_PER_SEC := 30.0   # ~1 s fade in / out
@@ -46,6 +52,8 @@ func _hook_lobby() -> void:
 	var nl := get_node_or_null("/root/NetworkLobby")
 	if nl != null and nl.has_signal("break_horn") and not nl.is_connected("break_horn", play_horn):
 		nl.connect("break_horn", play_horn)
+	if nl != null and nl.has_signal("room_event") and not nl.is_connected("room_event", _on_room_event):
+		nl.connect("room_event", _on_room_event)
 	if nl != null and nl.has_signal("break_countdown") and not nl.is_connected("break_countdown", play_countdown_beep):
 		nl.connect("break_countdown", play_countdown_beep)
 
@@ -57,6 +65,41 @@ func play_countdown_beep(seconds_left: int, _data: Dictionary = {}) -> void:
 	if _beep != null and _beep.is_inside_tree():
 		_beep.stream = COUNTDOWN_BEEPS[seconds_left]
 		_beep.play()
+
+func _on_room_event(event_name: String, data: Dictionary) -> void:
+	if event_name == "player_eliminated":
+		play_player_hit(data)
+
+func play_player_hit(data: Dictionary = {}) -> void:
+	player_hit_count += 1
+	if not is_inside_tree():
+		return
+	var nl := get_node_or_null("/root/NetworkLobby")
+	var victim := int(data.get("victim", 0))
+	var my_id := int(nl.call("_my_peer_id")) if nl != null and nl.has_method("_my_peer_id") else 0
+	var avatar: Node3D = null
+	if nl != null and victim != my_id and "remote_player_nodes" in nl:
+		var n = nl.remote_player_nodes.get(victim)
+		if n is Node3D and is_instance_valid(n) and n.is_inside_tree():
+			avatar = n
+	if avatar != null:
+		var p3 := AudioStreamPlayer3D.new()
+		p3.stream = PLAYER_HIT
+		p3.volume_db = PLAYER_HIT_3D_DB
+		p3.unit_size = 8.0
+		p3.max_distance = 90.0
+		var host: Node = avatar.get_tree().current_scene
+		(host if host != null else self).add_child(p3)
+		p3.global_position = avatar.global_position + Vector3(0, 1.2, 0)
+		p3.finished.connect(p3.queue_free)
+		p3.play()
+	else:
+		var p := AudioStreamPlayer.new()
+		p.stream = PLAYER_HIT
+		p.volume_db = PLAYER_HIT_DB if victim == my_id else PLAYER_HIT_DB - 8.0
+		add_child(p)
+		p.finished.connect(p.queue_free)
+		p.play()
 
 func play_horn(_data: Dictionary = {}) -> void:
 	horn_count += 1
