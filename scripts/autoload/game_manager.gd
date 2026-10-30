@@ -229,6 +229,9 @@ func _setup_input_map() -> void:
 	_bind_mouse("fire_primary", MOUSE_BUTTON_LEFT)
 	_bind_mouse("fire_secondary_walk", MOUSE_BUTTON_RIGHT)
 	_bind_mouse("swap_shoulder", MOUSE_BUTTON_MIDDLE)
+	# v0.6 bunker callout ("1 in Red Snake 2"): Z (prone_dive) and MMB (swap_shoulder) are taken -> V + mouse thumb button
+	_bind_key("callout_bunker", KEY_V)
+	_bind_mouse("callout_bunker", MOUSE_BUTTON_XBUTTON1)
 
 func _bind_key(action: String, keycode: Key) -> void:
 	if not InputMap.has_action(action):

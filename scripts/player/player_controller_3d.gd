@@ -30,12 +30,16 @@ enum Stance {
 
 # ---------------------------------------------------------------------------------------------------------
 # v0.5.0 MOVEMENT TUNING (deliberate tournament pace). Pre-v0.5 values in comments.
-# Strafing/back-pedal use the same speeds (no separate strafe multiplier).
+# Strafing uses the same speeds (no separate strafe multiplier). v0.6: back-pedal is slower, see below.
 # ---------------------------------------------------------------------------------------------------------
 const WALK_SPEED: float = 5.6          # was 6.2 (-10%)
 const SPRINT_SPEED: float = 8.4        # was 10.4 (-19%)
 const CROUCH_SPEED: float = 3.3        # was 3.6 (-8%)
 const PRONE_SPEED: float = 1.7         # was 1.85 (-8%)
+## v0.6 back-pedal: moving backwards runs at this fraction of the forward speed for the same stance/sprint state,
+## blended by the backward component of the input (pure S = 0.5x, back-diagonal ~0.65x, pure strafe 1.0x).
+## Sprint never boosts the backward component (pure S + Shift = walking back-pedal speed).
+const BACKPEDAL_SPEED_MULT: float = 0.5
 ## Ground speed ramps instead of snapping (pre-v0.5 velocity was set instantly every frame).
 const GROUND_ACCEL: float = 28.0       # m/s^2 from rest up to walk/crouch speed (0 -> walk in 0.20s)
 const SPRINT_ACCEL: float = 9.0        # m/s^2 above walk speed (walk -> sprint in 0.31s; 0 -> sprint ~0.51s)
@@ -118,6 +122,12 @@ var awaiting_respawn_choice: bool = false
 ## v0.5 one-life CTF spectate: set by the MatchHudClient (via set_spectating) after a CTF elimination until the server's
 ## round_started / match_ended. Blocks movement, look and every trigger pull exactly like awaiting_respawn_choice.
 var spectating: bool = false
+## v0.6 server-run break: until the horn you stay at/behind your start line (red z >= +line, blue z <= -line), can look
+## around, but can't cross it or shoot. MatchHudClient sets this from round_started / break_horn.
+var break_hold_active: bool = false
+var break_hold_line_z: float = 0.0 # signed: +40 = must keep z >= 40 (red), -40 = must keep z <= -40 (blue)
+var break_blocked_trigger_pulls: int = 0
+var _break_fire_hint_shown: bool = false
 var spectate_blocked_trigger_pulls: int = 0
 ## v0.5 CTF: the server says this player carries the enemy base flag (flag_state_changed carrier == me). Visual only.
 var carrying_ctf_flag: bool = false
@@ -467,6 +477,29 @@ func _resolve_held_stance() -> Stance:
 		return Stance.CROUCHING
 	return Stance.STANDING
 
+## v0.6: 0..1 backward share of a (normalized) move input; +y is back (S). Pure S = 1, back-diagonal ~0.71, strafe 0.
+static func backpedal_amount(input_vec: Vector2) -> float:
+	if input_vec.length_squared() < 0.0001:
+		return 0.0
+	return clampf(input_vec.normalized().y, 0.0, 1.0)
+
+## v0.6: speed multiplier for the backward share of the input (1.0 forward/strafe -> BACKPEDAL_SPEED_MULT pure back).
+static func backpedal_speed_factor(input_vec: Vector2) -> float:
+	return lerpf(1.0, BACKPEDAL_SPEED_MULT, backpedal_amount(input_vec))
+
+## Ground-gait target speed before breakout multipliers. Sprint only boosts the non-backward share of the input,
+## then the back-pedal factor applies on top, so back-pedalling is 50% of the same stance's forward speed.
+static func gait_target_speed(input_vec: Vector2, sprinting: bool, cur_stance: int) -> float:
+	var back := backpedal_amount(input_vec)
+	var base: float = WALK_SPEED
+	if sprinting:
+		base = lerpf(SPRINT_SPEED, WALK_SPEED, back)
+	elif cur_stance == Stance.CROUCHING:
+		base = CROUCH_SPEED
+	elif cur_stance == Stance.PRONE:
+		base = PRONE_SPEED
+	return base * backpedal_speed_factor(input_vec)
+
 func _update_movement_and_stance(delta: float) -> void:
 	var input_vec := Vector2(
 		Input.get_action_strength("move_right") - Input.get_action_strength("move_left"),
@@ -550,14 +583,7 @@ func _update_movement_and_stance(delta: float) -> void:
 			speed_mult = 1.15
 		elif breakout_penalty_timer > 0.0:
 			speed_mult = 0.72
-		var target_speed: float = WALK_SPEED
-		if wants_sprint:
-			target_speed = SPRINT_SPEED
-		elif stance == Stance.CROUCHING:
-			target_speed = CROUCH_SPEED
-		elif stance == Stance.PRONE:
-			target_speed = PRONE_SPEED
-		target_speed *= speed_mult
+		var target_speed: float = gait_target_speed(input_vec, wants_sprint, stance) * speed_mult
 		# v0.5.0: ramp ground speed (walk-up fast, sprint-up slower, crisp stop); direction still follows input instantly.
 		var has_input: bool = move_dir.length() > 0.1
 		if not has_input:
@@ -579,7 +605,9 @@ func _update_movement_and_stance(delta: float) -> void:
 		velocity.y = 0.0
 
 	_update_stance_capsule(delta)
+	_apply_break_line_velocity_block()
 	move_and_slide()
+	_clamp_to_break_line()
 
 ## Target movement-capsule / torso-hitbox height for the current stance (shared table with ProPaintballRig3D).
 func get_stance_capsule_target() -> float:
@@ -797,9 +825,45 @@ func _update_movement_fire_lock_signal() -> void:
 		movement_fire_lock_changed.emit(locked, get_fire_lock_reason())
 		_emit_hud()
 
+## v0.6 break hold (see break_hold_active). line_z is signed; active = false releases the player at the horn.
+func set_break_hold(active: bool, line_z: float = 0.0) -> void:
+	break_hold_active = active
+	break_hold_line_z = line_z
+	_break_fire_hint_shown = false
+	if active:
+		_clamp_to_break_line()
+
+## How far past the start line the player is (m, > 0 = crossed). 0 when no break hold is active.
+func break_line_overshoot(pos: Vector3 = Vector3.INF) -> float:
+	if not break_hold_active or is_zero_approx(break_hold_line_z):
+		return 0.0
+	var p := global_position if pos == Vector3.INF else pos
+	return maxf(0.0, (break_hold_line_z - p.z) if break_hold_line_z > 0.0 else (p.z - break_hold_line_z))
+
+func _apply_break_line_velocity_block() -> void:
+	if not break_hold_active or is_zero_approx(break_hold_line_z):
+		return
+	var dt := get_physics_process_delta_time()
+	var next_z := global_position.z + velocity.z * dt
+	if break_hold_line_z > 0.0 and velocity.z < 0.0 and next_z < break_hold_line_z:
+		velocity.z = minf(0.0, (break_hold_line_z - global_position.z) / maxf(dt, 0.0001)) if global_position.z > break_hold_line_z else 0.0
+	elif break_hold_line_z < 0.0 and velocity.z > 0.0 and next_z > break_hold_line_z:
+		velocity.z = maxf(0.0, (break_hold_line_z - global_position.z) / maxf(dt, 0.0001)) if global_position.z < break_hold_line_z else 0.0
+
+func _clamp_to_break_line() -> void:
+	if break_line_overshoot() > 0.0:
+		global_position.z = break_hold_line_z
+		velocity.z = 0.0
+
 func _handle_trigger_press(is_secondary_trigger: bool) -> void:
 	if spectating:
 		spectate_blocked_trigger_pulls += 1
+		return
+	if break_hold_active:
+		break_blocked_trigger_pulls += 1
+		if not _break_fire_hint_shown:
+			_break_fire_hint_shown = true
+			status_banner_sent.emit("WAIT FOR THE HORN - NO SHOTS ON THE BREAK", Color(1.0, 0.75, 0.3))
 		return
 	if is_reloading_pod:
 		return
@@ -910,7 +974,7 @@ static func apply_spread_cone(base_dir: Vector3, right_dir: Vector3, up_dir: Vec
 	return (base_dir + right_dir * (r * cos(th)) + up_dir * (r * sin(th))).normalized()
 
 func _fire_single_paintball(bracket: Resource) -> void:
-	if spectating:
+	if spectating or break_hold_active:
 		return
 	if is_fire_locked_by_movement():
 		return

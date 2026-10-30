@@ -28,6 +28,12 @@ const GO_BANNER_TIME: float = 1.6
 const MATCH_END_BANNER_TIME: float = 9.0
 const TEAM_BANNER_TIME: float = 3.5
 const ROUND_SUMMARY_MIN: float = 2.5
+const BREAK_LINE_Z_DEFAULT: float = 40.0
+const FALSE_START_TIME: float = 1.4
+const BREAK_GO_TIME: float = 1.2
+## v0.6 hook for the horn (Ren owns the sound): emitted once when the break horn releases the start line.
+## NetworkLobby.break_horn(data) carries the same moment straight from the server.
+signal break_horn_sounded(data: Dictionary)
 const MODE_TITLES := {"deathmatch": "TEAM DEATHMATCH", "ctf": "CAPTURE THE FLAG", "bots_test": "BOTS TEST / PRACTICE"}
 
 var builder: Node = null
@@ -53,6 +59,15 @@ var round_left: float = 0.0
 var round_time_s: float = 0.0
 var match_respawn_ms: int = -1 # match.respawn_ms / round_started.respawn_ms (-1 = not seen yet)
 var round_timer_label: Label
+## v0.6 break (server-run 3-2-1 + horn at the start line)
+var break_active: bool = false
+var break_left: float = 0.0
+var break_line_z: float = BREAK_LINE_Z_DEFAULT
+var break_go_left: float = 0.0
+var false_start_left: float = 0.0
+var false_starts: int = 0
+var break_horns_heard: int = 0
+var break_label: Label
 var stats_label: Label
 var last_team_shown: String = ""
 var local_peer_override: int = 0 # tests
@@ -133,6 +148,9 @@ func setup(p_builder: Node, p_player: Node) -> void:
 		NetworkLobby.connect("returned_to_lobby", on_returned_to_lobby)
 	if NetworkLobby.has_signal("left_room"):
 		NetworkLobby.connect("left_room", _on_left_room)
+	for sig in [["break_countdown", on_break_countdown], ["break_horn", on_break_horn], ["break_line_reset", on_break_line_reset]]:
+		if NetworkLobby.has_signal(sig[0]):
+			NetworkLobby.connect(sig[0], sig[1])
 	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
 	if NetworkLobby.has_signal("mode_changed"):
 		NetworkLobby.mode_changed.connect(_on_mode_changed)
@@ -194,6 +212,15 @@ func apply_room_event(event_name: String, data: Dictionary) -> void:
 				on_returned_to_lobby(String(data.get("room", "")))
 		"player_eliminated":
 			_on_player_eliminated(data)
+		"break_countdown":
+			if not NetworkLobby.has_signal("break_countdown"):
+				on_break_countdown(int(data.get("seconds_left", 0)), data)
+		"break_horn":
+			if not NetworkLobby.has_signal("break_horn"):
+				on_break_horn(data)
+		"break_line_reset":
+			if not NetworkLobby.has_signal("break_line_reset"):
+				on_break_line_reset(data)
 		"flag_state_changed":
 			_on_flag_state_changed(data)
 		"teams_rebalanced":
@@ -248,6 +275,7 @@ func on_match_countdown(seconds_left: int, data: Dictionary) -> void:
 	_refresh_all()
 
 func _on_left_room(_room_id: String = "") -> void:
+	_end_break_hold()
 	awaiting_return_to_lobby = false
 	hide_summary()
 	if countdown_active and countdown_source == "match":
@@ -277,6 +305,10 @@ func apply_match_snapshot(m: Dictionary) -> void:
 	if m.has("mode") and not String(m["mode"]).is_empty():
 		_set_mode(String(m["mode"]))
 	var new_phase := String(m.get("phase", phase))
+	if new_phase == "break" and not break_active and phase != "ended":
+		_enter_break(0.0, float(m.get("break_line_z", break_line_z)))
+	elif new_phase == "live" and break_active:
+		on_break_horn({"round": int(m.get("round", round_num)), "mode": String(m.get("mode", mode)), "from_snapshot": true})
 	if new_phase != phase and not (phase == "ended" and new_phase != "live"):
 		if new_phase == "live" and phase != "live":
 			phase_clock = 0.0
@@ -315,7 +347,9 @@ func _on_round_started(data: Dictionary) -> void:
 	respawn_left = 0.0
 	countdown_active = false
 	round_time_s = float(data.get("round_time_ms", 0)) / 1000.0
-	round_left = round_time_s if mode == "ctf" else 0.0
+	var brk_ms := int(data.get("break_ms", 0))
+	# v0.6: with a break the CTF clock starts at the horn (round_ms_left stays 0 until then)
+	round_left = round_time_s if mode == "ctf" and brk_ms <= 0 else 0.0
 	if data.has("respawn_ms"):
 		match_respawn_ms = int(data["respawn_ms"])
 	hide_summary()
@@ -327,6 +361,13 @@ func _on_round_started(data: Dictionary) -> void:
 			flags[c]["pos"] = _base_pos(String(flags[c]["team"]))
 	_refresh_flags()
 	exit_spectate()
+	if brk_ms > 0:
+		_enter_break(float(brk_ms) / 1000.0, float(data.get("break_line_z", BREAK_LINE_Z_DEFAULT)))
+		return
+	_end_break_hold()
+	_show_go_banner()
+
+func _show_go_banner() -> void:
 	if mode == "ctf":
 		_show_banner("ROUND %d - GO!" % round_num, "go", GO_BANNER_TIME, Color(0.32, 1.0, 0.5))
 	elif mode == "deathmatch":
@@ -334,7 +375,84 @@ func _on_round_started(data: Dictionary) -> void:
 	else:
 		_show_banner("BOTS TEST - PRACTICE LIVE", "go", GO_BANNER_TIME, Color(0.32, 1.0, 0.5))
 
+## =========================================== v0.6 break ===========================================
+
+## Signed start line for my team: red holds z >= +line, blue z <= -line.
+func my_break_line() -> float:
+	return absf(break_line_z) * (1.0 if NetworkLobby.local_team == "ALPHA" else -1.0)
+
+func _enter_break(seconds: float, line_z: float) -> void:
+	break_active = true
+	phase = "break"
+	phase_clock = 0.0
+	break_line_z = absf(line_z) if not is_zero_approx(line_z) else BREAK_LINE_Z_DEFAULT
+	if seconds > 0.0:
+		break_left = seconds
+	elif break_left <= 0.0:
+		break_left = float(COUNTDOWN_SECONDS)
+	break_go_left = 0.0
+	round_left = 0.0
+	if banner_kind == "go":
+		banner_left = 0.0
+	_show_banner("ROUND %d - HOLD THE LINE" % round_num if mode == "ctf" else "HOLD THE LINE", "info", break_left, GOLD)
+	if player != null and player.has_method("set_break_hold"):
+		player.call("set_break_hold", true, my_break_line())
+
+func _end_break_hold() -> void:
+	break_active = false
+	break_left = 0.0
+	if player != null and player.has_method("set_break_hold"):
+		player.call("set_break_hold", false, 0.0)
+
+## NetworkLobby.break_countdown(seconds_left, data): 3, 2, 1 (data.ms_left re-syncs the local tick).
+func on_break_countdown(seconds_left: int, data: Dictionary = {}) -> void:
+	var secs := float(data["ms_left"]) / 1000.0 if data.has("ms_left") else float(seconds_left)
+	if not break_active:
+		_enter_break(secs, float(data.get("break_line_z", break_line_z)))
+	break_left = maxf(0.0, secs)
+	_refresh_all()
+
+## NetworkLobby.break_horn(data): GO!, release the start line, start the CTF clock.
+func on_break_horn(data: Dictionary = {}) -> void:
+	var was_holding := break_active
+	if not was_holding and phase == "live" and break_go_left > 0.0:
+		return # already released (a snapshot beat the horn event here)
+	_end_break_hold()
+	phase = "live"
+	phase_clock = 0.0
+	if mode == "ctf" and round_left <= 0.0:
+		round_left = round_time_s if round_time_s > 0.0 else float(NetworkLobby.CTF_ROUND_TIME_MS) / 1000.0
+	break_go_left = BREAK_GO_TIME
+	if banner_kind == "info":
+		banner_left = 0.0
+	_show_go_banner()
+	if was_holding or not bool(data.get("from_snapshot", false)):
+		break_horns_heard += 1
+		break_horn_sounded.emit(data)
+	_refresh_all()
+
+## NetworkLobby.break_line_reset(data): you crossed early; the server / NetworkLobby already snap you back to the gate.
+func on_break_line_reset(data: Dictionary = {}) -> void:
+	false_starts += 1
+	false_start_left = FALSE_START_TIME
+	if data.has("line_z"):
+		break_line_z = absf(float(data["line_z"]))
+	if break_active and player != null and player.has_method("set_break_hold"):
+		player.call("set_break_hold", true, my_break_line())
+	_refresh_all()
+
+## Big centre text: FALSE START flash > 3 / 2 / 1 > GO!
+func break_text() -> String:
+	if false_start_left > 0.0:
+		return "FALSE START"
+	if break_active:
+		return str(maxi(1, int(ceil(break_left))))
+	if break_go_left > 0.0:
+		return "GO!"
+	return ""
+
 func _on_round_ended(data: Dictionary) -> void:
+	_end_break_hold()
 	_copy_colors(data.get("score", {}), score)
 	phase = "intermission"
 	phase_clock = 0.0
@@ -380,6 +498,7 @@ func round_why(data: Dictionary) -> String:
 	return why
 
 func _on_match_ended(data: Dictionary) -> void:
+	_end_break_hold()
 	phase = "ended"
 	round_left = 0.0
 	intermission_left = 0.0
@@ -449,7 +568,7 @@ func _on_teams_rebalanced(data: Dictionary) -> void:
 	_check_team_banner(true)
 
 func _on_mode_changed(m: String) -> void:
-	if phase != "live":
+	if phase not in ["live", "break"]:
 		_set_mode(m)
 	_refresh_all()
 
@@ -723,6 +842,12 @@ func _process(delta: float) -> void:
 		respawn_left = maxf(0.0, respawn_left - delta)
 	if round_left > 0.0 and phase == "live":
 		round_left = maxf(0.0, round_left - delta)
+	if break_active and break_left > 0.0:
+		break_left = maxf(0.0, break_left - delta)
+	if break_go_left > 0.0:
+		break_go_left = maxf(0.0, break_go_left - delta)
+	if false_start_left > 0.0:
+		false_start_left = maxf(0.0, false_start_left - delta)
 	for e in kill_feed:
 		e["age"] = float(e["age"]) + delta
 	while not kill_feed.is_empty() and float(kill_feed[-1]["age"]) > KILL_FEED_TTL:
@@ -800,6 +925,13 @@ func _build_hud() -> void:
 	banner_label.position = Vector2(0, 250)
 	banner_label.size = Vector2(1600, 100)
 	canvas.add_child(banner_label)
+	break_label = _mk_label("BreakCountdown", 120, GOLD, true)
+	break_label.position = Vector2(0, 400)
+	break_label.size = Vector2(1600, 170)
+	break_label.add_theme_constant_override("outline_size", 10)
+	break_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	break_label.visible = false
+	canvas.add_child(break_label)
 	sub_banner_label = _mk_label("RespawnCountdown", 26, Color(1.0, 0.45, 0.45), true)
 	sub_banner_label.position = Vector2(0, 360)
 	sub_banner_label.size = Vector2(1600, 40)
@@ -865,6 +997,11 @@ func _refresh_all() -> void:
 	team_label.add_theme_color_override("font_color", TEAM_COLORS[mc])
 	_refresh_kill_feed()
 	_refresh_banner()
+	if break_label != null:
+		var bt := break_text()
+		break_label.text = bt
+		break_label.visible = not bt.is_empty()
+		break_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.25) if bt == "FALSE START" else (Color(0.32, 1.0, 0.5) if bt == "GO!" else GOLD))
 	_refresh_flag_hud()
 	_refresh_spectate_label()
 
@@ -878,6 +1015,8 @@ func phase_text() -> String:
 					return "ROUND %d / %d  -  %s LEFT" % [round_num, maxi(best_of, 1), rtt]
 				return "ROUND %d / %d  -  LIVE %s" % [round_num, maxi(best_of, 1), clock]
 			return "LIVE %s" % clock
+		"break":
+			return "ROUND %d / %d  -  BREAK IN %d" % [round_num, maxi(best_of, 1), maxi(1, int(ceil(break_left)))] if mode == "ctf" else "BREAK IN %d" % maxi(1, int(ceil(break_left)))
 		"intermission":
 			return "ROUND %d OVER  -  NEXT ROUND IN %d" % [round_num, int(ceil(intermission_left))]
 		"ended":

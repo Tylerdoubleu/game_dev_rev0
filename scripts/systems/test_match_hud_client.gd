@@ -347,6 +347,7 @@ func _run() -> void:
 	await _ctf_round_and_match_end_flow()
 	await _dm_match_end_flow()
 	await _timer_captures_respawn_flow()
+	await _break_flow()
 
 	_finish()
 
@@ -526,6 +527,103 @@ func _timer_captures_respawn_flow() -> void:
 	_check(absf(float(mc.get("respawn_left")) - 1.75) < 0.01, "falls back to match.respawn_ms: %.2f" % float(mc.get("respawn_left")))
 	_sync_x("deathmatch", "live", 1, {"red": 0, "blue": 0}, {"round_time_ms": 0, "round_ms_left": 0, "respawn_ms": 1200}, [])
 	_check(int(mc.get("match_respawn_ms")) == 1200 and pl.size() >= 5, "snapshot respawn_ms adopted")
+
+func _walk(actions: Array, frames: int) -> void:
+	for a in actions:
+		Input.action_press(a)
+	await _frames(frames)
+	for a in actions:
+		Input.action_release(a)
+	await _frames(2)
+
+func _break_flow() -> void:
+	print("[10] v0.6 break: round_started.break_ms/break_line_z hold, 3-2-1, FALSE START, horn -> GO! + release + clock")
+	var nl := _lobby()
+	nl.local_team = "ALPHA"
+	player.set("awaiting_respawn_choice", false)
+	player.set("spectating", false)
+	player.call("set_lobby_open_state", false)
+	_gm().set("breakout_horn_sounded", true) # the legacy offline breakout slow-walk from scene load is not part of this
+	var horns := [0]
+	mc.connect("break_horn_sounded", func(_d: Dictionary) -> void: horns[0] += 1)
+	_check(nl.has_signal("break_horn") and mc.has_signal("break_horn_sounded"), "horn hooks for Ren's sound: NetworkLobby.break_horn + MatchHudClient.break_horn_sounded")
+	_sync_x("ctf", "waiting", 0, {"red": 0, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 0, "respawn_ms": 0}, [])
+	_ev("round_started", {"round": 1, "mode": "ctf", "score": {"red": 0, "blue": 0}, "kills": {"red": 0, "blue": 0}, "target": 3,
+		"reset_positions": true, "round_time_ms": 180000, "respawn_ms": 0, "break_ms": 3000, "break_line_z": 40.0})
+	await _frames(1)
+	_check(String(mc.get("phase")) == "break" and bool(mc.get("break_active")), "round_started with break_ms -> break phase")
+	_check(String(mc.call("break_text")) == "3" and _lbl("BreakCountdown") == "3" and mc.find_child("BreakCountdown", true, false).visible, "big 3 on the HUD: %s" % _lbl("BreakCountdown"))
+	_check(bool(player.get("break_hold_active")) and is_equal_approx(float(player.get("break_hold_line_z")), 40.0), "red held at z >= 40")
+	_check(String(mc.call("round_timer_text")) == "" and float(mc.get("round_left")) == 0.0, "no CTF clock during the break")
+	_check(_lbl("RoundInfo").contains("BREAK IN 3"), "info line: %s" % _lbl("RoundInfo"))
+	mc.call("_process", 0.4)
+	_check(float(mc.get("round_left")) == 0.0, "the clock does not tick during the break")
+	_ev("break_countdown", {"round": 1, "seconds_left": 2, "ms_left": 2000})
+	_check(String(mc.call("break_text")) == "2", "break_countdown(2) -> 2: %s" % mc.call("break_text"))
+	_ev("break_countdown", {"round": 1, "seconds_left": 1, "ms_left": 1000})
+	await _frames(1)
+	_check(_lbl("BreakCountdown") == "1", "break_countdown(1) -> 1")
+	# hold: can't cross the line (walk / sprint at it), can't shoot, can still look
+	player.global_position = Vector3(6.0, player.global_position.y, 41.0)
+	player.set("yaw", 0.0)
+	await _walk(["move_forward", "sprint"], 50)
+	var z := float(player.global_position.z)
+	_check(z >= 39.99, "sprinting at the line from z=41 stops at the line: z=%.2f" % z)
+	player.global_position = Vector3(0.0, player.global_position.y, 39.0)
+	await _frames(2)
+	_check(float(player.global_position.z) >= 39.99, "a red player past the line is clamped back to it: %.2f" % float(player.global_position.z))
+	player.global_position = Vector3(0.0, player.global_position.y, 44.0)
+	await _walk(["move_back"], 20)
+	_check(float(player.global_position.z) > 44.2, "moving away from the line still works: %.2f" % float(player.global_position.z))
+	var shots0 := int(player.get("_shot_counter"))
+	var blocked0 := int(player.get("break_blocked_trigger_pulls"))
+	player.call("_handle_trigger_press", false)
+	_check(int(player.get("_shot_counter")) == shots0 and int(player.get("break_blocked_trigger_pulls")) == blocked0 + 1, "trigger blocked before the horn")
+	_check(not bool(player.get("awaiting_respawn_choice")) and not bool(player.get("spectating")) and not bool(player.get("lobby_open")), "look is not locked (only crossing + firing are)")
+	_ev("break_line_reset", {"team": "ALPHA", "gate": nl.team_base_position("ALPHA") if nl.has_method("team_base_position") else Vector3.ZERO, "line_z": 40.0})
+	await _frames(1)
+	_check(String(mc.call("break_text")) == "FALSE START" and _lbl("BreakCountdown") == "FALSE START" and int(mc.get("false_starts")) == 1, "break_line_reset -> FALSE START flash")
+	_check(bool(player.get("break_hold_active")), "still held after a false start")
+	mc.call("_process", 1.5)
+	_check(String(mc.call("break_text")) != "FALSE START", "FALSE START flash fades")
+	_ev("break_horn", {"round": 1, "mode": "ctf"})
+	await _frames(1)
+	_check(horns[0] == 1, "break_horn_sounded hook fired once")
+	_check(String(mc.call("break_text")) == "GO!" and _lbl("BreakCountdown") == "GO!", "horn -> GO!")
+	_check(_banner().contains("GO!"), "GO banner: %s" % _banner())
+	_check(String(mc.get("phase")) == "live" and not bool(player.get("break_hold_active")), "horn releases the start line")
+	_check(String(mc.call("round_timer_text")) == "3:00", "CTF clock starts at the horn: %s" % mc.call("round_timer_text"))
+	mc.call("_process", 1.0)
+	_check(String(mc.call("round_timer_text")) == "2:59", "and ticks after it: %s" % mc.call("round_timer_text"))
+	mc.call("_process", 0.5)
+	_check(String(mc.call("break_text")) == "", "GO! clears")
+	player.global_position = Vector3(6.0, player.global_position.y, 41.0)
+	await _walk(["move_forward"], 40)
+	_check(float(player.global_position.z) < 39.5, "after the horn the player crosses the line: z=%.2f" % float(player.global_position.z))
+	print("  -- break from a snapshot (late join) + duplicate horn")
+	_sync_x("ctf", "break", 2, {"red": 1, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 0, "respawn_ms": 0}, [])
+	_check(bool(mc.get("break_active")) and bool(player.get("break_hold_active")) and String(mc.call("round_timer_text")) == "", "snapshot phase=break -> hold, no clock")
+	_sync_x("ctf", "live", 2, {"red": 1, "blue": 0}, {"round_time_ms": 180000, "round_ms_left": 178500, "respawn_ms": 0}, [])
+	_check(not bool(mc.get("break_active")) and not bool(player.get("break_hold_active")) and String(mc.call("round_timer_text")) == "2:59", "snapshot live -> released, clock from round_ms_left: %s" % mc.call("round_timer_text"))
+	_check(horns[0] == 2, "hook fired for the snapshot release")
+	_ev("break_horn", {"round": 2, "mode": "ctf"})
+	_check(horns[0] == 2, "a late break_horn after the snapshot does not double-fire: %d" % horns[0])
+	print("  -- blue side")
+	nl.local_team = "BRAVO"
+	_ev("round_started", {"round": 3, "mode": "ctf", "score": {"red": 1, "blue": 1}, "kills": {"red": 0, "blue": 0}, "target": 3,
+		"reset_positions": true, "round_time_ms": 180000, "respawn_ms": 0, "break_ms": 3000, "break_line_z": 40.0})
+	_check(is_equal_approx(float(player.get("break_hold_line_z")), -40.0), "blue held at z <= -40")
+	player.global_position = Vector3(0.0, player.global_position.y, -39.0)
+	await _frames(2)
+	_check(float(player.global_position.z) <= -39.99, "blue past the line clamped to -40: %.2f" % float(player.global_position.z))
+	_ev("round_ended", {"round": 3, "winner": "", "winner_color": "", "reason": "time", "by": 0, "by_name": "", "score": {"red": 1, "blue": 1},
+		"target": 3, "best_of": 5, "next_round_in_ms": 8000, "match_point": false, "scoreboard": []})
+	_check(not bool(player.get("break_hold_active")), "round_ended drops any hold")
+	nl.local_team = "ALPHA"
+	print("  -- no break (bots_test break_ms 0)")
+	_ev("round_started", {"round": 1, "mode": "ctf", "score": {"red": 0, "blue": 0}, "kills": {"red": 0, "blue": 0}, "target": 3,
+		"reset_positions": true, "round_time_ms": 180000, "respawn_ms": 0, "break_ms": 0, "break_line_z": 40.0})
+	_check(String(mc.get("phase")) == "live" and not bool(player.get("break_hold_active")) and String(mc.call("round_timer_text")) == "3:00", "break_ms 0 -> live at once, clock running")
 
 func _finish() -> void:
 	var nl := _lobby()

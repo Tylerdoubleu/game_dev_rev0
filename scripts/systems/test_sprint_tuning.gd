@@ -96,6 +96,20 @@ func _measure_gait(actions: Array, target: float, hold_frames: int) -> Array:
 	await _frames(2)
 	return [spd, t95]
 
+## Like _measure_gait, but yaws the player so the local input direction runs straight down the cleared -Z lane.
+func _measure_gait_dir(actions: Array, local_dir: Vector2, target: float, hold_frames: int) -> Array:
+	var lane := _clear_lane(16.0)
+	var d := local_dir.normalized()
+	_place(lane[0], atan2(d.x, -d.y))
+	await _frames(3)
+	for a in actions:
+		Input.action_press(a)
+	await _frames(hold_frames)
+	var spd := _hspeed()
+	_release_all()
+	await _frames(2)
+	return [spd, 0.0]
+
 func _sample_cone(n: int) -> Array:
 	# Fire n shots (rate limiter + paint bypassed) at the CURRENT smoothed spread; return [max deg, mean deg].
 	var yaw0: float = player.get("yaw")
@@ -147,6 +161,34 @@ func _run() -> void:
 	var prone: Array = await _measure_gait(["move_forward", "prone_dive"], float(C["PRONE_SPEED"]), 60)
 	_check(absf(prone[0] - float(C["PRONE_SPEED"])) < 0.1, "Measured prone crawl %.2f m/s (was %.2f)" % [prone[0], OLD["prone"]])
 	report["speeds"] = {"walk": walk, "sprint": sprint, "strafe": strafe, "crouch": crouch, "prone": prone}
+
+	print("--- v0.6 back-pedal (50% of forward for the same stance / sprint state) ---")
+	var PS: Script = player.get_script()
+	var wk := float(C["WALK_SPEED"])
+	var sp := float(C["SPRINT_SPEED"])
+	var bm := float(C["BACKPEDAL_SPEED_MULT"])
+	_check(is_equal_approx(bm, 0.5), "BACKPEDAL_SPEED_MULT is 0.5")
+	var diag := Vector2(1.0, 1.0).normalized()
+	_check(is_equal_approx(float(PS.call("backpedal_speed_factor", Vector2(0, 1))), 0.5), "Pure S factor 0.5x")
+	_check(is_equal_approx(float(PS.call("backpedal_speed_factor", Vector2(1, 0))), 1.0) and is_equal_approx(float(PS.call("backpedal_speed_factor", Vector2(-1, 0))), 1.0), "Pure strafe factor 1.0x")
+	_check(is_equal_approx(float(PS.call("backpedal_speed_factor", Vector2(0, -1))), 1.0), "Forward factor 1.0x")
+	_check(absf(float(PS.call("backpedal_speed_factor", diag)) - (1.0 - 0.5 * diag.y)) < 0.001, "Back-diagonal factor %.3fx (proportional to the back component %.3f)" % [float(PS.call("backpedal_speed_factor", diag)), diag.y])
+	_check(absf(float(PS.call("backpedal_speed_factor", Vector2(1.0, -1.0).normalized())) - 1.0) < 0.001, "Forward-diagonal unaffected")
+	for st in [[0, wk, "standing"], [1, float(C["CROUCH_SPEED"]), "crouch"], [2, float(C["PRONE_SPEED"]), "prone"]]:
+		_check(is_equal_approx(float(PS.call("gait_target_speed", Vector2(0, 1), false, st[0])), st[1] * 0.5), "%s back-pedal target = 50%% of %s forward (%.2f)" % [st[2], st[2], st[1] * 0.5])
+	_check(is_equal_approx(float(PS.call("gait_target_speed", Vector2(0, 1), true, 0)), wk * 0.5), "Sprint + pure S = walking back-pedal %.2f (no sprint speed)" % (wk * 0.5))
+	_check(is_equal_approx(float(PS.call("gait_target_speed", Vector2(1, 0), true, 0)), sp), "Sprint strafe keeps full sprint speed")
+	_check(float(PS.call("gait_target_speed", diag, true, 0)) < float(PS.call("gait_target_speed", Vector2(1, 0), false, 0)), "Sprint back-diagonal %.2f is slower than a plain walk-strafe" % float(PS.call("gait_target_speed", diag, true, 0)))
+	var bp := {}
+	for g in [["back", ["move_back"], Vector2(0, 1), wk * 0.5], ["back_sprint", ["move_back", "sprint"], Vector2(0, 1), wk * 0.5],
+			["back_crouch", ["move_back", "crouch_slide"], Vector2(0, 1), float(C["CROUCH_SPEED"]) * 0.5],
+			["back_diag", ["move_back", "move_right"], diag, wk * (1.0 - 0.5 * diag.y)],
+			["back_diag_sprint", ["move_back", "move_right", "sprint"], diag, float(PS.call("gait_target_speed", diag, true, 0))],
+			["strafe_walk", ["move_left"], Vector2(-1, 0), wk]]:
+		var m: Array = await _measure_gait_dir(g[1], g[2], float(g[3]), 75)
+		bp[g[0]] = m[0]
+		_check(absf(m[0] - float(g[3])) < 0.12, "Measured %s %.2f m/s (target %.2f)" % [g[0], m[0], g[3]])
+	report["backpedal"] = bp
 
 	print("--- Knee-slide / Superman dive distance ---")
 	for mv in ["crouch_slide", "prone_dive"]:

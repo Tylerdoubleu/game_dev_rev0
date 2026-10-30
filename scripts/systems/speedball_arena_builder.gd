@@ -7,6 +7,7 @@ extends Node3D
 
 const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 const MatchHudClientScript = preload("res://scripts/ui/match_hud_client.gd")
+const BunkerCalloutsScript = preload("res://scripts/systems/bunker_callouts.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -53,6 +54,7 @@ var squeegee_wipe_bar: ColorRect
 var _flag_wave_time: float = 0.0
 ## v0.5 client presentation of Tim's server match rules (HUD, banners, spectate camera, CTF base flags).
 var match_client: Node = null
+var bunker_callouts: Node = null # v0.6 [V] / mouse-thumb bunker callouts
 var legacy_center_flag_hidden: bool = false
 ## Online start button pressed: menu stays up (waiting room) until notify_match_start.
 var awaiting_online_start: bool = false
@@ -73,6 +75,10 @@ func _ready() -> void:
 		match_client.name = "MatchHudClient"
 		add_child(match_client)
 		match_client.call("setup", self, player)
+		bunker_callouts = BunkerCalloutsScript.new()
+		bunker_callouts.name = "BunkerCallouts"
+		add_child(bunker_callouts)
+		bunker_callouts.call("setup", self, player)
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
