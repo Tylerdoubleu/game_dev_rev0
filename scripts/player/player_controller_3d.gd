@@ -17,6 +17,9 @@ const StanceRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
 signal player_eliminated(killer_name: String)
+## v0.6.2: emitted at the end of every respawn_at_map_zone (map pick, team gate, starting spot) so the arena can drop a
+## death/respawn-map canvas that would otherwise stay up over a live round.
+signal respawned(zone_label: String)
 ## v0.4.5: emitted when the movement fire lock engages (knee-slide / Superman-dive start) and releases (end of the
 ## post-move recovery). reason is "slide", "dive", or "" on release. Viewmodel/HUD hook: also read
 ## is_fire_locked_by_movement(), get_fire_lock_reason() and get_movement_fire_lock_progress() each frame.
@@ -359,7 +362,7 @@ func _on_bracket_changed(bracket_or_id: Variant) -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if lobby_open or awaiting_respawn_choice or spectating or NetworkLobby.is_dedicated_server:
 		return
-	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+	if event is InputEventMouseMotion and _mouse_is_captured():
 		yaw -= event.relative.x * MOUSE_SENSITIVITY
 		pitch = clamp(pitch - event.relative.y * MOUSE_SENSITIVITY, deg_to_rad(-80.0), deg_to_rad(80.0))
 		rotation.y = yaw
@@ -1099,9 +1102,38 @@ func set_lobby_open_state(is_open: bool) -> void:
 	lobby_open = is_open
 	_sync_mouse_capture()
 
+## v0.6.2: _unhandled_input ignores mouse look while lobby_open / awaiting_respawn_choice / spectating is set, so a flag
+## left over from a previous life/round leaves the cursor locked with dead aim (and no CLICK TO RESUME card).
+## Called on every respawn, on round_started, on returned_to_lobby and on a network match start.
+## awaiting_respawn_choice and spectating are always cleared. lobby_open mirrors the arena's TAB/Esc lobby canvas: it is
+## cleared unless that canvas is actually on screen (an open menu keeps blocking input, a stale flag never does).
+var last_input_block_clear: String = ""
+func clear_input_blocks(reason: String = "", sync: bool = true) -> void:
+	last_input_block_clear = reason
+	awaiting_respawn_choice = false
+	set_spectating(false)
+	if lobby_open and not _lobby_canvas_on_screen():
+		lobby_open = false
+	if sync:
+		_sync_mouse_capture()
+
+func _lobby_canvas_on_screen() -> bool:
+	if not is_inside_tree() or get_tree().current_scene == null:
+		return false
+	var lc: Variant = get_tree().current_scene.get("lobby_canvas")
+	return lc is CanvasLayer and is_instance_valid(lc) and (lc as CanvasLayer).visible
+
 ## v0.6.1: the arena's MouseCaptureGuard owns the mouse mode (web Pointer Lock needs a user gesture: a capture from
 ## here can be refused, then it shows CLICK TO RESUME and re-captures on the next click). Esc no longer toggles the
 ## mouse here (the arena's Esc/TAB menu does, through the guard).
+## Mouse look reads the guard's view of the lock (the real Input mode in a build; its simulated mode in tests).
+func _mouse_is_captured() -> bool:
+	if is_inside_tree():
+		var g := get_tree().get_first_node_in_group("mouse_capture_guard")
+		if g != null and g.has_method("is_captured"):
+			return bool(g.call("is_captured"))
+	return Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED
+
 func _sync_mouse_capture() -> void:
 	if not is_inside_tree():
 		return
@@ -1135,7 +1167,7 @@ func respawn_at_starting_spot() -> void:
 	respawn_at_map_zone(initial_spawn_pos, initial_spawn_yaw, "Breakout Gate")
 
 func respawn_at_map_zone(spawn_pos: Vector3, spawn_yaw: float, zone_label: String = "Breakout Gate") -> void:
-	awaiting_respawn_choice = false
+	clear_input_blocks("respawn", false)
 	_respawn_flash_timer = 2.8
 	global_position = spawn_pos
 	velocity = Vector3.ZERO
@@ -1147,6 +1179,7 @@ func respawn_at_map_zone(spawn_pos: Vector3, spawn_yaw: float, zone_label: Strin
 	is_reloading_pod = false
 	reload_timer = 0.0
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
+	respawned.emit(zone_label)
 	_sync_mouse_capture()
 	status_banner_sent.emit("DROPPED IN AT: %s (2.8s Spawn Protection Active!)" % zone_label.to_upper(), Color(0.35, 1.0, 0.55))
 

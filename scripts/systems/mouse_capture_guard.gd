@@ -9,9 +9,12 @@ extends Node
 ## still fired paint.
 ##
 ## capture_policy():
-##   "release" -> a cursor UI is up (TAB/Esc menu, lobby browser / waiting room, respawn map, match end): free it.
-##   "keep"    -> no cursor UI, but not playing either (spectating, scoreboard [M]): leave the mouse alone, no overlay.
-##   "capture" -> live gameplay (break, round, recap intermission): want Pointer Lock.
+##   "release" -> a cursor UI is up: the TAB/Esc menu, the lobby browser, the waiting room, the respawn map or the
+##                match-end screen. These are the ONLY states that free the cursor without the card.
+##   "capture" -> everything else in a match: live round, break + countdown banners, the 8 s round recap, dead
+##                with a respawn timer, spectating (Q/E, A/D, arrows, LMB/RMB cycle; a locked mouse is fine) and the
+##                [M] scoreboard. Lock lost here -> CLICK TO RESUME card.
+##   "keep"    -> not in a match at all (no player in the tree yet): the guard does nothing.
 ## While "capture" but not captured: a small CLICK TO RESUME overlay shows; the next mouse button press re-captures
 ## inside that input event (a user gesture) and is swallowed (no shot); any other key re-captures and passes through.
 ## Re-tries (non-gesture, may be refused on web -> overlay) when the policy turns "capture" (any overlay closing,
@@ -108,11 +111,8 @@ func capture_policy() -> String:
 		return "release"
 	if GameManager.match_ended or (mc is Node and String(mc.get("phase")) == "ended"):
 		return "release"
-	# not playing, no cursor needed
-	if bool(player.get("spectating")) or (mc is Node and bool(mc.get("spectating"))):
-		return "keep"
-	if _vis(_prop(builder, "scoreboard_canvas")):
-		return "keep"
+	# v0.6.2: spectating, the [M] scoreboard, dead/respawn timers, recap, break and countdown banners all keep wanting
+	# the lock (no cursor UI there), so a dropped lock shows the card instead of silently leaving the next round free.
 	return "capture"
 
 func wants_capture() -> bool:

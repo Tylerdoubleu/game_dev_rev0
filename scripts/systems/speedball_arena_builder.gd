@@ -314,6 +314,8 @@ func _spawn_player() -> void:
 	player.connect("hud_state_changed", _on_hud_state_changed)
 	player.connect("status_banner_sent", _on_status_banner)
 	player.connect("player_eliminated", _on_local_player_eliminated)
+	if player.has_signal("respawned"):
+		player.connect("respawned", _on_local_player_respawned)
 	if player.has_method("respawn_at_team_gate"):
 		player.call("respawn_at_team_gate", NetworkLobby.local_team)
 
@@ -813,6 +815,8 @@ func _on_network_match_started(_room_id: String, bracket_id: String, fill_bots: 
 	if awaiting_online_start:
 		awaiting_online_start = false
 		_set_lobby_overlay_visible(false)
+	# v0.6.2: a match started from the waiting room must not inherit a respawn map / spectate / stale lobby flag
+	clear_gameplay_input_blocks("match_started")
 	_set_opfor_bots_enabled(fill_bots)
 	_refresh_lobby_button_highlights()
 	_on_status_banner("MATCH LIVE — Room [%s] | Bracket: %s | Press [TAB] for Lobby" % [NetworkLobby.active_room.to_upper(), bracket_id.to_upper()], Color(0.35, 1.0, 0.55))
@@ -1213,6 +1217,19 @@ func _on_local_player_eliminated(killer_name: String) -> void:
 	# Jump-scare goggle paint-splat flash that settles into the tactical map background
 	var tw := create_tween()
 	tw.tween_property(death_splat_flash_rect, "color", Color(0.14, 0.04, 0.09, 0.84), 0.48)
+
+## v0.6.2: any respawn (map pick, server team-gate reset on round_started, starting spot) drops the respawn map, so it
+## can never stay up over a live round with awaiting_respawn_choice already cleared.
+func _on_local_player_respawned(_zone_label: String = "") -> void:
+	if death_respawn_canvas != null and death_respawn_canvas.visible:
+		death_respawn_canvas.visible = false
+
+## v0.6.2: clears every player input block that is not backed by a menu on screen (respawn map, spectate, stale
+## lobby_open) and re-syncs the mouse. Called on round_started, returned_to_lobby and network match start.
+func clear_gameplay_input_blocks(reason: String = "") -> void:
+	_on_local_player_respawned()
+	if player != null and is_instance_valid(player) and player.has_method("clear_input_blocks"):
+		player.call("clear_input_blocks", reason)
 
 func _on_respawn_zone_selected(zone_index: int) -> void:
 	var zones := _get_team_respawn_zones(NetworkLobby.local_team)

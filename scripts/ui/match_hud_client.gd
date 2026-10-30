@@ -11,7 +11,7 @@ extends Node
 ##    match_starting(data) / match_countdown(seconds_left, data) drive "MATCH STARTING - 3...2...1..." then round_started
 ##    shows GO. It is hidden again on leave_room(), or when a snapshot says the countdown stopped (countdown_ms_left=0
 ##    while still waiting = the server dropped it), or on match_start_cancelled (Tim's cancel_start(); signal hooked defensively).
-##  * Spectate camera after a one-life CTF elimination: third person on living teammates, cycle with LMB/RMB or
+##  * Spectate camera after a one-life CTF elimination: third person on living teammates, cycle with Q/E, LMB/RMB or
 ##    Left/Right (A/D), "SPECTATING: NAME"; returns control on round_started / match_ended. The player is locked via
 ##    PlayerController3D.set_spectating(true) (no movement, look or trigger pulls; no local respawn).
 ##  * CTF flags: one flag per base at NetworkLobby.team_base_position() (same on both maps), on the carrier's back
@@ -359,6 +359,7 @@ func _on_round_started(data: Dictionary) -> void:
 			flags[c]["pos"] = _base_pos(String(flags[c]["team"]))
 	_refresh_flags()
 	exit_spectate()
+	_clear_player_input_blocks("round_started")
 	if brk_ms > 0:
 		_enter_break(float(brk_ms) / 1000.0, float(data.get("break_line_z", BREAK_LINE_Z_DEFAULT)))
 		return
@@ -746,9 +747,11 @@ func exit_spectate() -> void:
 			(cam as Camera3D).current = true
 	_refresh_spectate_label()
 
+var spectate_cycles: int = 0 # v0.6.2: counts cycle_spectate calls (tests: the CLICK TO RESUME click must not cycle)
 func cycle_spectate(direction: int) -> void:
 	if not spectating:
 		return
+	spectate_cycles += 1
 	var cands := spectate_candidates()
 	if cands.is_empty():
 		spectate_target_pid = 0
@@ -788,9 +791,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			cycle_spectate(-1)
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.physical_keycode in [KEY_RIGHT, KEY_D]:
+		if event.physical_keycode in [KEY_RIGHT, KEY_D, KEY_E]:
 			cycle_spectate(1)
-		elif event.physical_keycode in [KEY_LEFT, KEY_A]:
+		elif event.physical_keycode in [KEY_LEFT, KEY_A, KEY_Q]:
 			cycle_spectate(-1)
 
 func _update_spectate_camera(blend: float) -> void:
@@ -1121,7 +1124,7 @@ func _refresh_spectate_label() -> void:
 	if spectate_target_pid == 0:
 		spectate_label.text = "ELIMINATED - NO TEAMMATES ALIVE - OVERVIEW\nBack in at the next round"
 	else:
-		spectate_label.text = "SPECTATING: %s  (%d/%d)\n[LMB/RMB or LEFT/RIGHT] cycle teammates  -  back in at the next round" % [spectate_target_name().to_upper(), cands.find(spectate_target_pid) + 1, cands.size()]
+		spectate_label.text = "SPECTATING: %s  (%d/%d)\n[Q/E, LEFT/RIGHT or LMB/RMB] cycle teammates  -  back in at the next round" % [spectate_target_name().to_upper(), cands.find(spectate_target_pid) + 1, cands.size()]
 
 func _active_camera() -> Camera3D:
 	if spectating and spectate_camera != null:
@@ -1388,6 +1391,22 @@ func on_match_results(data: Dictionary) -> void:
 func on_returned_to_lobby(_room_id: String = "") -> void:
 	awaiting_return_to_lobby = false
 	hide_summary()
+	exit_spectate()
+	_clear_player_input_blocks("returned_to_lobby")
+
+## v0.6.2: round_started / returned_to_lobby drop the respawn map, spectate and any stale lobby_open (via the arena so the
+## death canvas goes too); falls back to the player when the scene has no builder.
+func _clear_player_input_blocks(reason: String) -> void:
+	var tree := get_tree()
+	if tree == null or tree.current_scene == null:
+		return
+	var scene := tree.current_scene
+	if scene.has_method("clear_gameplay_input_blocks"):
+		scene.call("clear_gameplay_input_blocks", reason)
+		return
+	var p: Variant = scene.get("player")
+	if p is Node and is_instance_valid(p) and (p as Node).has_method("clear_input_blocks"):
+		(p as Node).call("clear_input_blocks", reason)
 
 func mvp_row(rows: Array) -> Dictionary:
 	var best: Dictionary = {}

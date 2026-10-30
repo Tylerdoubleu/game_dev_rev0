@@ -1,5 +1,9 @@
 extends SceneTree
-## v0.6.1 mouse capture (web Pointer Lock): MouseCaptureGuard is the one authority.
+## v0.6.1/v0.6.2 mouse capture (web Pointer Lock): MouseCaptureGuard is the one authority.
+## v0.6.2: spectating and the [M] scoreboard want capture (lock lost -> CLICK TO RESUME, the click neither fires nor
+## cycles spectate); spectate -> next round keeps the lock; only the TAB/Esc menu, lobby browser, waiting room, respawn
+## map and match end free the cursor; lobby_open / awaiting_respawn_choice / spectating are cleared on respawn,
+## round_started, returned_to_lobby and a waiting-room match start (mouse look works afterwards).
 ## Covers: capture_policy() / wants_capture() per state, a capture outside a user gesture being refused (browser-like
 ## simulated backend) -> CLICK TO RESUME overlay, the resume click re-capturing without firing, any key re-capturing,
 ## menu keys not re-capturing, focus out/in, the browser dropping the lock, and every overlay (TAB/Esc menu, lobby
@@ -10,6 +14,8 @@ extends SceneTree
 var arena: Node
 var player: Node
 var g: Node
+var mc: Node
+var lef: Node
 var failures: Array[String] = []
 var started := false
 
@@ -88,7 +94,7 @@ func _run() -> void:
 	if g == null or player == null:
 		_finish()
 		return
-	var lef := root.get_node("LobbyEntryFlow")
+	lef = root.get_node("LobbyEntryFlow")
 	lef.call("close_browser")
 	arena.call("_set_lobby_overlay_visible", false)
 	g.set("simulate", true)
@@ -98,7 +104,7 @@ func _run() -> void:
 
 	print("[1] policy")
 	_check(String(g.call("capture_policy")) == "capture" and bool(g.call("wants_capture")), "live play -> capture")
-	var mc: Node = arena.get("match_client")
+	mc = arena.get("match_client")
 	for ph in ["break", "intermission", "live", "waiting"]:
 		mc.set("phase", ph)
 		_check(String(g.call("capture_policy")) == "capture", "phase %s (break / 8 s recap) keeps wanting capture" % ph)
@@ -112,8 +118,22 @@ func _run() -> void:
 	_check(String(g.call("capture_policy")) == "release", "respawn map -> release")
 	player.set("awaiting_respawn_choice", false)
 	player.set("spectating", true)
-	_check(String(g.call("capture_policy")) == "keep" and not bool(g.call("wants_capture")), "spectating -> keep (no overlay, no release)")
+	_check(String(g.call("capture_policy")) == "capture" and bool(g.call("wants_capture")), "spectating -> capture")
 	player.set("spectating", false)
+	# every in-match state other than the five cursor UIs wants capture
+	var states := {
+		"dead, respawn timer running": func(on: bool): mc.set("respawn_left", 4.0 if on else 0.0),
+		"8 s round recap (intermission)": func(on: bool): mc.set("phase", "intermission" if on else "live"),
+		"break hold": func(on: bool): mc.set("phase", "break" if on else "live"),
+		"match countdown banner": func(on: bool): mc.set("countdown_active", on),
+		"round-end banner": func(on: bool): mc.set("awaiting_return_to_lobby", on),
+		"scoreboard open": func(on: bool): arena.get("scoreboard_canvas").visible = on,
+	}
+	for st in states:
+		(states[st] as Callable).call(true)
+		_check(String(g.call("capture_policy")) == "capture", "%s -> capture" % st)
+		(states[st] as Callable).call(false)
+	_check(String(g.call("capture_policy")) == "capture", "state table restored -> capture")
 	gm.set("match_ended", true)
 	_check(String(g.call("capture_policy")) == "release", "GameManager.match_ended -> release")
 	gm.set("match_ended", false)
@@ -140,11 +160,16 @@ func _run() -> void:
 	await _frames(1)
 	await _key(KEY_M)
 	_check(not bool(g.call("is_captured")), "[M] scoreboard key does not grab the mouse")
-	_check(String(g.call("capture_policy")) == "keep" and not bool(g.call("overlay_visible")), "scoreboard open -> keep, overlay hidden")
+	_check(String(g.call("capture_policy")) == "capture" and bool(g.call("overlay_visible")), "scoreboard open while unlocked -> capture policy, CLICK TO RESUME shown")
+	await _resume_by_click("scoreboard open")
 	await _key(KEY_M)
+	_check(bool(g.call("is_captured")), "scoreboard closed: still locked")
+	await _key(KEY_M)
+	g.call("simulate_browser_unlock")
 	await _frames(1)
-	_check(bool(g.call("overlay_visible")), "scoreboard closed while unlocked -> CLICK TO RESUME")
-	await _resume_by_click("after scoreboard")
+	_check(bool(g.call("overlay_visible")), "lock lost with the scoreboard open -> CLICK TO RESUME")
+	await _resume_by_click("lock lost on scoreboard")
+	await _key(KEY_M)
 	await _key(KEY_M)
 	_check(bool(g.call("is_captured")), "scoreboard open while locked keeps the lock")
 	await _key(KEY_M)
@@ -198,15 +223,28 @@ func _run() -> void:
 	_check(not bool(g.call("is_captured")) and not bool(g.call("overlay_visible")), "match end frees the cursor, no overlay")
 	gm.set("match_ended", false)
 	await _resume_by_click("next match")
-	# spectate (one-life CTF): keep the lock if it is still there, ask for a click at round start if it was lost
-	player.call("set_spectating", true)
+	# spectate (one-life CTF): wants capture; a lost lock shows the card, the click re-captures without cycling
+	mc.call("enter_spectate")
 	await _frames(2)
-	_check(bool(g.call("is_captured")), "spectating does not free the mouse")
+	_check(bool(player.get("spectating")) and bool(g.call("is_captured")) and not bool(g.call("overlay_visible")), "spectating keeps the lock, no card")
 	g.call("simulate_browser_unlock")
 	await _frames(1)
-	_check(not bool(g.call("overlay_visible")), "lock lost while spectating -> no overlay yet")
-	player.call("set_spectating", false) # round_started
-	await _resume_by_click("next round after spectating")
+	_check(bool(g.call("overlay_visible")), "lock lost while spectating -> CLICK TO RESUME")
+	var cyc := int(mc.get("spectate_cycles"))
+	await _resume_by_click("spectating")
+	_check(int(mc.get("spectate_cycles")) == cyc, "the resume click did not cycle the spectate target")
+	await _key(KEY_E)
+	await _key(KEY_Q)
+	_check(int(mc.get("spectate_cycles")) == cyc + 2 and bool(g.call("is_captured")), "Q/E cycle spectate while captured")
+	await _click()
+	_check(int(mc.get("spectate_cycles")) == cyc + 3, "LMB cycles spectate while captured (no shot: spectating)")
+	att = int(g.get("capture_attempts"))
+	mc.call("_on_round_started", {"mode": String(mc.get("mode")), "round": 2})
+	await _frames(2)
+	_check(not bool(player.get("spectating")) and bool(g.call("is_captured")) and not bool(g.call("overlay_visible")), "spectate -> next round (round_started): still captured, no card")
+	_check(int(g.get("capture_attempts")) == att, "spectate -> next round: no new capture request needed")
+	mc.call("_end_break_hold")
+	mc.set("phase", "live")
 	# recap intermission / break never touch the mouse
 	mc.set("phase", "intermission")
 	await _frames(3)
@@ -220,7 +258,56 @@ func _run() -> void:
 	_check(bool(g.call("is_captured")) and int(g.get("capture_attempts")) == att, "round_started respawn with the lock held: no re-request")
 	player.call("set_lobby_open_state", false)
 	_check(bool(g.call("is_captured")), "set_lobby_open_state(false) while locked stays locked")
+
+	print("[6] stuck input-block flags (lobby_open / awaiting_respawn_choice / spectating)")
+	await _stuck_case("respawn (team gate)", func(): player.call("respawn_at_team_gate", "ALPHA"))
+	await _stuck_case("respawn (starting spot)", func(): player.call("respawn_at_starting_spot"))
+	await _stuck_case("round_started (new CTF round)", func():
+		mc.call("_on_round_started", {"mode": "ctf", "round": 3})
+		mc.call("_end_break_hold")
+		mc.set("phase", "live"))
+	await _stuck_case("waiting room match start", func():
+		lef.call("open_waiting_room", {"id": "lobby_01", "name": "Lobby 01", "map": "speedball"})
+		NetworkLobby_emit_match_started())
+	await _stuck_case("returned_to_lobby -> match start", func():
+		root.get_node("NetworkLobby").emit_signal("returned_to_lobby", "lobby_01")
+		_check(not bool(player.get("spectating")) and not bool(player.get("awaiting_respawn_choice")), "returned_to_lobby itself cleared spectate + respawn map")
+		_check(String(g.call("capture_policy")) == "release", "returned_to_lobby -> waiting room frees the cursor")
+		NetworkLobby_emit_match_started())
+	# a menu that is really open keeps blocking input through a respawn
+	arena.call("_set_lobby_overlay_visible", true)
+	player.call("respawn_at_team_gate", "ALPHA")
+	_check(bool(player.get("lobby_open")) and String(g.call("capture_policy")) == "release", "respawn with the TAB menu really open keeps lobby_open (menu still blocks input)")
+	g.set("sim_refuse_outside_gesture", false)
+	arena.call("_set_lobby_overlay_visible", false)
+	g.set("sim_refuse_outside_gesture", true)
 	_finish()
+
+func NetworkLobby_emit_match_started() -> void:
+	root.get_node("NetworkLobby").emit_signal("match_started_signal", "lobby_01", "speedball", false)
+
+## All three flags stuck (respawn map up, spectating, lobby_open with no menu on screen) -> transition -> all cleared,
+## respawn map hidden, the mouse captured and mouse look turning the player.
+func _stuck_case(label: String, transition: Callable) -> void:
+	player.set("awaiting_respawn_choice", true)
+	arena.get("death_respawn_canvas").visible = true
+	player.call("set_spectating", true)
+	player.set("lobby_open", true) # stale: lobby canvas hidden
+	await _frames(1)
+	transition.call()
+	await _frames(2)
+	_check(not bool(player.get("lobby_open")) and not bool(player.get("awaiting_respawn_choice")) and not bool(player.get("spectating")),
+		"%s: lobby_open / awaiting_respawn_choice / spectating all cleared" % label)
+	_check(not bool(arena.get("death_respawn_canvas").visible), "%s: respawn map hidden" % label)
+	if not bool(g.call("is_captured")):
+		await _resume_by_click(label)
+	var yaw0 := float(player.get("yaw"))
+	var mm := InputEventMouseMotion.new()
+	mm.relative = Vector2(40, 0)
+	mm.position = Vector2(800, 450)
+	root.push_input(mm)
+	await _frames(1)
+	_check(bool(g.call("is_captured")) and absf(float(player.get("yaw")) - yaw0) > 0.001, "%s: mouse look works (yaw %.3f -> %.3f)" % [label, yaw0, float(player.get("yaw"))])
 
 func _finish() -> void:
 	if failures.is_empty():
