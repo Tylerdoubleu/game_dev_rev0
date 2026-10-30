@@ -28,7 +28,7 @@ const VOLUME_DB := {"step": -29.0, "step_sprint": -26.0, "breath": -21.0, "slide
 	"effort_dive": -12.0, "dive_land": -9.0, "land": -14.0}
 ## Tyler: footsteps "way down, subtle and muffled" - they go through their own bus with a low-pass filter.
 const STEP_BUS := "Footsteps"
-const STEP_LOWPASS_HZ := 850.0
+const STEP_LOWPASS_HZ := 1800.0
 const STEP_KINDS := ["step", "step_sprint"]
 const WALK_STRIDE := 1.5        # metres between footsteps when walking
 const SPRINT_STRIDE := 2.1      # longer strides at sprint pace
