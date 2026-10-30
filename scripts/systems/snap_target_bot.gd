@@ -22,6 +22,15 @@ var marker_pivot: Node3D = null
 var hopper_pivot: Node3D = null
 var col_marker: CollisionShape3D = null
 var last_hit_zone: String = "TORSO / JERSEY"
+# v0.6: bots fire short bursts with real pauses instead of a steady ~2.2 balls/s while peeked.
+const BURST_MIN_BALLS: int = 2
+const BURST_MAX_BALLS: int = 3
+const BURST_BALL_GAP_MIN: float = 0.12
+const BURST_BALL_GAP_MAX: float = 0.15
+const BURST_PAUSE_MIN: float = 1.5
+const BURST_PAUSE_MAX: float = 3.0
+var fire_cooldown: float = 0.0 # counts down only while peeked
+var burst_balls_left: int = 0
 
 func _ready() -> void:
 	base_pos = position
@@ -30,6 +39,7 @@ func _ready() -> void:
 		queue_free()
 		return
 	timer = randf_range(0.0, peek_interval)
+	fire_cooldown = randf_range(0.0, BURST_PAUSE_MAX) # desync bots
 	_build_visual_and_collider()
 	IntelBus.enemy_spotted.connect(_on_enemy_spotted)
 
@@ -118,8 +128,8 @@ func _process(delta: float) -> void:
 	if is_spotted_timer > 0.0:
 		is_spotted_timer -= delta
 
-	# Fire occasional suppressive paintballs while peeking out
-	if fire_at_player and peek_alpha > 0.75 and randf() < delta * 2.2:
+	# Fire short 2-3 ball bursts while peeking out, with a 1.5-3.0s pause between bursts
+	if fire_at_player and tick_fire_cadence(delta, peek_alpha > 0.75):
 		var origin := global_position + Vector3(0.20, 1.24, 0.58)
 		if pro_rig != null and pro_rig.get("muzzle_tip_node") != null:
 			origin = (pro_rig.get("muzzle_tip_node") as Node3D).global_position
@@ -131,6 +141,26 @@ func _process(delta: float) -> void:
 				target_pos = pnode.global_position + Vector3(randf_range(-0.45, 0.45), 1.15, randf_range(-0.45, 0.45))
 		var dir := (target_pos - origin).normalized()
 		PaintBallistics.spawn_paintball(origin, dir, 255.0, self, Color(0.2, 0.95, 0.35))
+
+## Burst cadence: returns true on frames where the bot should fire one ball. The pause only counts down while
+## peeked, and ducking back mid-burst ends that burst and starts a fresh pause.
+func tick_fire_cadence(delta: float, peeked: bool) -> bool:
+	if not peeked:
+		if burst_balls_left > 0:
+			burst_balls_left = 0
+			fire_cooldown = randf_range(BURST_PAUSE_MIN, BURST_PAUSE_MAX)
+		return false
+	fire_cooldown -= delta
+	if fire_cooldown > 0.0:
+		return false
+	if burst_balls_left <= 0:
+		burst_balls_left = randi_range(BURST_MIN_BALLS, BURST_MAX_BALLS)
+	burst_balls_left -= 1
+	if burst_balls_left > 0:
+		fire_cooldown = maxf(fire_cooldown, -0.05) + randf_range(BURST_BALL_GAP_MIN, BURST_BALL_GAP_MAX)
+	else:
+		fire_cooldown = randf_range(BURST_PAUSE_MIN, BURST_PAUSE_MAX)
+	return true
 
 func apply_articulated_peek_pose(peek_alpha: float, delta: float = 0.016, bot_vel: Vector3 = Vector3.ZERO) -> void:
 	# Bot faces +Z (South), so world +X is bot's local LEFT (-X) and world -X is bot's local RIGHT (+X)
