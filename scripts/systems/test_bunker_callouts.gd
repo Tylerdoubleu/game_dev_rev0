@@ -1,6 +1,6 @@
 extends SceneTree
 ## v0.6 bunker callouts (BunkerCallouts): every bunker on both maps named (<= 24 chars, unique, Red/Blue mirrored),
-## the bots excluded, key bindings (V + mouse thumb; Z / MMB were taken), crosshair pick + nearest-along-ray, enemy
+## the bots excluded, key bindings (F + mouse thumb; Z / MMB were taken), crosshair pick + nearest-along-ray, enemy
 ## count (alive + visible, min 1), 1.2 s cooldown, offline local render, online NetworkLobby.ping_callout +
 ## callout_pinged rendering (team only), marker + HUD line expire after ~4 s.
 ## Run: godot --headless --path . -s scripts/systems/test_bunker_callouts.gd

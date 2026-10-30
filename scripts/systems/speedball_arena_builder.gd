@@ -8,6 +8,7 @@ extends Node3D
 const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 const MatchHudClientScript = preload("res://scripts/ui/match_hud_client.gd")
 const BunkerCalloutsScript = preload("res://scripts/systems/bunker_callouts.gd")
+const MouseCaptureGuardScript = preload("res://scripts/systems/mouse_capture_guard.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -51,7 +52,8 @@ var breakout_horn_label: Label
 var _flag_wave_time: float = 0.0
 ## v0.5 client presentation of Tim's server match rules (HUD, banners, spectate camera, CTF base flags).
 var match_client: Node = null
-var bunker_callouts: Node = null # v0.6 [V] / mouse-thumb bunker callouts
+var bunker_callouts: Node = null # v0.6 [F] / mouse-thumb bunker callouts
+var mouse_guard: Node = null # v0.6.1 single authority for the gameplay mouse capture (CLICK TO RESUME)
 var legacy_center_flag_hidden: bool = false
 ## Online start button pressed: menu stays up (waiting room) until notify_match_start.
 var awaiting_online_start: bool = false
@@ -76,6 +78,10 @@ func _ready() -> void:
 		bunker_callouts.name = "BunkerCallouts"
 		add_child(bunker_callouts)
 		bunker_callouts.call("setup", self, player)
+		mouse_guard = MouseCaptureGuardScript.new()
+		mouse_guard.name = "MouseCaptureGuard"
+		mouse_guard.call("setup", self, player)
+		add_child(mouse_guard)
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
@@ -420,6 +426,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if scoreboard_canvas != null:
 			scoreboard_canvas.visible = not scoreboard_canvas.visible
 			_refresh_scoreboard_text()
+			_sync_mouse_capture()
 		get_viewport().set_input_as_handled()
 
 func _build_tournament_lobby_overlay() -> void:
@@ -684,6 +691,10 @@ func _build_tournament_lobby_overlay() -> void:
 	# Show lobby overlay on interactive clients; keep hidden in headless smoke tests
 	var is_headless := (DisplayServer.get_name() == "headless")
 	_set_lobby_overlay_visible(not is_headless)
+
+func _sync_mouse_capture() -> void:
+	if mouse_guard != null and is_instance_valid(mouse_guard):
+		mouse_guard.call("sync_capture")
 
 func _set_lobby_overlay_visible(show_lobby: bool) -> void:
 	if lobby_canvas == null:
@@ -1180,7 +1191,6 @@ func _on_local_player_eliminated(killer_name: String) -> void:
 		_set_lobby_overlay_visible(false)
 
 	player.set("awaiting_respawn_choice", true)
-	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
 
 	var zones := _get_team_respawn_zones(NetworkLobby.local_team)
 	for i in range(min(zones.size(), respawn_zone_buttons.size())):
@@ -1198,6 +1208,7 @@ func _on_local_player_eliminated(killer_name: String) -> void:
 	]
 	death_splat_flash_rect.color = Color(0.98, 0.14, 0.56, 0.94)
 	death_respawn_canvas.visible = true
+	_sync_mouse_capture()
 
 	# Jump-scare goggle paint-splat flash that settles into the tactical map background
 	var tw := create_tween()

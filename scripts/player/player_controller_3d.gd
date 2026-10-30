@@ -364,12 +364,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		pitch = clamp(pitch - event.relative.y * MOUSE_SENSITIVITY, deg_to_rad(-80.0), deg_to_rad(80.0))
 		rotation.y = yaw
 
-	if event.is_action_pressed("ui_cancel"):
-		if Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
-			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
-		else:
-			Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
-
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			lean_exposure_scale = clampf(lean_exposure_scale + 0.12, 0.38, 1.15)
@@ -1103,8 +1097,19 @@ func _emit_hud() -> void:
 
 func set_lobby_open_state(is_open: bool) -> void:
 	lobby_open = is_open
-	if DisplayServer.get_name() != "headless":
-		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if is_open else Input.MOUSE_MODE_CAPTURED)
+	_sync_mouse_capture()
+
+## v0.6.1: the arena's MouseCaptureGuard owns the mouse mode (web Pointer Lock needs a user gesture: a capture from
+## here can be refused, then it shows CLICK TO RESUME and re-captures on the next click). Esc no longer toggles the
+## mouse here (the arena's Esc/TAB menu does, through the guard).
+func _sync_mouse_capture() -> void:
+	if not is_inside_tree():
+		return
+	if get_tree().get_nodes_in_group("mouse_capture_guard").is_empty():
+		if DisplayServer.get_name() != "headless":
+			Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE if (lobby_open or awaiting_respawn_choice) else Input.MOUSE_MODE_CAPTURED)
+		return
+	get_tree().call_group("mouse_capture_guard", "sync_capture")
 
 func _enforce_arena_bounds_and_permafall_guard() -> void:
 	# Hard outer perimeter clamp inside the 108m x 132m safety netting so players can never exit the map
@@ -1142,8 +1147,7 @@ func respawn_at_map_zone(spawn_pos: Vector3, spawn_yaw: float, zone_label: Strin
 	is_reloading_pod = false
 	reload_timer = 0.0
 	_on_bracket_changed(GearRuleEnforcer.active_bracket)
-	if DisplayServer.get_name() != "headless" and not lobby_open:
-		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+	_sync_mouse_capture()
 	status_banner_sent.emit("DROPPED IN AT: %s (2.8s Spawn Protection Active!)" % zone_label.to_upper(), Color(0.35, 1.0, 0.55))
 
 func award_kill_bonus_pod(victim_label: String = "Enemy") -> void:
