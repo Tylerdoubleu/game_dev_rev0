@@ -15,3 +15,8 @@
 - `menu_music_greater_vantage_raw.mp3`: menu music supplied by Tyler on 2026-10-30. The tags read "14 metal", Greater Vantage Music, album "demo reel", and the track is 56 s long. The license still needs confirming before a commercial release.
   - Converted to `assets/audio/music/menu_loop.ogg`: OGG Vorbis, leading and trailing silence trimmed, -3 dB. It's meant to loop on the menus.
   - Ren, v0.6: `MovementAudioDirector` loops it at -12 dB while the lobby browser or waiting room is open and fades it out over about a second when a match starts.
+
+## Metal bunker hit (`splat_metal.wav`)
+- Source: `metal_bunker_hit_tyler_raw.wav`, supplied by Tyler 2026-10-30 (FL Studio 21 export, 24.5 s of repeated hits).
+- Cut: first hit only (0.15 s to 0.45 s), mono 44.1 kHz 16-bit, 80 ms fade-out, peak-normalized to -1 dB.
+- License: supplied by Tyler; confirm origin before commercial release if not his own recording.
