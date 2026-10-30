@@ -281,6 +281,49 @@ func _run() -> void:
 	g.set("sim_refuse_outside_gesture", false)
 	arena.call("_set_lobby_overlay_visible", false)
 	g.set("sim_refuse_outside_gesture", true)
+
+	print("[7] v0.6.3 document.pointerLockElement poll (Input.mouse_mode not trusted alone)")
+	if not bool(g.call("is_captured")):
+		await _resume_by_click("before DOM poll")
+	g.call("simulate_silent_dom_unlock") # browser dropped the lock, no pointerlockchange, Input still CAPTURED
+	var polls := int(g.get("lock_polls"))
+	await create_timer(0.4).timeout
+	await _frames(2)
+	_check(int(g.get("lock_polls")) > polls, "pointerLockElement polled on its own (%d -> %d polls)" % [polls, int(g.get("lock_polls"))])
+	_check(int(g.get("sim_mode")) == CAP and bool(g.call("lock_desynced")), "Input.mouse_mode still CAPTURED but the browser has no lock -> desync detected")
+	_check(not bool(g.call("is_captured")) and bool(g.call("overlay_visible")) and int(g.get("lock_desyncs")) > 0, "desync treated as lost -> CLICK TO RESUME")
+	var yaw0 := float(player.get("yaw"))
+	var mm := InputEventMouseMotion.new()
+	mm.relative = Vector2(40, 0)
+	root.push_input(mm)
+	await _frames(1)
+	_check(absf(float(player.get("yaw")) - yaw0) < 0.0001, "no mouse look while desynced")
+	await _resume_by_click("desynced lock")
+	_check(int(g.get("browser_lock")) == 1 and not bool(g.call("lock_desynced")), "resume click re-acquired the browser lock")
+	await create_timer(0.4).timeout
+	_check(bool(g.call("is_captured")) and not bool(g.call("overlay_visible")), "stays captured across later polls")
+	g.call("simulate_silent_dom_unlock")
+	arena.call("_set_lobby_overlay_visible", true)
+	await create_timer(0.35).timeout
+	_check(not bool(g.call("overlay_visible")), "no card while a release UI (TAB menu) is up, even with no DOM lock")
+	g.set("sim_refuse_outside_gesture", false)
+	arena.call("_set_lobby_overlay_visible", false)
+	g.set("sim_refuse_outside_gesture", true)
+
+	print("[8] v0.6.3 build stamp")
+	var bs: Variant = arena.get("build_stamp")
+	var bi := load("res://scripts/systems/build_info.gd")
+	var want := "%s · %s" % [bi.VERSION, bi.COMMIT]
+	_check(bs is CanvasLayer and (bs as CanvasLayer).visible, "arena has a BuildStamp layer")
+	if bs is CanvasLayer:
+		var lbl: Label = (bs as CanvasLayer).get_node_or_null("BuildStampLabel")
+		_check(lbl != null and lbl.text == want and want.begins_with("v0.6.3 · "), "stamp text '%s'" % (lbl.text if lbl != null else "?"))
+		_check((bs as CanvasLayer).layer > int(lef.get("LAYER")) and (bs as CanvasLayer).layer > 12, "stamp layer %d sits above the HUD/menus and the lobby browser (%d)" % [(bs as CanvasLayer).layer, int(lef.get("LAYER"))])
+		lef.call("open_browser")
+		await _frames(2)
+		_check((bs as CanvasLayer).visible and lbl.is_visible_in_tree(), "stamp visible with the lobby browser open")
+		lef.call("close_browser")
+		_check(lbl.mouse_filter == Control.MOUSE_FILTER_IGNORE, "stamp never eats clicks")
 	_finish()
 
 func NetworkLobby_emit_match_started() -> void:

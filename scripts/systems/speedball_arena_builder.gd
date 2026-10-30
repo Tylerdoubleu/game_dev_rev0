@@ -9,6 +9,7 @@ const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd"
 const MatchHudClientScript = preload("res://scripts/ui/match_hud_client.gd")
 const BunkerCalloutsScript = preload("res://scripts/systems/bunker_callouts.gd")
 const MouseCaptureGuardScript = preload("res://scripts/systems/mouse_capture_guard.gd")
+const BuildStampScript = preload("res://scripts/systems/build_stamp.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -53,6 +54,7 @@ var _flag_wave_time: float = 0.0
 ## v0.5 client presentation of Tim's server match rules (HUD, banners, spectate camera, CTF base flags).
 var match_client: Node = null
 var bunker_callouts: Node = null # v0.6 [F] / mouse-thumb bunker callouts
+var build_stamp: CanvasLayer = null # v0.6.3 "v0.6.3 · <commit>" corner label (HUD + lobby)
 var mouse_guard: Node = null # v0.6.1 single authority for the gameplay mouse capture (CLICK TO RESUME)
 var legacy_center_flag_hidden: bool = false
 ## Online start button pressed: menu stays up (waiting room) until notify_match_start.
@@ -82,6 +84,8 @@ func _ready() -> void:
 		mouse_guard.name = "MouseCaptureGuard"
 		mouse_guard.call("setup", self, player)
 		add_child(mouse_guard)
+		build_stamp = BuildStampScript.new()
+		add_child(build_stamp)
 	GameManager.round_updated.connect(_on_round_updated)
 	GameManager.round_won.connect(_on_round_won)
 	GameManager.scoreboard_updated.connect(_on_scoreboard_updated)
