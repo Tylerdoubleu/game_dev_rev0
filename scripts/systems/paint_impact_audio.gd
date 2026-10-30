@@ -31,7 +31,7 @@ const VARIANTS := {
 const MAX_PITCH_JITTER := {"fire": 0.03}
 static var _last_variant: Dictionary = {}
 
-const VOLUME_DB := {"vinyl": -4.0, "wood": -4.0, "metal": -6.0, "turf": -9.0, "body": -2.0, "bounce": -5.0, "fire": -8.0, "whiz": -7.0}
+const VOLUME_DB := {"vinyl": -4.0, "wood": -4.0, "metal": -6.0, "turf": -9.0, "body": -2.0, "bounce": -5.0, "fire": -14.0, "whiz": -7.0}
 const POOL_SIZE: int = 24
 const POOL_NAME: String = "PaintImpactAudioPool"
 

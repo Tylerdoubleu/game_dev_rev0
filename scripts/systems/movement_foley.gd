@@ -149,7 +149,7 @@ func play(kind: String, extra_db := 0.0) -> void:
 	_last_pick[kind] = i
 	p.stream = list[i]
 	p.volume_db = float(VOLUME_DB.get(kind, -15.0)) + extra_db + randf_range(-1.5, 1.0)
-	p.pitch_scale = randf_range(0.93, 1.07)
+	p.pitch_scale = randf_range(0.97, 1.03)
 	if target != null and target.is_inside_tree():
 		p.global_position = target.global_position
 	p.play()
