@@ -34,3 +34,7 @@
 ## Footsteps v2 (`movement/step_turf_1..4.wav`, `step_sprint_1..2.wav`)
 - Source: `footstep_tyler_raw.wav`, supplied by Tyler 2026-10-30 (1.0 s, one footstep), replacing the Dry Grass Steps cuts.
 - Cuts all start on the footfall (0.07 s) with an exponential fade: walk 0.40-0.45 s, sprint 0.30 s. Variety comes from small EQ differences (bass/treble/low-pass) rather than pitch shifting. Mono 44.1 kHz 16-bit, peak -1 dB.
+
+## Hit marker (`paint/hit_marker_tick.wav`)
+- Source: `hit_marker_tyler_raw.mp3`, supplied by Tyler 2026-10-30 (0.44 s).
+- Cut: leading silence removed (starts 0.108 s), 0.22 s with an 80 ms fade, mono 44.1 kHz 16-bit, peak -1 dB.
