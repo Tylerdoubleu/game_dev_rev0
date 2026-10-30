@@ -69,6 +69,12 @@ func play_countdown_beep(seconds_left: int, _data: Dictionary = {}) -> void:
 		_beep.stream = COUNTDOWN_BEEPS[seconds_left]
 		_beep.play()
 
+## Called by SnapTargetBot when the local player's own paintball takes a bot out.
+func show_local_hit_marker() -> void:
+	var hm := get_node_or_null("HitMarker")
+	if hm != null:
+		hm.show_hit()
+
 func _on_room_event(event_name: String, data: Dictionary) -> void:
 	if event_name == "player_eliminated":
 		play_player_hit(data)

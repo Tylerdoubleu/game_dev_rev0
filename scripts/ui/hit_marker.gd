@@ -3,7 +3,7 @@ extends CanvasLayer
 ## v0.6 (Ren): shooter hit marker. A gritty white X that pops over the crosshair, turns tournament red, and fades,
 ## plus a crisp tick - only for hits that actually counted:
 ## - online: NetworkLobby.player_eliminated room event where shooter == me (server-validated, PB-13)
-## - offline bots: GameManager.npc_deaths going up (only the local player shoots bots offline)
+## - bots: SnapTargetBot calls MovementAudioDirector.show_local_hit_marker() only when the shooter is the local player
 ## Lives under MovementAudioDirector, so no shared HUD / player files are touched.
 
 const TICK := preload("res://assets/audio/paint/hit_marker_tick.wav")
@@ -20,7 +20,6 @@ var show_count := 0
 var _left := 0.0
 var _canvas: Control
 var _tick: AudioStreamPlayer
-var _last_npc_deaths := -1
 
 func _ready() -> void:
 	layer = 60
@@ -59,21 +58,9 @@ func show_hit() -> void:
 		_tick.play()
 
 func _process(delta: float) -> void:
-	_watch_offline_bots()
 	if _left > 0.0:
 		_left = maxf(0.0, _left - delta)
 		_canvas.queue_redraw()
-
-func _watch_offline_bots() -> void:
-	var gm := get_node_or_null("/root/GameManager")
-	if gm == null or not ("npc_deaths" in gm):
-		return
-	var d := int(gm.npc_deaths)
-	var nl := get_node_or_null("/root/NetworkLobby")
-	var online: bool = nl != null and nl.has_method("is_online_client") and bool(nl.call("is_online_client"))
-	if _last_npc_deaths >= 0 and d > _last_npc_deaths and not online:
-		show_hit()
-	_last_npc_deaths = d
 
 func _draw_marker() -> void:
 	if _left <= 0.0:

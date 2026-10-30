@@ -170,6 +170,7 @@ func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	var zone_lbl: String = String(sub.get("zone", "TORSO / JERSEY"))
 	if shooter != null and shooter.has_method("award_kill_bonus_pod"):
 		shooter.call("award_kill_bonus_pod", "%s [%s]" % [bot_name, zone_lbl])
+		MovementAudioDirector.show_local_hit_marker() # v0.6: only the local player who fired gets the marker
 	_apply_elimination("ELIMINATED: %s [%s HIT] (+1 BONUS POD! Respawning at gate...)" % [bot_name, zone_lbl])
 	NetworkLobby.broadcast_bot_eliminated(name)
 
