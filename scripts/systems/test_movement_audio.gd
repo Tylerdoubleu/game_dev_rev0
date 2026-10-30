@@ -54,7 +54,15 @@ func _process(_d: float) -> bool:
 		var before: int = dir.horn_count
 		root.get_node("NetworkLobby").emit_signal("break_horn", {})
 		_check(dir.horn_count == before + 1, "break_horn from NetworkLobby plays the air horn")
-	if f == 34:
+	if f == 31:
+		root.get_node("MovementAudioDirector").debug_menu_open = true
+	if f == 40:
+		var m: AudioStreamPlayer = root.get_node("MovementAudioDirector").music
+		_check(m.playing and bool(m.stream.get("loop")), "menu music loops while a menu is open")
+		root.get_node("MovementAudioDirector").debug_menu_open = false
+	if f == 170:
+		_check(not root.get_node("MovementAudioDirector").music.playing, "menu music fades out and stops once the menu closes")
+	if f == 172:
 		print("=== [%s] v0.6 movement foley + break horn ===" % ("PASS" if failures.is_empty() else "FAIL"))
 		quit(0 if failures.is_empty() else 1)
 	return false

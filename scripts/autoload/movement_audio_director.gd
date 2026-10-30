@@ -1,19 +1,35 @@
 extends Node
 ## v0.6 (Ren): attaches MovementFoley to the local player (player_controller_3d.gd) whenever one enters the
 ## tree, and plays the tournament air horn on NetworkLobby.break_horn (Tim's server-run break).
+## Also loops Tyler's menu track while the lobby browser / waiting room (LobbyEntryFlow) is open and fades it
+## out when a match starts.
 
 const HORN := preload("res://assets/audio/break/air_horn.wav")
 const PLAYER_SCRIPT := "res://scripts/player/player_controller_3d.gd"
 const HORN_DB := -3.0
+const MENU_MUSIC := preload("res://assets/audio/music/menu_loop.ogg")
+const MENU_MUSIC_DB := -12.0
+const MUSIC_FADE_DB_PER_SEC := 30.0   # ~1 s fade in / out
+const SILENT_DB := -60.0
 
 var horn_count := 0
 var _horn: AudioStreamPlayer
+var music: AudioStreamPlayer
+## Tests can force the menu state instead of opening the real lobby UI (null = ask LobbyEntryFlow).
+var debug_menu_open = null
 
 func _ready() -> void:
 	_horn = AudioStreamPlayer.new()
 	_horn.stream = HORN
 	_horn.volume_db = HORN_DB
 	add_child(_horn)
+	music = AudioStreamPlayer.new()
+	music.name = "MenuMusic"
+	var stream := MENU_MUSIC.duplicate() as AudioStreamOggVorbis
+	stream.loop = true
+	music.stream = stream
+	music.volume_db = SILENT_DB
+	add_child(music)
 	get_tree().node_added.connect(_on_node_added)
 	_hook_lobby.call_deferred()
 
@@ -38,3 +54,25 @@ func _on_node_added(n: Node) -> void:
 func _attach(n: Node) -> void:
 	if is_instance_valid(n) and n.get_node_or_null("MovementFoley") == null:
 		n.add_child(MovementFoley.new(n))
+
+func is_menu_open() -> bool:
+	if debug_menu_open != null:
+		return bool(debug_menu_open)
+	var flow := get_node_or_null("/root/LobbyEntryFlow")
+	return flow != null and flow.has_method("is_open") and bool(flow.call("is_open"))
+
+func _process(delta: float) -> void:
+	if music == null:
+		return
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl != null and bool(nl.get("is_dedicated_server")):
+		return
+	if is_menu_open():
+		if not music.playing:
+			music.volume_db = SILENT_DB
+			music.play()
+		music.volume_db = minf(MENU_MUSIC_DB, music.volume_db + MUSIC_FADE_DB_PER_SEC * delta)
+	elif music.playing:
+		music.volume_db -= MUSIC_FADE_DB_PER_SEC * 1.4 * delta
+		if music.volume_db <= SILENT_DB:
+			music.stop()
