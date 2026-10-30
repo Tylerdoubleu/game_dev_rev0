@@ -12,6 +12,7 @@
   - Those two steps, pitched by up to ±6%, make `step_turf_1.wav` through `step_turf_4.wav`.
   - Shorter cuts of the same two steps make `step_sprint_1.wav` and `step_sprint_2.wav`.
   - Ren, v0.6: every step is trimmed to start right on the footfall (no lead-in silence) and to end before the next step, 0.26 s for walking and 0.21 s for sprinting, with a short fade, so steps don't lag or pile up at sprint pace.
+  - Grok Bot, v0.6 re-cut (Tyler: "footsteps sound a bit weird"): no more pitch-shifted copies or hard 0.26 s chops mid-rustle. Each cut starts on the footfall (0.105 s and 1.185 s) and keeps the natural grass tail with an exponential fade: walk 0.45 s (turf_1/2, full range) and 0.40 s (turf_3/4, darker EQ for variety), sprint 0.30 s. All peak -1 dB; the game still adds its own ±7% random pitch.
 - `menu_music_greater_vantage_raw.mp3`: menu music supplied by Tyler on 2026-10-30. The tags read "14 metal", Greater Vantage Music, album "demo reel", and the track is 56 s long. The license still needs confirming before a commercial release.
   - Converted to `assets/audio/music/menu_loop.ogg`: OGG Vorbis, leading and trailing silence trimmed, -3 dB. It's meant to loop on the menus.
   - Ren, v0.6: `MovementAudioDirector` loops it at -12 dB while the lobby browser or waiting room is open and fades it out over about a second when a match starts.
