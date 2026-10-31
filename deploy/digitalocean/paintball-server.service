@@ -11,6 +11,11 @@ WorkingDirectory=/opt/paintball/app
 Environment=HOME=/opt/paintball
 Environment=PORT=8080
 Environment=WS_PORT=9080
+# Persistent profile/clout data (server.js DATA_DIR), outside the checkout so git resets
+# never touch it. systemd creates /var/lib/paintball/live owned by paintball (StateDirectory).
+Environment=DATA_DIR=/var/lib/paintball/live
+StateDirectory=paintball/live
+StateDirectoryMode=0750
 Environment=AUTO_START_GODOT=1
 Environment=DEDICATED_SERVER=1
 Environment=NODE_ENV=production

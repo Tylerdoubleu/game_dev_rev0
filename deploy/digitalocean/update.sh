@@ -15,6 +15,9 @@ as_pb git -C "$APP" reset --hard --quiet origin/main
 as_pb git -C "$APP" lfs pull >/dev/null 2>&1 || true
 # Pick up any changes to the deploy files themselves.
 install -m 0644 "$APP/deploy/digitalocean/paintball-server.service" /etc/systemd/system/ 2>/dev/null || true
+# Nightly live-data backup (script + timer) ride along with main too.
+install -m 0755 "$APP/deploy/digitalocean/backup-live.sh" /usr/local/sbin/paintball-backup-live.sh 2>/dev/null || true
+install -m 0644 "$APP/deploy/digitalocean/paintball-backup.service" "$APP/deploy/digitalocean/paintball-backup.timer" /etc/systemd/system/ 2>/dev/null || true
 if [ -f "$APP/deploy/digitalocean/Caddyfile" ] && ! cmp -s "$APP/deploy/digitalocean/Caddyfile" /etc/caddy/Caddyfile; then
   install -m 0644 "$APP/deploy/digitalocean/Caddyfile" /etc/caddy/Caddyfile
   systemctl reload caddy || systemctl restart caddy

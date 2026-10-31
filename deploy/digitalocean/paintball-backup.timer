@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly backup of live paintball data at 03:30 (droplet time, UTC)
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target

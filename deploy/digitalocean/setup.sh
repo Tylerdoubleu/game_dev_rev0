@@ -58,10 +58,12 @@ SRC=${DEPLOY_SRC:-$D}
 install -m 0755 "$SRC/update.sh" /opt/paintball/update.sh
 install -m 0644 "$SRC/paintball-server.service" "$SRC/paintball-update.service" "$SRC/paintball-update.timer" /etc/systemd/system/
 install -m 0644 "$SRC/Caddyfile" /etc/caddy/Caddyfile
+install -m 0755 "$SRC/backup-live.sh" /usr/local/sbin/paintball-backup-live.sh
+install -m 0644 "$SRC/paintball-backup.service" "$SRC/paintball-backup.timer" /etc/systemd/system/
 mkdir -p /etc/systemd/system/caddy.service.d
 printf '[Service]\nEnvironment=PAINTBALL_HOST=%s\n' "$PAINTBALL_HOST" > /etc/systemd/system/caddy.service.d/paintball.conf
 
 systemctl daemon-reload
-systemctl enable --now paintball-server.service paintball-update.timer
+systemctl enable --now paintball-server.service paintball-update.timer paintball-backup.timer
 systemctl enable caddy && systemctl restart caddy
 echo "done: https://${PAINTBALL_HOST}/healthz  wss://${PAINTBALL_HOST}/ws"

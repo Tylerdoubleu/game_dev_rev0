@@ -21,6 +21,11 @@ Environment=CORS_ORIGINS=https://test.jeetball.com
 # Same web root GitHub Pages serves (export_web.sh copies build/web/index.* to docs/).
 Environment=WEB_ROOT=/opt/paintball-test/app/docs
 Environment=PUBLIC_WS_URL=wss://test.jeetball.com/ws
+# Persistent profile/clout data (server.js DATA_DIR), outside the checkout so git resets
+# never touch it. systemd creates /var/lib/paintball/test owned by paintball (StateDirectory).
+Environment=DATA_DIR=/var/lib/paintball/test
+StateDirectory=paintball/test
+StateDirectoryMode=0750
 Environment=AUTO_START_GODOT=1
 Environment=DEDICATED_SERVER=1
 Environment=NODE_ENV=production

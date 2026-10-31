@@ -33,7 +33,26 @@ The web client is **not** exported on the server; players load it from GitHub Pa
 - `paintball-server.service`: runs `node server/server.js` with `Restart=always`;
   enabled at boot.
 - `paintball-update.timer` / `paintball-update.service` / `update.sh`: auto-deploy.
-- `Caddyfile`: TLS + reverse proxy to `127.0.0.1:8080` + CORS for `/api/*`.
+- `Caddyfile`: TLS + reverse proxy to `127.0.0.1:8080` + CORS for `/api/*`. Caddy answers
+  `OPTIONS /api/*` preflight itself with `204` (`Allow-Origin *`, `Allow-Methods GET, POST, PUT, OPTIONS`,
+  `Allow-Headers Authorization, Content-Type`, `Max-Age 600`), so it never reaches Node.
+- `paintball-backup.timer` / `paintball-backup.service` / `backup-live.sh`: nightly live-data backup (below).
+
+## Persistent data (profiles, callsigns, clout)
+
+`server.js` stores player data under `DATA_DIR`, outside the git checkout so the auto-update
+`git reset --hard` never touches it. Each unit sets `DATA_DIR` and a matching `StateDirectory=`,
+so systemd creates the folder (owned by `paintball`, mode 0750) on start:
+
+| | Live | Test |
+|---|---|---|
+| `DATA_DIR` | `/var/lib/paintball/live` | `/var/lib/paintball/test` |
+
+Test profiles never mix with live ones. Live data is backed up nightly at 03:30 droplet time (UTC)
+by `paintball-backup.timer` to `/var/backups/paintball/live-YYYYMMDD.tar.gz`, keeping 14 days.
+`update.sh` re-installs the backup script/units when `main` changes. Restore:
+`systemctl stop paintball-server && tar -xzf /var/backups/paintball/live-YYYYMMDD.tar.gz -C /var/lib/paintball && systemctl start paintball-server`.
+Run a backup now: `systemctl start paintball-backup && journalctl -u paintball-backup -n 5`.
 
 ## Auto-update from main
 

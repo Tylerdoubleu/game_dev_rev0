@@ -1,0 +1,6 @@
+[Unit]
+Description=Back up live paintball profile/clout data (/var/lib/paintball/live) to /var/backups/paintball
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/paintball-backup-live.sh
