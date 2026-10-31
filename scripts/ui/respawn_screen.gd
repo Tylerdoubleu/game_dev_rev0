@@ -1,16 +1,16 @@
 class_name RespawnScreen
 extends CanvasLayer
 ## v0.6 (Ren): Gritty 2000s tournament "you've been hit" + respawn picker. Short words, one clear map.
-## Shows: who hit you, a top-down view of YOUR half of the field (drawn the way you face it, enemy at the top),
-## and five big numbered spawn spots you click or pick with 1-5. Emits zone_picked(index) - the arena does the respawn.
+## Shows: who hit you, a top-down mini map of the whole field (drawn the way you face it: your base at the bottom,
+## enemy base at the top), five big numbered spawn spots you click or pick with 1-5, and optionally the shooter and
+## where you went down. Emits zone_picked(index) - the arena does the respawn.
 ##   var rs := RespawnScreen.new(); add_child(rs)
 ##   rs.zone_picked.connect(func(i): ...)
-##   rs.open("Viper", "ALPHA", arena._get_team_respawn_zones("ALPHA"), deaths, max_deaths)
+##   rs.open("Viper", "ALPHA", arena._get_team_respawn_zones("ALPHA"), deaths, max_deaths, shooter_pos, death_pos)
+##   (shooter_pos / death_pos are world positions; pass NO_POS or leave them out to hide them)
 
 signal zone_picked(index: int)
 
-const SHORT_NAMES := {"snake_corner": "SNAKE CORNER", "left_brick": "SNAKE BRICK", "home_gate": "HOME",
-	"right_brick": "DORITO BRICK", "dorito_corner": "DORITO CORNER"}
 const DEFAULT_ZONE := 2
 const RED := Color(0.86, 0.2, 0.17)
 const BLUE := Color(0.2, 0.45, 0.95)
@@ -25,7 +25,9 @@ const HALF_BUNKERS := [
 	[-35, 15, 1.1, 9.5], [-37.2, 5.5, 1.1, 9.5], [-35, 20, 2.6, 1.3], [-36.1, 10.2, 2.8, 1.3], [-37.2, 0, 3.0, 1.3]]
 const FIELD_HALF_W := 42.0
 const FIELD_DEPTH := 50.0
-const MAP_SIZE := Vector2(880, 440)
+const MAP_SIZE := Vector2(440, 520)
+const NO_POS := Vector3(INF, INF, INF)
+const SPOT_HIT := 70.0
 
 var handle_keys := true
 var _team := "ALPHA"
@@ -35,6 +37,9 @@ var _by_label: Label
 var _deaths_label: Label
 var _map: Control
 var _spots: Array[Button] = []
+var _shooter_pos := NO_POS
+var _death_pos := NO_POS
+var _killer := ""
 var _root: Control
 
 func _init() -> void:
@@ -45,11 +50,15 @@ func _init() -> void:
 func _ready() -> void:
 	_build()
 
-func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deaths: int = -1) -> void:
+func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deaths: int = -1,
+		shooter_pos: Vector3 = NO_POS, death_pos: Vector3 = NO_POS) -> void:
 	if _root == null:
 		_build()
 	_team = team
 	_zones = zones
+	_killer = killer
+	_shooter_pos = shooter_pos
+	_death_pos = death_pos
 	_by_label.text = ("by " + killer) if killer != "" else ""
 	_by_label.visible = killer != ""
 	_deaths_label.text = ("DEATHS %d / %d" % [deaths, max_deaths]) if deaths >= 0 and max_deaths > 0 else ""
@@ -88,11 +97,22 @@ func _slot_for_index(index: int) -> int:
 func _team_color() -> Color:
 	return RED if _team == "ALPHA" else BLUE
 
-## Map coordinates: you look toward the enemy, so the 50 line is at the top and your back line at the bottom.
-## ALPHA faces -Z (+X on the right); BRAVO faces +Z, so its view is mirrored.
-func _to_map(x: float, z_abs: float) -> Vector2:
-	var m := 1.0 if _team == "ALPHA" else -1.0
-	return Vector2((x * m + FIELD_HALF_W) / (FIELD_HALF_W * 2.0) * MAP_SIZE.x, (z_abs + 2.0) / (FIELD_DEPTH + 2.0) * MAP_SIZE.y)
+## Map coordinates: you look toward the enemy, so your base is at the bottom and theirs at the top.
+## ALPHA's base is +Z and it faces -Z (+X on the right); BRAVO's base is -Z and it faces +Z, so its view is mirrored.
+func _side() -> float:
+	return 1.0 if _team == "ALPHA" else -1.0
+
+func _to_map(x: float, z: float) -> Vector2:
+	var s := _side()
+	var depth := FIELD_DEPTH + 2.0
+	return Vector2((x * s + FIELD_HALF_W) / (FIELD_HALF_W * 2.0) * MAP_SIZE.x, (z * s + depth) / (depth * 2.0) * MAP_SIZE.y)
+
+## Your-side coordinates (z_own > 0 = your half) for the static bunker table.
+func _own_to_map(x: float, z_own: float) -> Vector2:
+	return _to_map(x, z_own * _side())
+
+static func _has(p: Vector3) -> bool:
+	return is_finite(p.x)
 
 func _build() -> void:
 	_root = Control.new()
@@ -129,9 +149,9 @@ func _build() -> void:
 	head.alignment = BoxContainer.ALIGNMENT_CENTER
 	head.add_theme_constant_override("separation", 18)
 	col.add_child(head)
-	_hit_label = TournamentSkin.label("SPLATTED", 64, TournamentSkin.PINK, TournamentSkin.STENCIL, 8)
+	_hit_label = TournamentSkin.label("SPLATTED", 52, TournamentSkin.PINK, TournamentSkin.STENCIL, 8)
 	head.add_child(_hit_label)
-	_by_label = TournamentSkin.marker("", 34, TournamentSkin.CHALK)
+	_by_label = TournamentSkin.marker("", 30, TournamentSkin.CHALK)
 	head.add_child(_by_label)
 
 	var board := PanelContainer.new()
@@ -140,7 +160,7 @@ func _build() -> void:
 	var inner := VBoxContainer.new()
 	inner.add_theme_constant_override("separation", 8)
 	board.add_child(inner)
-	var title := TournamentSkin.label("PICK YOUR SPAWN", 26, TournamentSkin.NEON)
+	var title := TournamentSkin.label("PICK YOUR SPAWN", 22, TournamentSkin.NEON)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	inner.add_child(title)
 	_map = Control.new()
@@ -153,7 +173,8 @@ func _build() -> void:
 		b.name = "Spot%d" % (i + 1)
 		b.focus_mode = Control.FOCUS_NONE
 		b.flat = true
-		b.custom_minimum_size = Vector2(150, 92)
+		b.custom_minimum_size = Vector2(SPOT_HIT, SPOT_HIT)
+		b.size = Vector2(SPOT_HIT, SPOT_HIT)
 		b.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 		var idx := i
 		b.pressed.connect(func() -> void: pick(idx))
@@ -164,10 +185,10 @@ func _build() -> void:
 
 	var foot := HBoxContainer.new()
 	col.add_child(foot)
-	var keys := TournamentSkin.led("CLICK A SPOT  OR  PRESS 1-5", 20, TournamentSkin.AMBER)
+	var keys := TournamentSkin.led("CLICK A SPOT  OR  PRESS 1-5", 18, TournamentSkin.AMBER)
 	keys.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	foot.add_child(keys)
-	_deaths_label = TournamentSkin.led("", 20, TournamentSkin.CHALK)
+	_deaths_label = TournamentSkin.led("", 18, TournamentSkin.CHALK)
 	foot.add_child(_deaths_label)
 
 func _layout_spots() -> void:
@@ -177,57 +198,69 @@ func _layout_spots() -> void:
 		if not b.visible:
 			continue
 		var p: Vector3 = _zones[i]["pos"]
-		b.position = _to_map(p.x, absf(p.z)) - Vector2(75, 64)
+		b.position = _to_map(p.x, p.z) - Vector2(SPOT_HIT, SPOT_HIT) * 0.5
 		b.tooltip_text = ""
-
-func _spot_name(i: int) -> String:
-	var z: Dictionary = _zones[i]
-	return SHORT_NAMES.get(z.get("id", ""), String(z.get("title", "")).get_slice("] ", 1))
 
 func _draw_map() -> void:
 	var tc := _team_color()
+	var ec := BLUE if _team == "ALPHA" else RED
 	var font: Font = TournamentSkin.STENCIL
 	var mfont: Font = TournamentSkin.MARKER
-	# turf + half-field
-	_map.draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color(0.11, 0.16, 0.1, 0.96))
-	var a := _to_map(-FIELD_HALF_W + 2.0, 0.0)
-	var b := _to_map(FIELD_HALF_W - 2.0, FIELD_DEPTH)
-	var field := Rect2(Vector2(minf(a.x, b.x), a.y), Vector2(absf(b.x - a.x), b.y - a.y))
-	_map.draw_rect(field, Color(0.15, 0.22, 0.13))
-	_map.draw_rect(field, Color(1, 1, 1, 0.18), false, 2.0)
-	# 50 line (enemy beyond) + your back line
-	var y50 := _to_map(0, 0).y
-	_map.draw_line(Vector2(field.position.x, y50), Vector2(field.end.x, y50), Color(TournamentSkin.CHALK, 0.6), 3.0)
-	_map.draw_rect(Rect2(0, 0, MAP_SIZE.x, y50), Color(0.3, 0.05, 0.05, 0.35) if _team != "ALPHA" else Color(0.05, 0.1, 0.3, 0.35))
-	_map.draw_string(font, Vector2(0, y50 + 26), "ENEMY  ▲", HORIZONTAL_ALIGNMENT_CENTER, MAP_SIZE.x, 18, Color(TournamentSkin.CHALK, 0.55))
-	var yb := _to_map(0, 45.5).y
-	_map.draw_dashed_line(Vector2(field.position.x, yb), Vector2(field.end.x, yb), Color(tc, 0.55), 2.0, 10.0)
-	# side names (snake / dorito) on the edges, mirrored for BRAVO
-	var snake_x := _to_map(-38, 0).x
-	var dorito_x := _to_map(38, 0).x
-	_map.draw_string(mfont, Vector2(snake_x - 30, MAP_SIZE.y * 0.32), "SNAKE", HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color(TournamentSkin.CHALK, 0.5))
-	_map.draw_string(mfont, Vector2(dorito_x - 30, MAP_SIZE.y * 0.32), "DORITO", HORIZONTAL_ALIGNMENT_CENTER, 60, 15, Color(TournamentSkin.CHALK, 0.5))
-	# bunkers (muted, just for orientation)
+	_map.draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color(0.09, 0.13, 0.08, 0.97))
+	var a := _own_to_map(-(FIELD_HALF_W - 2.0), -FIELD_DEPTH)
+	var b := _own_to_map(FIELD_HALF_W - 2.0, FIELD_DEPTH)
+	var field := Rect2(Vector2(minf(a.x, b.x), minf(a.y, b.y)), (b - a).abs())
+	var y50 := _own_to_map(0, 0).y
+	# halves: enemy tint on top, yours on the bottom
+	_map.draw_rect(Rect2(field.position, Vector2(field.size.x, y50 - field.position.y)), Color(ec.darkened(0.55), 0.85))
+	_map.draw_rect(Rect2(Vector2(field.position.x, y50), Vector2(field.size.x, field.end.y - y50)), Color(tc.darkened(0.6), 0.85))
+	_map.draw_rect(field, Color(1, 1, 1, 0.22), false, 2.0)
+	_map.draw_line(Vector2(field.position.x, y50), Vector2(field.end.x, y50), Color(TournamentSkin.CHALK, 0.6), 2.0)
+	for zz in [45.5, -45.5]:
+		var yb := _own_to_map(0, zz).y
+		_map.draw_dashed_line(Vector2(field.position.x, yb), Vector2(field.end.x, yb), Color(tc if zz > 0 else ec, 0.7), 2.0, 8.0)
+	# bunkers on both halves
 	var px := MAP_SIZE.x / (FIELD_HALF_W * 2.0)
-	var pz := MAP_SIZE.y / (FIELD_DEPTH + 2.0)
+	var pz := MAP_SIZE.y / ((FIELD_DEPTH + 2.0) * 2.0)
 	for bk in HALF_BUNKERS:
-		var c := _to_map(bk[0], bk[1])
-		var s := Vector2(bk[2] * px, bk[3] * pz) * 1.15
-		_map.draw_rect(Rect2(c - s * 0.5, s), Color(0.55, 0.55, 0.48, 0.5))
-	# spawn spots
+		for half in ([1.0] if float(bk[1]) == 0.0 else [1.0, -1.0]):
+			var c := _own_to_map(bk[0], float(bk[1]) * half)
+			var sz := Vector2(bk[2] * px, bk[3] * pz) * 1.2
+			_map.draw_rect(Rect2(c - sz * 0.5, sz), Color(0.62, 0.62, 0.55, 0.6))
+	# shooter, where you went down, and the line between them
+	var has_s := _has(_shooter_pos)
+	var has_d := _has(_death_pos)
+	var sp := _to_map(_shooter_pos.x, _shooter_pos.z) if has_s else Vector2.ZERO
+	var dp := _to_map(_death_pos.x, _death_pos.z) if has_d else Vector2.ZERO
+	if has_s and has_d:
+		_map.draw_dashed_line(sp, dp, Color(TournamentSkin.PINK, 0.9), 2.0, 6.0)
+	if has_d:
+		var k := 7.0
+		_map.draw_line(dp + Vector2(-k, -k), dp + Vector2(k, k), Color.BLACK, 6.0)
+		_map.draw_line(dp + Vector2(-k, k), dp + Vector2(k, -k), Color.BLACK, 6.0)
+		_map.draw_line(dp + Vector2(-k, -k), dp + Vector2(k, k), Color.WHITE, 3.0)
+		_map.draw_line(dp + Vector2(-k, k), dp + Vector2(k, -k), Color.WHITE, 3.0)
+		_label_at(dp + Vector2(12, 5), "YOU", Color.WHITE)
+	if has_s:
+		_map.draw_circle(sp, 9.0, Color.BLACK)
+		_map.draw_circle(sp, 7.0, TournamentSkin.PINK)
+		_label_at(sp + Vector2(12, 5), _killer.to_upper() if _killer != "" else "SHOOTER", TournamentSkin.PINK)
+	# spawn spots: big numbers only
 	for i in mini(_zones.size(), _spots.size()):
 		var btn := _spots[i]
-		var cpos := btn.position + Vector2(75, 64)
+		var cpos := btn.position + Vector2(SPOT_HIT, SPOT_HIT) * 0.5
 		var hot := btn.is_hovered()
-		var r := 28.0 if not hot else 32.0
-		_map.draw_circle(cpos, r + 6.0, Color(0, 0, 0, 0.55))
-		_map.draw_circle(cpos, r, TournamentSkin.NEON if hot else tc)
-		_map.draw_arc(cpos, r, 0, TAU, 40, TournamentSkin.NEON, 3.0 if i == DEFAULT_ZONE or hot else 2.0)
-		var num := str(_slot_for_index(i) + 1)
-		var ink := Color(0.06, 0.06, 0.05) if hot else Color.WHITE
-		_map.draw_string(font, cpos + Vector2(-20, 11), num, HORIZONTAL_ALIGNMENT_CENTER, 40, 30, ink)
-		var nm := _spot_name(i)
-		var nc := TournamentSkin.NEON if hot else TournamentSkin.CHALK
-		var lx := clampf(cpos.x - 85.0, 4.0, MAP_SIZE.x - 174.0)
-		_map.draw_string_outline(font, Vector2(lx, cpos.y - r - 12), nm, HORIZONTAL_ALIGNMENT_CENTER, 170, 18, 5, Color(0, 0, 0, 0.9))
-		_map.draw_string(font, Vector2(lx, cpos.y - r - 12), nm, HORIZONTAL_ALIGNMENT_CENTER, 170, 18, nc)
+		var r := 19.0 if not hot else 23.0
+		_map.draw_circle(cpos, r + 4.0, Color(0, 0, 0, 0.6))
+		_map.draw_circle(cpos, r, TournamentSkin.NEON if hot else Color(0.07, 0.07, 0.06))
+		_map.draw_arc(cpos, r, 0, TAU, 40, TournamentSkin.NEON, 3.0)
+		var ink := Color(0.06, 0.06, 0.05) if hot else TournamentSkin.NEON
+		_map.draw_string(font, cpos + Vector2(-20, 9), str(_slot_for_index(i) + 1), HORIZONTAL_ALIGNMENT_CENTER, 40, 24, ink)
+
+func _label_at(at: Vector2, text: String, color: Color) -> void:
+	var font: Font = TournamentSkin.STENCIL
+	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
+	if at.x + w > MAP_SIZE.x - 4.0:
+		at.x -= w + 24.0
+	_map.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 4, Color(0, 0, 0, 0.9))
+	_map.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
