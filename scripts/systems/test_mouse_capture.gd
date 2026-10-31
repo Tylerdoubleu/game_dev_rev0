@@ -317,7 +317,7 @@ func _run() -> void:
 	_check(bs is CanvasLayer and (bs as CanvasLayer).visible, "arena has a BuildStamp layer")
 	if bs is CanvasLayer:
 		var lbl: Label = (bs as CanvasLayer).get_node_or_null("BuildStampLabel")
-		_check(lbl != null and lbl.text == want and want.begins_with("v0.6.3 · "), "stamp text '%s'" % (lbl.text if lbl != null else "?"))
+		_check(lbl != null and lbl.text == want and want.begins_with("v0.6.4 · "), "stamp text '%s'" % (lbl.text if lbl != null else "?"))
 		_check((bs as CanvasLayer).layer > int(lef.get("LAYER")) and (bs as CanvasLayer).layer > 12, "stamp layer %d sits above the HUD/menus and the lobby browser (%d)" % [(bs as CanvasLayer).layer, int(lef.get("LAYER"))])
 		lef.call("open_browser")
 		await _frames(2)
