@@ -426,6 +426,9 @@ func _on_hud_state_changed(state: Dictionary) -> void:
 func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> void:
 	if round_label == null:
 		return
+	if ffa_match != null:
+		round_label.text = ffa_round_text(ffa_match.call("standings"), int(ffa_match.get("kills_to_win")), time_left)
+		return
 	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else ("SOLO+NPCs" if NetworkLobby.fill_bots_enabled else "PVP ONLY")
 	var flag_hud_status := "AT 50"
 	if GameManager.flag_state == "CARRIED":
@@ -442,7 +445,35 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 func _on_round_won(round_num: int) -> void:
 	_on_status_banner("ROUND %d WON! All 5 OpFor Eliminated — Press [T] for Next Round" % round_num, Color(0.3, 1.0, 0.45))
 
+## v0.7 Solo FFA HUD line (no flag / death-limit text): your eliminations, the leader, first to N.
+static func ffa_round_text(rows: Array, kills_to_win: int, time_left: float) -> String:
+	var mine := 0
+	var leader := "-"
+	var lead_kills := 0
+	for r in rows:
+		if bool(r.get("is_player", false)):
+			mine = int(r.get("kills", 0))
+	if not rows.is_empty():
+		lead_kills = int(rows[0].get("kills", 0))
+		leader = "YOU" if bool(rows[0].get("is_player", false)) else String(rows[0].get("name", "-"))
+	return (
+		"SOLO FFA DEATHMATCH  |  YOUR ELIMS: %d  |  LEADER: %s (%d)  |  FIRST TO %d  |  %.0fs\n" % [mine, leader, lead_kills, kills_to_win, time_left] +
+		"Move: WASD + Shift Break Out | E Peek (Active Hand, X Swap) | Q Crouch (Shift+Q Slide) | C Prone (Shift+C Dive)\n" +
+		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
+		"R Pod Reload | F Callout Bunker | [M] Scoreboard | [TAB] Menu"
+	)
+
+func _on_ffa_standings_changed(_rows: Array) -> void:
+	_refresh_scoreboard_text()
+	_refresh_ffa_round_label()
+
+func _refresh_ffa_round_label() -> void:
+	if ffa_match != null and round_label != null:
+		round_label.text = ffa_round_text(ffa_match.call("standings"), int(ffa_match.get("kills_to_win")), GameManager.round_time_left)
+
 func _on_status_banner(msg: String, color: Color) -> void:
+	if ffa_match != null and msg.contains("Go Get Center Flag"):
+		msg = msg.replace(" — Go Get Center Flag!", "")
 	if status_label:
 		status_label.text = msg
 		status_label.add_theme_color_override("font_color", color)
@@ -1459,7 +1490,8 @@ func start_solo_ffa(opts: Dictionary = {}) -> Node:
 	ffa_match.name = "SoloFfaMatch"
 	add_child(ffa_match)
 	ffa_match.call("start", self, player, opts)
-	ffa_match.connect("standings_changed", func(_rows): _refresh_scoreboard_text())
+	ffa_match.connect("standings_changed", _on_ffa_standings_changed)
+	_refresh_ffa_round_label()
 	if lobby_canvas != null:
 		_set_lobby_overlay_visible(false)
 	if has_method("clear_gameplay_input_blocks"):

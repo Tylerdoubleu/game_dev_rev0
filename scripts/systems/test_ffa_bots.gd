@@ -117,6 +117,18 @@ func _test_ffa_match() -> void:
 	_check(int(m.get("kills_to_win")) == 10, "first to 10")
 	_check(not bool(GM.get("death_limit_enabled")), "GameManager death limit off during FFA")
 	_check(String(arena.call("respawn_map_mode")) == "deathmatch", "respawn map in deathmatch mode")
+	# HUD: no CTF text during FFA - your eliminations, the leader and first-to-N instead.
+	arena.call("_on_round_updated", 1, 0, 200.0)
+	var rl: Label = arena.get("round_label")
+	if rl != null:
+		var hud := rl.text
+		_check(not hud.contains("FLAG:") and not hud.contains("DEATHS:") and not hud.contains("Flag Pull"), "FFA HUD hides CTF flag / death-limit text")
+		_check(hud.contains("YOUR ELIMS: 0") and hud.contains("LEADER:") and hud.contains("FIRST TO 10"), "FFA HUD shows your elims, leader, first to 10")
+		arena.call("_on_status_banner", "BUZZER! CLEAN BREAKOUT! (+15% Sprint Burst for 1.5s — Go Get Center Flag!)", Color.WHITE)
+		var sl: Label = arena.get("status_label")
+		_check(sl == null or not sl.text.contains("Center Flag"), "FFA breakout banner drops 'Go Get Center Flag'")
+	var ft: String = ArenaScript.ffa_round_text([{"name": "Viper", "kills": 4, "deaths": 1, "is_player": false}, {"name": "Me", "kills": 2, "deaths": 3, "is_player": true}], 10, 90.0)
+	_check(ft.contains("YOUR ELIMS: 2") and ft.contains("LEADER: Viper (4)") and ft.contains("FIRST TO 10"), "ffa_round_text: elims 2, leader Viper (4), first to 10")
 	var zones: Array = m.call("player_respawn_zones")
 	_check(zones.size() >= 3, "player gets FFA respawn zones (%d)" % zones.size())
 	var start_pos := {}
@@ -148,6 +160,9 @@ func _test_ffa_match() -> void:
 	_check(not bool(arena.call("is_solo_ffa_active")), "stop_solo_ffa ends the match")
 	_check(bool(GM.get("death_limit_enabled")), "death limit restored after stop")
 	_check(get_nodes_in_group("bot_players").is_empty(), "FFA bots removed on stop")
+	arena.call("_on_round_updated", 1, 5, 200.0)
+	var rl2: Label = arena.get("round_label")
+	_check(rl2 == null or rl2.text.contains("FLAG:"), "CTF HUD text back after FFA stops")
 
 func _test_first_to_n() -> void:
 	var m: Node = arena.call("start_solo_ffa", {"bots": 2, "tier": "amateur", "kills_to_win": 2})
