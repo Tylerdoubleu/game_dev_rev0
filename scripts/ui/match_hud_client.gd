@@ -18,6 +18,8 @@ extends Node
 ##    (remote avatar or local player), on the ground where dropped, back on the stand when returned/captured/reset.
 ##    HUD alerts ("YOU HAVE THE FLAG", "ENEMY HAS YOUR FLAG") + on-screen / off-screen edge markers to carriers.
 
+## v0.6.4: default red/blue only. Live team colors come from _tc() (ProPaintballRig3D.team_color: lobby team_colors ->
+## TeamPalette or fallback). "red"/"blue" below are NetworkLobby.team_label() side tags (ALPHA/BRAVO), not literal colors.
 const TEAM_COLORS := {"red": Color(0.96, 0.24, 0.18), "blue": Color(0.24, 0.56, 1.0)}
 const GOLD := Color(0.98, 0.84, 0.15)
 const KILL_FEED_MAX: int = 5
@@ -152,6 +154,8 @@ func setup(p_builder: Node, p_player: Node) -> void:
 	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
 	if NetworkLobby.has_signal("mode_changed"):
 		NetworkLobby.mode_changed.connect(_on_mode_changed)
+	if NetworkLobby.has_signal("team_colors_changed"): # v0.6.4 lobby team colors (Tim), guarded until it lands
+		NetworkLobby.connect("team_colors_changed", func(_tc_dict = null) -> void: apply_team_colors())
 	# adopt whatever the lobby already knows (e.g. when the scene is rebuilt mid-match)
 	_on_lobby_state_changed({})
 	_refresh_all()
@@ -464,8 +468,8 @@ func _on_round_ended(data: Dictionary) -> void:
 		last_round_end_text = "ROUND %d - DRAW: %s" % [finished, why]
 	else:
 		last_round_end_text = "ROUND %d - %s WINS: %s" % [finished, winner_color.to_upper(), why]
-	last_round_end_text += "   [RED %d - %d BLUE]" % [int(score["red"]), int(score["blue"])]
-	banner_color = TEAM_COLORS.get(winner_color, GOLD)
+	last_round_end_text += "   [%s %d - %d %s]" % [_tn("red"), int(score["red"]), int(score["blue"]), _tn("blue")]
+	banner_color = _tc(winner_color, GOLD)
 	if intermission_left > 0.0: # 0 = this round decided the match; match_ended follows
 		start_countdown(intermission_left, "ROUND %d" % next_round_num, "round")
 	_show_banner(last_round_end_text, "round_end", maxf(ROUND_END_HOLD_MIN, intermission_left - COUNTDOWN_SECONDS), banner_color)
@@ -482,7 +486,7 @@ func round_why(data: Dictionary) -> String:
 				by_name = _player_name(int(data.get("by", 0)))
 			why = "FLAG CAPTURED" + (" BY %s" % by_name.to_upper() if not by_name.is_empty() else "")
 		"elimination":
-			why = "%s TEAM ELIMINATED" % ("BLUE" if winner_color == "red" else "RED")
+			why = "%s TEAM ELIMINATED" % (_tn("blue") if winner_color == "red" else _tn("red"))
 		"double_elimination":
 			why = "DOUBLE ELIMINATION - NO POINT"
 		"time":
@@ -506,11 +510,11 @@ func _on_match_ended(data: Dictionary) -> void:
 	var m := String(data.get("mode", mode))
 	var wc := String(data.get("winner_color", ""))
 	var fs: Dictionary = score if m == "ctf" else kills
-	var final_line := "FINAL: RED %d - %d BLUE" % [int(fs["red"]), int(fs["blue"])]
+	var final_line := "FINAL: %s %d - %d %s" % [_tn("red"), int(fs["red"]), int(fs["blue"]), _tn("blue")]
 	var why := "FIRST TO %d KILLS" % NetworkLobby.DM_KILLS_TO_WIN if String(data.get("reason", "")) == "kills" else "BEST OF %d ROUNDS" % NetworkLobby.CTF_BEST_OF
 	var head := "MATCH OVER - %s WINS" % wc.to_upper() if not wc.is_empty() else "MATCH OVER - DRAW"
 	exit_spectate()
-	_show_banner("%s\n%s (%s)" % [head, final_line, why], "match_end", maxf(MATCH_END_BANNER_TIME, float(data.get("return_to_lobby_in_ms", 0)) / 1000.0), TEAM_COLORS.get(wc, GOLD))
+	_show_banner("%s\n%s (%s)" % [head, final_line, why], "match_end", maxf(MATCH_END_BANNER_TIME, float(data.get("return_to_lobby_in_ms", 0)) / 1000.0), _tc(wc, GOLD))
 
 func _on_player_eliminated(data: Dictionary) -> void:
 	var sc := NetworkLobby.team_label(String(data.get("shooter_team", "ALPHA")))
@@ -546,15 +550,15 @@ func _on_flag_state_changed(data: Dictionary) -> void:
 	match action:
 		"picked_up":
 			if int(f["carrier"]) == me:
-				_show_banner("YOU HAVE THE %s FLAG - RUN IT HOME!" % c.to_upper(), "info", 2.4, TEAM_COLORS[c])
+				_show_banner("YOU HAVE THE %s FLAG - RUN IT HOME!" % _tn(c), "info", 2.4, _tc(c))
 			elif mine:
-				_show_banner("%s HAS YOUR FLAG!" % who.to_upper(), "info", 2.4, TEAM_COLORS[enemy_color()])
+				_show_banner("%s HAS YOUR FLAG!" % who.to_upper(), "info", 2.4, _tc(enemy_color()))
 			else:
-				_show_banner("%s PULLED THE %s FLAG!" % [who.to_upper(), c.to_upper()], "info", 2.0, TEAM_COLORS[my_color()])
+				_show_banner("%s PULLED THE %s FLAG!" % [who.to_upper(), _tn(c)], "info", 2.0, _tc(my_color()))
 		"dropped", "carrier_eliminated", "carrier_left":
-			_show_banner("%s FLAG DROPPED!" % c.to_upper(), "info", 2.0, TEAM_COLORS[c])
+			_show_banner("%s FLAG DROPPED!" % _tn(c), "info", 2.0, _tc(c))
 		"returned", "auto_returned":
-			_show_banner("%s FLAG RETURNED TO BASE" % c.to_upper(), "info", 2.0, TEAM_COLORS[c])
+			_show_banner("%s FLAG RETURNED TO BASE" % _tn(c), "info", 2.0, _tc(c))
 		"captured":
 			pass # round_ended / round_results carry who captured it
 
@@ -679,7 +683,7 @@ func stats_text() -> String:
 			t += "  CAPS %d" % int(mine["captures"])
 	if mode == "ctf":
 		var tc := team_captures()
-		t += ("   |   " if not t.is_empty() else "") + "CAPTURES  RED %d - %d BLUE" % [int(tc["red"]), int(tc["blue"])]
+		t += ("   |   " if not t.is_empty() else "") + "CAPTURES  %s %d - %d %s" % [_tn("red"), int(tc["red"]), int(tc["blue"]), _tn("blue")]
 	return t
 
 func respawn_text() -> String:
@@ -694,7 +698,7 @@ func _check_team_banner(force: bool = false) -> void:
 	if c != last_team_shown or force:
 		var first := last_team_shown.is_empty()
 		last_team_shown = c
-		_show_banner("%s: YOU ARE ON TEAM %s (%s)" % ["AUTO-ASSIGNED" if first else "TEAMS BALANCED", c.to_upper(), NetworkLobby.local_team], "team", TEAM_BANNER_TIME, TEAM_COLORS[c])
+		_show_banner("%s: YOU ARE ON TEAM %s (%s)" % ["AUTO-ASSIGNED" if first else "TEAMS BALANCED", _tn(c), NetworkLobby.local_team], "team", TEAM_BANNER_TIME, _tc(c))
 
 ## =========================================== spectate ===========================================
 
@@ -891,13 +895,13 @@ func _build_hud() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 18)
 	vb.add_child(row)
-	red_score_label = _mk_label("RedScore", 26, TEAM_COLORS["red"], true)
+	red_score_label = _mk_label("RedScore", 26, _tc("red"), true)
 	red_score_label.custom_minimum_size = Vector2(170, 0)
 	row.add_child(red_score_label)
 	var vs := _mk_label("Vs", 22, Color(0.85, 0.85, 0.85), true)
 	vs.text = ":"
 	row.add_child(vs)
-	blue_score_label = _mk_label("BlueScore", 26, TEAM_COLORS["blue"], true)
+	blue_score_label = _mk_label("BlueScore", 26, _tc("blue"), true)
 	blue_score_label.custom_minimum_size = Vector2(170, 0)
 	row.add_child(blue_score_label)
 	info_label = _mk_label("RoundInfo", 15, Color(0.92, 0.92, 0.88), true)
@@ -942,7 +946,7 @@ func _build_hud() -> void:
 	spectate_label.size = Vector2(1600, 60)
 	canvas.add_child(spectate_label)
 	for c in ["red", "blue"]:
-		var mk := _mk_label("FlagMarker_%s" % c, 16, TEAM_COLORS[c], true)
+		var mk := _mk_label("FlagMarker_%s" % c, 16, _tc(c), true)
 		mk.size = Vector2(190, 24)
 		mk.visible = false
 		canvas.add_child(mk)
@@ -973,16 +977,16 @@ func _refresh_all() -> void:
 	var src: Dictionary = score if mode == "ctf" else kills
 	mode_label.text = String(MODE_TITLES.get(mode, mode.to_upper())) + ("  -  BEST OF %d" % maxi(best_of, NetworkLobby.CTF_BEST_OF) if mode == "ctf" else ("  -  FIRST TO %d" % tgt if mode == "deathmatch" else "  -  NO WIN CONDITION"))
 	if tgt > 0:
-		red_score_label.text = "RED %d/%d" % [int(src["red"]), tgt]
-		blue_score_label.text = "%d/%d BLUE" % [int(src["blue"]), tgt]
+		red_score_label.text = "%s %d/%d" % [_tn("red"), int(src["red"]), tgt]
+		blue_score_label.text = "%d/%d %s" % [int(src["blue"]), tgt, _tn("blue")]
 	else:
-		red_score_label.text = "RED %d" % int(src["red"])
-		blue_score_label.text = "%d BLUE" % int(src["blue"])
+		red_score_label.text = "%s %d" % [_tn("red"), int(src["red"])]
+		blue_score_label.text = "%d %s" % [int(src["blue"]), _tn("blue")]
 	red_score_label.tooltip_text = unit
 	info_label.text = phase_text()
 	var ac := alive_counts()
 	alive_label.visible = mode == "ctf"
-	alive_label.text = "ALIVE   RED %d  |  BLUE %d" % [int(ac["red"]), int(ac["blue"])]
+	alive_label.text = "ALIVE   %s %d  |  %s %d" % [_tn("red"), int(ac["red"]), _tn("blue"), int(ac["blue"])]
 	var rt := round_timer_text()
 	round_timer_label.text = rt
 	round_timer_label.visible = not rt.is_empty()
@@ -991,7 +995,7 @@ func _refresh_all() -> void:
 	stats_label.visible = not stats_label.text.is_empty()
 	var mc := my_color()
 	team_label.text = "YOU: TEAM %s (%s)" % [mc.to_upper(), NetworkLobby.local_team]
-	team_label.add_theme_color_override("font_color", TEAM_COLORS[mc])
+	team_label.add_theme_color_override("font_color", _tc(mc))
 	_refresh_kill_feed()
 	_refresh_banner()
 	if break_label != null:
@@ -1036,7 +1040,7 @@ func _refresh_kill_feed() -> void:
 		var e: Dictionary = kill_feed[i]
 		var l := kill_feed_box.get_child(i) as Label
 		l.text = String(e["text"])
-		l.add_theme_color_override("font_color", TEAM_COLORS.get(String(e["shooter_color"]), Color(1, 1, 1)))
+		l.add_theme_color_override("font_color", _tc(String(e["shooter_color"]), Color(1, 1, 1)))
 		l.modulate.a = clampf((KILL_FEED_TTL - float(e["age"])) / 1.5, 0.15, 1.0)
 
 func kill_feed_texts() -> Array:
@@ -1080,7 +1084,7 @@ func _refresh_flag_hud() -> void:
 	flag_alert_label.text = t
 	flag_alert_label.visible = not t.is_empty()
 	if not t.is_empty():
-		flag_alert_label.add_theme_color_override("font_color", TEAM_COLORS[enemy_color()] if t.begins_with("ENEMY") else GOLD)
+		flag_alert_label.add_theme_color_override("font_color", _tc(enemy_color()) if t.begins_with("ENEMY") else GOLD)
 	var cam := _active_camera()
 	var vp_size := Vector2(1600, 900)
 	for c in ["red", "blue"]:
@@ -1144,12 +1148,13 @@ func _build_flags() -> void:
 	host.add_child(flags_root)
 	for c in ["red", "blue"]:
 		var team := "ALPHA" if c == "red" else "BRAVO"
-		var col: Color = TEAM_COLORS[c]
+		var col: Color = _tc(c)
 		var stand := Node3D.new()
 		stand.name = "FlagStand_%s" % c
 		flags_root.add_child(stand)
 		stand.position = _base_pos(team)
 		var plate := MeshInstance3D.new()
+		plate.name = "Plate"
 		var cyl := CylinderMesh.new()
 		cyl.top_radius = NetworkLobby.FLAG_PICKUP_RADIUS
 		cyl.bottom_radius = NetworkLobby.FLAG_PICKUP_RADIUS
@@ -1204,7 +1209,7 @@ func _build_flags() -> void:
 		flag.add_child(cloth)
 		var tag := Label3D.new()
 		tag.name = "FlagTag"
-		tag.text = "%s FLAG" % c.to_upper()
+		tag.text = "%s FLAG" % _tn(c)
 		tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 		tag.position = Vector3(0, 2.75, 0)
 		tag.font_size = 48
@@ -1248,20 +1253,20 @@ func _refresh_flags() -> void:
 		match String(f["state"]):
 			"carried":
 				flag.scale = Vector3(0.55, 0.55, 0.55)
-				tag.text = "%s FLAG - %s" % [c.to_upper(), _player_name(int(f["carrier"])).to_upper()]
+				tag.text = "%s FLAG - %s" % [_tn(c), _player_name(int(f["carrier"])).to_upper()]
 				if int(f["carrier"]) == me:
 					local_carry = true
-					local_carry_color = TEAM_COLORS[c]
+					local_carry_color = _tc(c)
 			"dropped":
 				flag.scale = Vector3.ONE
 				flag.rotation = Vector3(0, 0, deg_to_rad(68.0))
 				flag.position = _ground(f["pos"])
-				tag.text = "%s FLAG - DROPPED" % c.to_upper()
+				tag.text = "%s FLAG - DROPPED" % _tn(c)
 			_:
 				flag.scale = Vector3.ONE
 				flag.rotation = Vector3.ZERO
 				flag.position = _base_pos(String(f["team"])) + Vector3(0, 0.18, 0)
-				tag.text = "%s FLAG" % c.to_upper()
+				tag.text = "%s FLAG" % _tn(c)
 	_update_flag_followers(0.0)
 	if player != null and player.has_method("set_carrying_ctf_flag") and bool(player.get("carrying_ctf_flag")) != (local_carry and active):
 		player.call("set_carrying_ctf_flag", local_carry and active, local_carry_color)
@@ -1355,12 +1360,12 @@ func on_round_results(data: Dictionary) -> void:
 	var hold := float(data.get("next_round_in_ms", NetworkLobby.ROUND_INTERMISSION_MS)) / 1000.0
 	var title := "ROUND %d - %s" % [finished, ("%s WINS" % wc.to_upper()) if not wc.is_empty() else "DRAW"]
 	var why := round_why(data)
-	var sub := "%s\nROUND SCORE:  RED %d  -  %d BLUE    (FIRST TO %d  -  BEST OF %d)" % [why, int(sc.get("red", 0)), int(sc.get("blue", 0)),
+	var sub := "%s\nROUND SCORE:  %s %d  -  %d %s    (FIRST TO %d  -  BEST OF %d)" % [why, _tn("red"), int(sc.get("red", 0)), int(sc.get("blue", 0)), _tn("blue"),
 		int(data.get("target", NetworkLobby.CTF_ROUNDS_TO_WIN)), int(data.get("best_of", NetworkLobby.CTF_BEST_OF))]
 	if bool(data.get("match_point", false)):
-		sub += "\nMATCH POINT - %s TAKES THE MATCH" % wc.to_upper()
+		sub += "\nMATCH POINT - %s TAKES THE MATCH" % _tn(wc)
 	# next_round_in_ms is 0 when this round decided the match: match_results replaces the panel straight away
-	show_summary("round", title, sub, "NEXT ROUND IN %ds" % int(ceil(hold)) if hold > 0.0 else "", TEAM_COLORS.get(wc, GOLD),
+	show_summary("round", title, sub, "NEXT ROUND IN %ds" % int(ceil(hold)) if hold > 0.0 else "", _tc(wc, GOLD),
 		maxf(ROUND_SUMMARY_MIN, hold), data.get("scoreboard", []), "ctf")
 
 func on_match_results(data: Dictionary) -> void:
@@ -1369,7 +1374,7 @@ func on_match_results(data: Dictionary) -> void:
 	var m := String(data.get("mode", mode))
 	var wc := String(data.get("winner_color", ""))
 	var fs: Dictionary = data.get("score" if m == "ctf" else "kills", {})
-	var final_line := "FINAL: RED %d - %d BLUE" % [int(fs.get("red", 0)), int(fs.get("blue", 0))]
+	var final_line := "FINAL: %s %d - %d %s" % [_tn("red"), int(fs.get("red", 0)), int(fs.get("blue", 0)), _tn("blue")]
 	var why := "FIRST TO %d KILLS" % NetworkLobby.DM_KILLS_TO_WIN if String(data.get("reason", "")) == "kills" else "BEST OF %d ROUNDS" % NetworkLobby.CTF_BEST_OF
 	var hold := float(data.get("return_to_lobby_in_ms", 12000)) / 1000.0
 	var title := "MATCH OVER - %s WINS!" % wc.to_upper() if not wc.is_empty() else "MATCH OVER - DRAW"
@@ -1385,7 +1390,7 @@ func on_match_results(data: Dictionary) -> void:
 		sub += "\nMVP: %s  -  %d KILLS%s" % [String(mvp["name"]).to_upper(), int(mvp.get("kills", 0)), ("  /  %d CAPS" % int(mvp.get("captures", 0))) if m == "ctf" else ""]
 	awaiting_return_to_lobby = true
 	exit_spectate()
-	show_summary("match", title, sub, "BACK TO THE WAITING ROOM IN %ds" % int(ceil(hold)), TEAM_COLORS.get(wc, GOLD), hold, data.get("scoreboard", []), m)
+	show_summary("match", title, sub, "BACK TO THE WAITING ROOM IN %ds" % int(ceil(hold)), _tc(wc, GOLD), hold, data.get("scoreboard", []), m)
 
 ## Server sent everyone back to the waiting room (LobbyEntryFlow opens it); just drop the recap.
 func on_returned_to_lobby(_room_id: String = "") -> void:
@@ -1445,7 +1450,7 @@ func show_summary(kind: String, title: String, sub: String, footer: String, colo
 		summary_grid.add_child(_cell(h, GOLD, h == "PLAYER"))
 	for r in summary_rows:
 		var color_id := String(r.get("color", NetworkLobby.team_label(String(r.get("team", "ALPHA")))))
-		var col: Color = TEAM_COLORS.get(color_id, Color.WHITE)
+		var col: Color = _tc(color_id, Color.WHITE)
 		var me := int(r.get("peer", 0)) == my_peer_id()
 		summary_grid.add_child(_cell(String(r.get("name", "PLAYER")).to_upper() + ("  (YOU)" if me else ""), Color(1, 1, 1) if me else col.lightened(0.25), true))
 		summary_grid.add_child(_cell(color_id.to_upper(), col, false))
@@ -1519,3 +1524,39 @@ func _build_summary() -> void:
 	vb.add_child(summary_footer)
 	summary_panel.visible = false
 	canvas.add_child(summary_panel)
+
+## ===== v0.6.4 team colors (Bluey) ==================================================================================
+## c is a NetworkLobby.team_label() side tag: "red" = ALPHA, "blue" = BRAVO. Anything else (e.g. "draw") -> fallback.
+func _tc(c: String, fallback: Color = GOLD) -> Color:
+	if c == "red" or c == "blue":
+		return ProPaintballRig3D.team_color(c)
+	return fallback
+
+## Upper-case display name of the side's current color ("RED", "BLUE", "GREEN", ...).
+func _tn(c: String) -> String:
+	return ProPaintballRig3D.team_color_name(c).to_upper() if (c == "red" or c == "blue") else c.to_upper()
+
+## Re-tint score labels, flags, flag plates and tags after the lobby changes team colors.
+func apply_team_colors() -> void:
+	if red_score_label != null:
+		red_score_label.add_theme_color_override("font_color", _tc("red"))
+	if blue_score_label != null:
+		blue_score_label.add_theme_color_override("font_color", _tc("blue"))
+	for c in ["red", "blue"]:
+		var col := _tc(c)
+		var flag: Node = flag_nodes.get(c)
+		if flag != null and is_instance_valid(flag):
+			var cloth := flag.get_node_or_null("Cloth") as MeshInstance3D
+			if cloth != null and cloth.material_override is StandardMaterial3D:
+				(cloth.material_override as StandardMaterial3D).albedo_color = col
+				(cloth.material_override as StandardMaterial3D).emission = col
+			var tag := flag.get_node_or_null("FlagTag") as Label3D
+			if tag != null:
+				tag.modulate = col
+				tag.text = "%s FLAG" % _tn(c)
+		var stand: Node = flag_stands.get(c)
+		if stand != null and is_instance_valid(stand):
+			var plate := stand.get_node_or_null("Plate") as MeshInstance3D
+			if plate != null and plate.material_override is StandardMaterial3D:
+				(plate.material_override as StandardMaterial3D).albedo_color = Color(col.r, col.g, col.b, 0.35)
+	_refresh_all()

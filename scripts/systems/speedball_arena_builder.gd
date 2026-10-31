@@ -97,6 +97,8 @@ func _ready() -> void:
 	GameManager.match_over.connect(_on_match_over)
 	IntelBus.intel_feed_updated.connect(_on_intel_feed)
 	NetworkLobby.lobby_state_changed.connect(_on_lobby_state_changed)
+	if NetworkLobby.has_signal("team_colors_changed"): # v0.6.4 lobby team colors (Tim), guarded until it lands
+		NetworkLobby.connect("team_colors_changed", func(_tc = null) -> void: _refresh_lobby_button_highlights())
 	NetworkLobby.connection_status_changed.connect(_on_lobby_connection_status)
 	NetworkLobby.match_started_signal.connect(_on_network_match_started)
 	if NetworkLobby.has_signal("flag_event_received"):
@@ -763,7 +765,7 @@ func _build_tournament_lobby_overlay() -> void:
 	ffa_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ffa_btn.add_theme_font_size_override("font_size", 16)
 	ffa_btn.add_theme_color_override("font_color", Color(1.0, 0.62, 0.2))
-	ffa_btn.pressed.connect(func(): start_solo_ffa({"bots": SoloFfaMatchScript.DEFAULT_BOTS, "tier": ffa_tier}))
+	ffa_btn.pressed.connect(func(): SoloLauncher.start_ffa(ffa_tier))
 	row_ffa.add_child(ffa_btn)
 	ffa_tier_btn = Button.new()
 	ffa_tier_btn.name = "SoloFfaTierButton"
@@ -806,8 +808,9 @@ func _select_bracket(bracket_id: String) -> void:
 func _refresh_lobby_button_highlights() -> void:
 	if team_alpha_btn == null:
 		return
-	team_alpha_btn.modulate = Color(0.4, 0.95, 1.0) if NetworkLobby.local_team == "ALPHA" else Color(0.75, 0.75, 0.75)
-	team_bravo_btn.modulate = Color(1.0, 0.55, 0.55) if NetworkLobby.local_team == "BRAVO" else Color(0.75, 0.75, 0.75)
+	# v0.6.4: highlight in the team's lobby color (was cyan ALPHA / red BRAVO, the opposite of the HUD and flags)
+	team_alpha_btn.modulate = ProPaintballRig3D.team_color("ALPHA").lightened(0.35) if NetworkLobby.local_team == "ALPHA" else Color(0.75, 0.75, 0.75)
+	team_bravo_btn.modulate = ProPaintballRig3D.team_color("BRAVO").lightened(0.35) if NetworkLobby.local_team == "BRAVO" else Color(0.75, 0.75, 0.75)
 	bracket_speedball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "speedball" else Color(0.75, 0.75, 0.75)
 	bracket_woodsball_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "woodsball" else Color(0.75, 0.75, 0.75)
 	bracket_pump_btn.modulate = Color(1.0, 0.92, 0.3) if NetworkLobby.local_bracket == "pump" else Color(0.75, 0.75, 0.75)
@@ -1581,7 +1584,6 @@ func _start_ffa_when_lobby_ready(opts: Dictionary) -> void:
 	# Tim's LobbyEntryFlow attaches within ~10 frames and may open the browser; close it, then start.
 	for _i in 14:
 		await get_tree().process_frame
-	var lef := get_node_or_null("/root/LobbyEntryFlow")
-	if lef != null and lef.has_method("close_browser"):
-		lef.call("close_browser")
-	start_solo_ffa(opts)
+	# v0.6.4: same one-liner as any SINGLE PLAYER button (closes the browser, leaves any online room, starts the FFA).
+	SoloLauncher.start_ffa(String(opts.get("tier", SoloLauncher.DEFAULT_TIER)), int(opts.get("bots", SoloLauncher.DEFAULT_BOTS)),
+		int(opts.get("kills_to_win", SoloLauncher.DEFAULT_KILLS_TO_WIN)))

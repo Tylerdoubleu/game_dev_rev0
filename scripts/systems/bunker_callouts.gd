@@ -328,7 +328,8 @@ func on_callout_pinged(data: Dictionary) -> void:
 	if data.has("team") and not NetworkLobby.local_team.is_empty() and String(data["team"]) != NetworkLobby.local_team:
 		return # the server only sends to the team; guard anyway
 	pings_rendered += 1
-	var col: Color = TEAM_COLORS.get(String(data.get("color", "red")), Color(1, 0.85, 0.2))
+	var cid := String(data.get("color", "red"))
+	var col: Color = ProPaintballRig3D.team_color(cid) if cid in ["red", "blue"] else Color(1, 0.85, 0.2) # v0.6.4 lobby team colors
 	var pos := _to_vec3(data.get("pos", Vector3.ZERO))
 	_show_marker(cname, pos, maxi(1, int(data.get("count", 1))), col)
 	hud_lines.push_front({"text": hud_line_text(data), "color": col, "left": MARKER_TIME})

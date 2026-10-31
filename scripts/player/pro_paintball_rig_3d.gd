@@ -98,6 +98,10 @@ var _sub_hitboxes: Dictionary = {}
 func _ready() -> void:
 	if root_pivot == null:
 		build_rig(team_id, bracket_id)
+	# v0.6.4 lobby team colors: re-tint when Tim's NetworkLobby announces new colors (guarded until it exists).
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl != null and nl.has_signal("team_colors_changed"):
+		nl.connect("team_colors_changed", func(_tc = null) -> void: set_team_visual(team_id))
 
 func build_rig(p_team: String = "ALPHA", p_bracket: String = "speedball") -> void:
 	team_id = p_team.to_upper()
@@ -616,16 +620,22 @@ func _build_marker_assemblies() -> void:
 
 func set_team_visual(p_team: String) -> void:
 	team_id = p_team.to_upper()
+	if _mat_jersey == null:
+		return
 	var is_alpha := (team_id == "ALPHA")
-	var jersey_path := "res://assets/textures/jersey_pro_alpha.png" if is_alpha else "res://assets/textures/jersey_pro_bravo.png"
-	var j_tex := _load_texture_safe(jersey_path)
+	# v0.6.4: the jersey follows the team's lobby color (team_color_name), not the team letter. The two printed jerseys
+	# are a blue one (jersey_pro_alpha.png) and a red one (jersey_pro_bravo.png); any other color is a plain tinted jersey.
+	var cname := team_color_name(team_id)
+	var tint := team_color(team_id)
+	var j_tex: Texture2D = _load_texture_safe(JERSEY_TEXTURES[cname]) if JERSEY_TEXTURES.has(cname) else null
 	if j_tex != null:
 		_mat_jersey.albedo_texture = j_tex
 		_mat_jersey.albedo_color = Color(1.0, 1.0, 1.0)
 	else:
-		_mat_jersey.albedo_color = Color(0.14, 0.42, 0.88) if is_alpha else Color(0.84, 0.18, 0.22)
+		_mat_jersey.albedo_texture = null
+		_mat_jersey.albedo_color = tint.darkened(0.1)
 
-	_mat_anodized_marker.albedo_color = Color(0.16, 0.48, 0.96) if is_alpha else Color(0.92, 0.18, 0.22)
+	_mat_anodized_marker.albedo_color = tint
 	_mat_visor_chrome.albedo_color = Color(0.96, 0.72, 0.15) if is_alpha else Color(0.96, 0.42, 0.12)
 
 func set_bracket_visual(p_bracket: String) -> void:
@@ -1046,3 +1056,137 @@ func _make_sphere(radius: float, height: float, mat: Material) -> MeshInstance3D
 	mi.mesh = sm
 	mi.material_override = mat
 	return mi
+
+## ===== v0.6.4 team colors (Bluey) - the one place Bluey-owned visuals get a team's color =========================
+## Order: the lobby's team_colors ({"ALPHA": "red", "BRAVO": "blue"}, lowercase names, from Tim's NetworkLobby when it
+## has them) -> DEFAULT_TEAM_COLOR_NAMES. Colors come from the team palette script when one exists - TeamColors
+## (res://scripts/systems/team_colors.gd) or TeamPalette (res://scripts/ui/team_palette.gd), found at runtime and
+## never defined here (swap with palette_script_override) - via for_team(team, team_colors), else by name via
+## color_of / color_for / get_color / color or a COLORS / PALETTE dict; otherwise FALLBACK_TEAM_COLORS
+## (ALPHA red, BRAVO blue). Listeners: NetworkLobby.team_colors_changed.
+const DEFAULT_TEAM_COLOR_NAMES := {"ALPHA": "red", "BRAVO": "blue"}
+const FALLBACK_TEAM_COLORS := {
+	"red": Color(0.96, 0.24, 0.18), "blue": Color(0.24, 0.56, 1.0), "green": Color(0.3, 0.85, 0.3),
+	"yellow": Color(1.0, 0.86, 0.2), "orange": Color(1.0, 0.55, 0.12), "purple": Color(0.68, 0.36, 0.95),
+	"pink": Color(1.0, 0.42, 0.7), "black": Color(0.16, 0.16, 0.18), "white": Color(0.92, 0.92, 0.9),
+}
+const PALETTE_SCRIPT_PATHS := ["res://scripts/systems/team_colors.gd", "res://scripts/ui/team_palette.gd"]
+const PALETTE_CLASS_NAMES := ["TeamColors", "TeamPalette"]
+const JERSEY_TEXTURES := {"blue": "res://assets/textures/jersey_pro_alpha.png", "red": "res://assets/textures/jersey_pro_bravo.png"}
+static var palette_script_override: Script = null
+static var _palette_script: Script = null
+static var _palette_looked_up: bool = false
+
+## "ALPHA"/"BRAVO" (also the HUD's "red"/"blue" side tags) -> the team's lowercase color name.
+static func team_color_name(team: String) -> String:
+	var t := team.strip_edges().to_upper()
+	if t == "RED":
+		t = "ALPHA"
+	elif t == "BLUE":
+		t = "BRAVO"
+	var lobby := lobby_team_colors()
+	var n := String(lobby.get(t, "")).strip_edges().to_lower()
+	if n.is_empty() or not _palette_has(n):
+		n = String(DEFAULT_TEAM_COLOR_NAMES.get(t, "red" if t != "BRAVO" else "blue"))
+	return n
+
+static func team_color(team: String) -> Color:
+	var t := team.strip_edges().to_upper()
+	if t == "RED":
+		t = "ALPHA"
+	elif t == "BLUE":
+		t = "BRAVO"
+	var pal := _team_palette()
+	if pal != null and _script_has_method(pal, "for_team"):
+		var lobby := lobby_team_colors()
+		var tc := {}
+		for k in DEFAULT_TEAM_COLOR_NAMES:
+			var n := String(lobby.get(k, "")).strip_edges().to_lower()
+			tc[k] = n if not n.is_empty() and _palette_has(n) else DEFAULT_TEAM_COLOR_NAMES[k]
+		var r: Variant = pal.call("for_team", t, tc)
+		if r is Color:
+			return r
+	return color_for_name(team_color_name(t))
+
+## The lobby's {"ALPHA": name, "BRAVO": name} (NetworkLobby get_team_colors() / team_colors / lobby state), or {}.
+static func lobby_team_colors() -> Dictionary:
+	var ml := Engine.get_main_loop()
+	var nl: Node = (ml as SceneTree).root.get_node_or_null("NetworkLobby") if ml is SceneTree else null
+	if nl == null:
+		return {}
+	var v: Variant = null
+	if nl.has_method("get_team_colors"):
+		v = nl.call("get_team_colors")
+	elif "team_colors" in nl:
+		v = nl.get("team_colors")
+	elif nl.has_method("get_lobby_state_snapshot"): # lobby state "team_colors" (what Ren's waiting room reads)
+		var st: Variant = nl.call("get_lobby_state_snapshot")
+		if st is Dictionary:
+			v = (st as Dictionary).get("team_colors")
+	if not (v is Dictionary):
+		return {}
+	var out := {}
+	for k in (v as Dictionary):
+		out[String(k).to_upper()] = String((v as Dictionary)[k]).to_lower()
+	return out
+
+static func color_for_name(color_name: String) -> Color:
+	var n := color_name.strip_edges().to_lower()
+	var pal := _team_palette()
+	if pal != null:
+		var c: Variant = _palette_lookup(pal, n)
+		if c is Color:
+			return c
+	return FALLBACK_TEAM_COLORS.get(n, FALLBACK_TEAM_COLORS["red"])
+
+static func _palette_has(n: String) -> bool:
+	var pal := _team_palette()
+	if pal != null and _palette_lookup(pal, n) is Color:
+		return true
+	return FALLBACK_TEAM_COLORS.has(n)
+
+## TeamColors / TeamPalette (whichever the team ships), found at runtime so this file compiles with or without them.
+static func _team_palette() -> Script:
+	if palette_script_override != null:
+		return palette_script_override
+	if not _palette_looked_up:
+		_palette_looked_up = true
+		for path in PALETTE_SCRIPT_PATHS:
+			if ResourceLoader.exists(path):
+				_palette_script = load(path) as Script
+				if _palette_script != null:
+					break
+		if _palette_script == null:
+			for g in ProjectSettings.get_global_class_list():
+				if PALETTE_CLASS_NAMES.has(String(g.get("class", ""))):
+					_palette_script = load(String(g.get("path", ""))) as Script
+					break
+	return _palette_script
+
+## Re-scan for the palette script (tests; or after a hot reload).
+static func reset_palette_lookup() -> void:
+	_palette_looked_up = false
+	_palette_script = null
+
+static func _script_has_method(pal: Script, fn: String) -> bool:
+	for m in pal.get_script_method_list():
+		if String(m.get("name", "")) == fn:
+			return true
+	return false
+
+## By name: static color_of / color_for / get_color / color(name), then a COLORS or PALETTE name -> Color constant.
+static func _palette_lookup(pal: Script, n: String) -> Variant:
+	for fn in ["color_of", "color_for", "get_color", "color"]:
+		if _script_has_method(pal, fn):
+			var r: Variant = pal.call(fn, n)
+			if r is Color:
+				return r
+	var consts := pal.get_script_constant_map()
+	for key in ["COLORS", "PALETTE"]:
+		if consts.has(key) and consts[key] is Dictionary:
+			var d: Dictionary = consts[key]
+			if d.has(n) and d[n] is Color:
+				return d[n]
+			if d.has(n.to_upper()) and d[n.to_upper()] is Color:
+				return d[n.to_upper()]
+	return null
