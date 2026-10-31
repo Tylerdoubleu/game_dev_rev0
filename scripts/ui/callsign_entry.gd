@@ -9,7 +9,7 @@ extends Control
 ##   ce.callsign_saved.connect(func(n): ...)   # n = the name the server reserved (display case kept)
 ##   ce.profile_loaded.connect(func(p): ...)   # p = the 200 profile dict from PUT /api/profile/callsign
 ## It makes its own ProfileApi unless you hand it one first with bind_api(api) (CareerScreen shares its own).
-## No saved profile yet -> it creates one first (POST /api/profile), then sets the callsign. Enter = SAVE, Esc = close.
+## No saved profile yet or a stale token (401) -> ProfileApi makes a fresh one and retries once. Enter = SAVE, Esc = close.
 
 signal callsign_saved(callsign: String)
 signal profile_loaded(profile: Dictionary)
@@ -37,8 +37,6 @@ var state: int = State.IDLE
 var close_on_save: bool = true
 ## The name being saved (kept while offline so the retry can re-send it).
 var pending: String = ""
-var _awaiting_create: bool = false
-var _reauthed: bool = false
 var _field: LineEdit
 var _save_btn: Button
 var _status: Label
@@ -95,7 +93,6 @@ func submit() -> void:
 	if not is_valid_callsign(name):
 		set_state(State.INVALID)
 		return
-	_reauthed = false
 	_send(name)
 
 func _send(name: String) -> void:
@@ -104,11 +101,7 @@ func _send(name: String) -> void:
 	if api == null:
 		set_state(State.OFFLINE)
 		return
-	if api.has_profile():
-		api.set_callsign(name)
-	else:
-		_awaiting_create = true
-		api.create_profile()
+	api.set_callsign(name)  # ProfileApi creates a profile first if needed and handles a stale-token 401 once
 
 static func _offline(status: int) -> bool:
 	return status == 0 or status == 404 or status >= 500
@@ -129,13 +122,7 @@ func set_state(s: int, _name: String = "") -> void:
 func _on_completed(action: String, status: int, d: Dictionary) -> void:
 	if pending == "":
 		return
-	if action == "create" and _awaiting_create:
-		_awaiting_create = false
-		if status == 201 and api.has_profile():
-			api.set_callsign(pending)
-		else:
-			_fail(State.OFFLINE if _offline(status) else State.ERROR)
-	elif action == "set_callsign" and not _awaiting_create:
+	if action == "set_callsign":
 		match status:
 			200:
 				var name := String(d.get("callsign", pending)) if d.get("callsign") != null else pending
@@ -148,14 +135,6 @@ func _on_completed(action: String, status: int, d: Dictionary) -> void:
 						if state == State.SAVED: close())
 			409: _fail(State.TAKEN)
 			400: _fail(State.INVALID)
-			401:
-				# Saved token unknown to the server (test data wiped): make a fresh profile once, then retry.
-				if _reauthed:
-					_fail(State.ERROR)
-				else:
-					_reauthed = true
-					_awaiting_create = true
-					api.create_profile()
 			_:
 				_fail(State.OFFLINE if _offline(status) else State.ERROR)
 

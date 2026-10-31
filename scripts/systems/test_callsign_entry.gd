@@ -58,7 +58,7 @@ func _run() -> void:
 
 	ce._field.text = "Viper"; ce._on_text_changed("Viper")
 	ce.submit()
-	_check(api.calls.size() == 2 and api.calls[0]["action"] == "create", "no profile yet -> create first")
+	_check(api.calls.size() == 2 and api.calls[0]["action"] == "create", "no profile yet -> ProfileApi creates first")
 	_check(api.calls[1]["action"] == "set_callsign" and api.calls[1]["token"] == TOKEN and api.calls[1]["body"] == {"callsign": "Viper"}, "then PUT callsign with the new token")
 	_check(ce.state == CallsignEntry.State.SAVED and saved[0] == "Viper", "200 -> SAVED + callsign_saved")
 
@@ -83,13 +83,13 @@ func _run() -> void:
 	ce._send(ce.pending)  # what the retry timer does
 	_check(ce.state == CallsignEntry.State.SAVED and ce.pending == "" and saved[0] == "Ghost", "retry saves it once the server is back")
 
-	# 401: token no longer known -> fresh profile once, then the PUT again
+	# 401: token no longer known -> ProfileApi forgets it, creates once, PUTs again; the entry adds nothing on top
 	var n := api.calls.size()
 	api.replies["set_callsign"] = [401, {"error": "unauthorized"}]
 	ce._field.text = "Reborn"; ce._on_text_changed("Reborn")
 	ce.submit()
-	_check(api.calls.size() == n + 3 and api.calls[n + 1]["action"] == "create", "401 -> create once, PUT again")
-	_check(ce.state == CallsignEntry.State.ERROR, "second 401 stops (no loop)")
+	_check(api.calls.size() == n + 3 and api.calls[n + 1]["action"] == "create", "401 -> PUT, create, PUT (3 calls, no extra create from the entry)")
+	_check(ce.state == CallsignEntry.State.ERROR and ce.pending == "", "second 401 -> SAVE FAILED, no loop")
 	api.replies.erase("set_callsign")
 
 	var need: Vector2 = ce._board.get_combined_minimum_size()
