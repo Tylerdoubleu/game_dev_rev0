@@ -72,8 +72,8 @@ func _process(_delta: float) -> bool:
 	assert(gm.local_kills == 1, "GameManager.local_kills must increment on kill")
 
 	# Test Respawn at Original Starting Spot on hit + Death tracking + Pod count reset on death + Tactical Respawn Map
-	var death_map_ui := arena.get_node_or_null("DeathRespawnMapOverlay") as CanvasLayer
-	assert(death_map_ui != null, "DeathRespawnMapOverlay ('YOU\'VE BEEN HIT!' + Tactical Respawn Map) must exist")
+	var death_map_ui := arena.get_node_or_null("RespawnScreen") as CanvasLayer
+	assert(death_map_ui != null and death_map_ui is RespawnScreen and arena.get("death_respawn_canvas") == death_map_ui, "RespawnScreen (SPLATTED + spawn map) must be the arena's death_respawn_canvas")
 	var net_wall := arena.get_node_or_null("GrittyStadiumProps/PerimeterSafetyNetting/SafetyNetWallBody_0/CollisionShape3D") as CollisionShape3D
 	assert(net_wall != null and net_wall.shape is BoxShape3D, "Perimeter safety netting must have StaticBody3D + BoxShape3D boundary colliders")
 

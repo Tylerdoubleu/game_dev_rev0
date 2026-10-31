@@ -189,6 +189,12 @@ var hitbox_hopper_marker: CollisionShape3D = null
 var hitbox_pod_pack: CollisionShape3D = null
 var hopper_exposure_multiplier: float = 1.0
 var last_hit_zone: String = "TORSO / JERSEY"
+## v0.6.3 respawn minimap: where we were standing when hit (captured before the reset to the starting spot) and who hit
+## us / where they stood at that moment (offline: the bot node; online: that shooter's remote avatar, looked up by name).
+var last_death_position: Vector3 = Vector3.ZERO
+var last_shooter_name: String = ""
+var last_shooter_position: Vector3 = Vector3.ZERO
+var has_last_shooter_position: bool = false
 
 
 
@@ -1270,6 +1276,7 @@ func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	var killer_name: String = "OpFor NPC"
 	if shooter != null and "bot_name" in shooter:
 		killer_name = String(shooter.get("bot_name"))
+	_note_shooter(killer_name, shooter as Node3D)
 	_handle_local_elimination("%s [%s]" % [killer_name, zone_lbl])
 
 func on_paintball_bounce(hit_pos: Vector3) -> void:
@@ -1278,7 +1285,25 @@ func on_paintball_bounce(hit_pos: Vector3) -> void:
 	status_banner_sent.emit("LUCKY BOUNCE OFF YOUR %s — Keep Playing!" % zone_lbl, Color(0.45, 0.95, 1.0))
 
 func _on_remote_player_hit_local(shooter_name: String) -> void:
+	_note_shooter(shooter_name, _remote_avatar_named(shooter_name))
 	_handle_local_elimination(shooter_name)
+
+func _note_shooter(shooter_name: String, shooter_node: Node3D) -> void:
+	if awaiting_respawn_choice or spectating or GameManager.match_ended:
+		return
+	last_shooter_name = shooter_name
+	has_last_shooter_position = shooter_node != null and is_instance_valid(shooter_node) and shooter_node.is_inside_tree()
+	last_shooter_position = shooter_node.global_position if has_last_shooter_position else Vector3.ZERO
+
+## Online shooter -> their live remote avatar (NetworkLobby.players[pid].name -> remote_player_nodes[pid]), else null.
+func _remote_avatar_named(callsign: String) -> Node3D:
+	for pid in NetworkLobby.players.keys():
+		var info: Variant = NetworkLobby.players[pid]
+		if info is Dictionary and String((info as Dictionary).get("name", "")) == callsign:
+			var n: Variant = NetworkLobby.remote_player_nodes.get(pid, null)
+			if n is Node3D and is_instance_valid(n):
+				return n as Node3D
+	return null
 
 func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> void:
 	if not horn_sounded:
@@ -1337,6 +1362,7 @@ func _handle_local_elimination(killer_name: String) -> void:
 	if awaiting_respawn_choice or spectating or GameManager.match_ended:
 		return
 	var death_pos := global_position
+	last_death_position = death_pos
 	if _is_one_life_round_live():
 		# v0.5 one-life CTF: the server keeps us dead until round_started, so do NOT respawn locally (shots from a
 		# local respawn get rejected). Stay where we fell, lock input and let the MatchHudClient spectate teammates.
@@ -1358,7 +1384,7 @@ func _handle_local_elimination(killer_name: String) -> void:
 	if GameManager.match_ended:
 		status_banner_sent.emit("MATCH OVER — Reached 10 Deaths! Press [T] or [M] to Review Scoreboard", Color(1.0, 0.25, 0.25))
 	else:
-		status_banner_sent.emit("YOU'VE BEEN HIT BY %s! Select your Respawn Zone on the Tactical Map (Deaths: %d / %d)" % [killer_name, GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE], Color(1.0, 0.22, 0.48))
+		status_banner_sent.emit("SPLATTED by %s  -  pick a spawn 1-5" % killer_name, Color(1.0, 0.22, 0.48))
 
 func _is_cover_bunker_collider(col: Object) -> bool:
 	if col == null or not (col is StaticBody3D):
