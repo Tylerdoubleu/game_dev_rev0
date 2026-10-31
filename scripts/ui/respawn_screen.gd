@@ -23,6 +23,20 @@ const HALF_BUNKERS := [
 	[36.5, 11.5, 2.5, 2.5], [-33, 35, 2.8, 2.2], [-28.5, 24.5, 2.2, 2.2],
 	[0, 0, 4.5, 1.8], [-9.5, 0, 2.4, 1.4], [9.5, 0, 2.4, 1.4], [-19, 0, 2.2, 1.6], [19, 0, 2.2, 1.6], [38, 0, 3, 3],
 	[-35, 15, 1.1, 9.5], [-37.2, 5.5, 1.1, 9.5], [-35, 20, 2.6, 1.3], [-36.1, 10.2, 2.8, 1.3], [-37.2, 0, 3.0, 1.3]]
+## Woodsball Heli Crash (gritty_art_theme.gd build_woodsball_crash_site_map): mirrored per-half cover, then
+## pieces that sit at fixed WORLD positions (towers, heli, 50-line). Rects are x, z, size x, size z.
+const WOODS_HALF := [
+	[0, 48, 3.8, 1.2], [0, 38, 3.2, 1.4], [-2.6, 41.8, 1.7, 1.7], [-1.8, 36.2, 1.7, 1.7], [-0.3, 35, 1.0, 3.4],
+	[-11, 31, 2.8, 1.5], [11, 31, 2.8, 1.5], [-22, 31, 1.7, 1.7], [22, 31, 1.7, 1.7], [0, 19, 3.0, 1.6],
+	[-8.5, 17.5, 1.7, 1.7], [8.5, 17.5, 1.7, 1.7], [-18.5, 16.5, 2.6, 1.8], [18.5, 16.5, 2.6, 1.8],
+	[-6.2, 9.2, 1.9, 1.9], [6.2, 9.2, 1.9, 1.9], [-14.5, 9.5, 1.7, 1.7], [14.5, 9.5, 1.7, 1.7],
+	[32, 35, 2.6, 2.2], [34.5, 23, 1.7, 1.7], [36.5, 11.5, 2.5, 2.2], [-33, 35, 2.8, 2.0], [-28.5, 24.5, 1.7, 1.7]]
+const WOODS_WORLD := [
+	[-11, 0, 1.7, 1.7], [11, 0, 1.7, 1.7], [-17.5, 0, 2.4, 1.8], [17.5, 0, 2.4, 1.8], [38, 0, 1.7, 1.7],
+	[-35, 15, 1.1, 9.5], [-37.2, 5.5, 1.1, 9.5], [-37.2, -5.5, 1.1, 9.5], [-35, -15, 1.1, 9.5],
+	[-35, 20, 2.6, 1.3], [-36.1, 10.2, 2.8, 1.3], [-37.2, 0, 3.0, 1.5], [-36.1, -10.2, 2.8, 1.3], [-35, -20, 2.6, 1.3]]
+## Towers (4.8 m decks) and the crashed fuselage, drawn darker so they read as the big landmarks.
+const WOODS_LANDMARKS := [[-25, 0, 4.8, 4.8], [25, 0, 4.8, 4.8], [-11.5, 24, 4.8, 4.8], [11.5, -24, 4.8, 4.8], [-2, -0.35, 16, 3.2]]
 const FIELD_HALF_W := 42.0
 const FIELD_DEPTH := 50.0
 const MAP_SIZE := Vector2(440, 520)
@@ -41,6 +55,7 @@ var _shooter_pos := NO_POS
 var _death_pos := NO_POS
 var _killer := ""
 var _dots: Array = []
+var _map_id := "speedball"
 var _root: Control
 
 func _init() -> void:
@@ -52,16 +67,17 @@ func _ready() -> void:
 	_build()
 
 func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deaths: int = -1,
-		shooter_pos: Vector3 = NO_POS, death_pos: Vector3 = NO_POS) -> void:
+		shooter_pos: Vector3 = NO_POS, death_pos: Vector3 = NO_POS, map_id: String = "") -> void:
 	if _root == null:
 		_build()
 	_team = team
 	_zones = zones
-	_killer = killer
+	_killer = short_name(killer)
+	_map_id = map_id if map_id != "" else _current_map()
 	_shooter_pos = shooter_pos
 	_death_pos = death_pos
-	_by_label.text = ("by " + killer) if killer != "" else ""
-	_by_label.visible = killer != ""
+	_by_label.text = ("by " + _killer) if _killer != "" else ""
+	_by_label.visible = _killer != ""
 	_deaths_label.text = ("DEATHS %d / %d" % [deaths, max_deaths]) if deaths >= 0 and max_deaths > 0 else ""
 	_layout_spots()
 	_map.queue_redraw()
@@ -76,6 +92,18 @@ func set_players(dots: Array) -> void:
 	_dots = dots.filter(func(d) -> bool: return d.has("pos") and on_my_half(d["pos"]))
 	if _map != null:
 		_map.queue_redraw()
+
+## "Viper [MASK / GOGGLES]" -> "Viper": the screen only ever shows the name.
+static func short_name(n: String) -> String:
+	var i := n.find(" [")
+	return (n.substr(0, i) if i >= 0 else n).strip_edges()
+
+static func is_woods(map_id: String) -> bool:
+	return map_id in ["woodsball_crash", "woods", "woodsball", "crash_site"]
+
+func _current_map() -> String:
+	var nl: Node = Engine.get_main_loop().root.get_node_or_null("NetworkLobby") if Engine.get_main_loop() is SceneTree else null
+	return String(nl.get("selected_map")) if nl != null and nl.get("selected_map") != null else "speedball"
 
 func on_my_half(p: Vector3) -> bool:
 	return p.z * _side() > 0.0
@@ -167,6 +195,7 @@ func _build() -> void:
 
 	var board := PanelContainer.new()
 	board.add_theme_stylebox_override("panel", TournamentSkin.board_style())
+	board.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	col.add_child(board)
 	var inner := VBoxContainer.new()
 	inner.add_theme_constant_override("separation", 8)
@@ -195,6 +224,8 @@ func _build() -> void:
 		_spots.append(b)
 
 	var foot := HBoxContainer.new()
+	foot.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	foot.custom_minimum_size.x = MAP_SIZE.x + 24.0
 	col.add_child(foot)
 	var keys := TournamentSkin.led("CLICK A SPOT  OR  PRESS 1-5", 18, TournamentSkin.AMBER)
 	keys.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -233,11 +264,20 @@ func _draw_map() -> void:
 	# bunkers on both halves
 	var px := MAP_SIZE.x / (FIELD_HALF_W * 2.0)
 	var pz := MAP_SIZE.y / ((FIELD_DEPTH + 2.0) * 2.0)
-	for bk in HALF_BUNKERS:
-		for half in ([1.0] if float(bk[1]) == 0.0 else [1.0, -1.0]):
-			var c := _own_to_map(bk[0], float(bk[1]) * half)
-			var sz := Vector2(bk[2] * px, bk[3] * pz) * 1.2
-			_map.draw_rect(Rect2(c - sz * 0.5, sz), Color(0.62, 0.62, 0.55, 0.6))
+	var cover := Color(0.62, 0.62, 0.55, 0.6)
+	if is_woods(_map_id):
+		cover = Color(0.66, 0.52, 0.34, 0.7)
+		for bk in WOODS_HALF:
+			for half in [1.0, -1.0]:
+				_draw_cover(_own_to_map(bk[0], float(bk[1]) * half), bk, px, pz, cover)
+		for bk in WOODS_WORLD:
+			_draw_cover(_to_map(bk[0], bk[1]), bk, px, pz, cover)
+		for bk in WOODS_LANDMARKS:
+			_draw_cover(_to_map(bk[0], bk[1]), bk, px, pz, Color(0.3, 0.36, 0.22, 0.95), true)
+	else:
+		for bk in HALF_BUNKERS:
+			for half in ([1.0] if float(bk[1]) == 0.0 else [1.0, -1.0]):
+				_draw_cover(_own_to_map(bk[0], float(bk[1]) * half), bk, px, pz, cover)
 	# live players on your half only
 	for d in _dots:
 		var pp: Vector3 = d["pos"]
@@ -275,10 +315,23 @@ func _draw_map() -> void:
 		var ink := Color(0.06, 0.06, 0.05) if hot else TournamentSkin.NEON
 		_map.draw_string(font, cpos + Vector2(-20, 9), str(_slot_for_index(i) + 1), HORIZONTAL_ALIGNMENT_CENTER, 40, 24, ink)
 
+func _draw_cover(c: Vector2, bk: Array, px: float, pz: float, col: Color, outline := false) -> void:
+	var sz := Vector2(bk[2] * px, bk[3] * pz) * 1.2
+	_map.draw_rect(Rect2(c - sz * 0.5, sz), col)
+	if outline:
+		_map.draw_rect(Rect2(c - sz * 0.5, sz), Color(0, 0, 0, 0.7), false, 2.0)
+
+## Keeps a marker label fully inside the map: flips left of the dot near the right edge, then clamps both edges.
+func label_pos(at: Vector2, w: float) -> Vector2:
+	if at.x + w > MAP_SIZE.x - 4.0:
+		at.x -= w + 24.0
+	at.x = clampf(at.x, 4.0, MAP_SIZE.x - 4.0 - w)
+	at.y = clampf(at.y, 16.0, MAP_SIZE.y - 4.0)
+	return at
+
 func _label_at(at: Vector2, text: String, color: Color) -> void:
 	var font: Font = TournamentSkin.STENCIL
 	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
-	if at.x + w > MAP_SIZE.x - 4.0:
-		at.x -= w + 24.0
+	at = label_pos(at, w)
 	_map.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, 4, Color(0, 0, 0, 0.9))
 	_map.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, color)
