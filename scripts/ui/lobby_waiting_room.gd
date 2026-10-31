@@ -9,7 +9,7 @@ extends Control
 ## v0.6.4 team colors: a row of swatches under each team roster. You pick only for YOUR team, only while the room is
 ## waiting; the other team's color is crossed out (no two teams share a color). Headers + names take the team color.
 ## A pick shows at once (optimistic) and reverts if the server says no. Palette + names come from Tim's TeamColors
-## (scripts/systems/team_colors.gd, color_of(name)); a small private fallback is used until that file exists.
+## (scripts/systems/team_colors.gd: names(), color_of(name), for_team(team, team_colors)).
 ## NetworkLobby seam (all optional, checked with has_method / has_signal, so nothing breaks before Tim's side lands):
 ##   lobby state  "team_colors": {"ALPHA": "red", "BRAVO": "blue"}   -> apply_team_colors()
 ##   nl.request_team_color(color_name)                                <- your own team only
@@ -26,14 +26,7 @@ const MAPS := [["speedball", "NPPL SPEEDBALL"], ["woodsball_crash", "WOODSBALL H
 const MODES := [["deathmatch", "10-KILL DEATHMATCH"], ["ctf", "1-LIFE CTF  BO5"], ["bots_test", "TEST VS BOTS"]]
 const GUNS := [["speedball", "SPEEDBALL ELECTRO"], ["woodsball", "WOODSBALL A-5"], ["pump", "STOCK PUMP"]]
 const NEON := LobbyBrowser.NEON
-const RED_TEAM := LobbyBrowser.RED_TEAM
-const BLUE_TEAM := LobbyBrowser.BLUE_TEAM
-const TEAM_COLORS_PATH := "res://scripts/systems/team_colors.gd"  # Tim's TeamColors (shared palette)
-const DEFAULT_TEAM_COLORS := {"ALPHA": "red", "BRAVO": "blue"}
-## Only used until Tim's TeamColors is on the branch; names are lowercase like his.
-const _FALLBACK_PALETTE := {"red": Color(0.86, 0.2, 0.17), "blue": Color(0.2, 0.45, 0.95), "yellow": Color(0.95, 1.0, 0.15),
-	"pink": Color(1.0, 0.28, 0.62), "orange": Color(1.0, 0.55, 0.1), "purple": Color(0.58, 0.3, 0.9),
-	"cyan": Color(0.1, 0.8, 0.85), "green": Color(0.16, 0.5, 0.2)}
+const DEFAULT_TEAM_COLORS := TeamColors.DEFAULTS  # Tim's shared palette (scripts/systems/team_colors.gd)
 const REJECT_TEXT := {"round_active": "MATCH IS LIVE - COLORS LOCKED", "taken": "TAKEN BY THE OTHER TEAM",
 	"invalid": "NOT A TEAM COLOR", "rate_limited": "SLOW DOWN - TRY AGAIN"}
 
@@ -158,7 +151,7 @@ func apply_state(s: Dictionary) -> void:
 		var p: Dictionary = players[pid]
 		if room != "" and p.has("room") and String(p["room"]) != room:
 			continue
-		var is_red := String(p.get("team", "ALPHA")).to_upper() in ["ALPHA", "RED"]
+		var is_red := TeamColors.team_key(String(p.get("team", "ALPHA"))) == "ALPHA"
 		var gun := String(p.get("bracket", "speedball")).to_upper()
 		var is_ready := bool(p.get("ready", false))
 		var line := "%s%s   (%s)" % [String(p.get("name", "PLAYER")).to_upper(), "  (YOU)" if int(pid) == me else "", gun]
@@ -174,8 +167,8 @@ func apply_state(s: Dictionary) -> void:
 			_red_list.add_child(l); red += 1
 		else:
 			_blue_list.add_child(l); blue += 1
-	_red_head.text = "RED  %d / 5" % red
-	_blue_head.text = "BLUE  %d / 5" % blue
+	_red_head.text = "%s  %d / 5" % [shown_color("ALPHA").to_upper(), red]
+	_blue_head.text = "%s  %d / 5" % [shown_color("BRAVO").to_upper(), blue]
 	_bench_head.text = "NOT READY  %d" % bench
 	_red_count = red
 	_blue_count = blue
@@ -190,41 +183,16 @@ func apply_state(s: Dictionary) -> void:
 
 # ------------------------------------------------------- team colors ----------
 
-static func _team_colors_script() -> Script:
-	return load(TEAM_COLORS_PATH) if ResourceLoader.exists(TEAM_COLORS_PATH) else null
-
-## The palette's color names in display order (TeamColors' list when present, else the private fallback).
+## The palette's color names in picker order (TeamColors.NAMES).
 static func color_names() -> Array:
-	var tc := _team_colors_script()
-	if tc != null:
-		for m in ["names", "color_names", "all_names"]:
-			if tc.has_method(m):
-				var a = tc.call(m)
-				if a is Array and not a.is_empty():
-					return a
-		var consts: Dictionary = tc.get_script_constant_map()
-		for k in ["NAMES", "COLOR_NAMES", "ORDER", "PALETTE", "COLORS"]:
-			var v = consts.get(k)
-			if v is Array and not v.is_empty():
-				return v
-			if v is Dictionary and not v.is_empty():
-				return v.keys()
-	return _FALLBACK_PALETTE.keys()
+	return TeamColors.names()
 
-## Color for a lowercase name, through TeamColors.color_of() when it exists.
+## Color for a color name (TeamColors.color_of; unknown -> red).
 static func color_of_name(color_name: String) -> Color:
-	var n := color_name.to_lower()
-	var tc := _team_colors_script()
-	if tc != null:
-		for m in ["color_of", "color"]:
-			if tc.has_method(m):
-				var c = tc.call(m, n)
-				if c is Color:
-					return c
-	return _FALLBACK_PALETTE.get(n, _FALLBACK_PALETTE["red"])
+	return TeamColors.color_of(color_name)
 
 static func _team_key(t: String) -> String:
-	return "BRAVO" if t.to_upper() in ["BRAVO", "BLUE"] else "ALPHA"
+	return TeamColors.team_key(t)
 
 ## The color name a team shows right now (your pending pick first, then the server's).
 func shown_color(team: String) -> String:
@@ -442,7 +410,7 @@ func _build_ui() -> void:
 	var teams := HBoxContainer.new()
 	teams.add_theme_constant_override("separation", 14)
 	col.add_child(teams)
-	for side in [[RED_TEAM, 0], [Color(0.5, 0.5, 0.46), 1], [BLUE_TEAM, 2]]:
+	for side in [[TeamColors.for_team("ALPHA", team_colors), 0], [Color(0.5, 0.5, 0.46), 1], [TeamColors.for_team("BRAVO", team_colors), 2]]:
 		var p := PanelContainer.new()
 		p.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		p.size_flags_stretch_ratio = 0.8 if side[1] == 1 else 1.0

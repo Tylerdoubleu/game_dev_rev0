@@ -8,16 +8,13 @@ extends CanvasLayer
 ##   rs.zone_picked.connect(func(i): ...)
 ##   rs.open("Viper", "ALPHA", arena._get_team_respawn_zones("ALPHA"), deaths, max_deaths, shooter_pos, death_pos)
 ##   (shooter_pos / death_pos are world positions; pass NO_POS or leave them out to hide them)
-## v0.6.4 team colors: field halves and player dots use each team's lobby color (Tim's TeamColors names via
-## LobbyWaitingRoom.color_of_name). It reads NetworkLobby's lobby state "team_colors" on open and listens to
+## v0.6.4 team colors: field halves and player dots use each team's lobby color (TeamColors.for_team). It reads NetworkLobby's lobby state "team_colors" on open and listens to
 ## team_colors_changed when those exist; set_team_colors({"ALPHA": "pink", "BRAVO": "cyan"}) sets them directly.
-## No colors known -> the old RED / BLUE.
+## No colors known -> TeamColors.DEFAULTS (red / blue).
 
 signal zone_picked(index: int)
 
 const DEFAULT_ZONE := 2
-const RED := Color(0.86, 0.2, 0.17)
-const BLUE := Color(0.2, 0.45, 0.95)
 const BOT := Color(1.0, 0.55, 0.1)
 ## Spot centers stay this far inside the map edge, so side-of-the-50 spawns (x = +/-44 in solo FFA) aren't cut off.
 const SPOT_MARGIN := 28.0
@@ -80,21 +77,13 @@ func _ready() -> void:
 
 func set_team_colors(colors: Dictionary) -> void:
 	for k in colors:
-		team_colors["BRAVO" if String(k).to_upper() in ["BRAVO", "BLUE"] else "ALPHA"] = String(colors[k]).to_lower()
+		team_colors[TeamColors.team_key(String(k))] = String(colors[k]).to_lower()
 	if _map != null:
 		_map.queue_redraw()
 
-## The team's lobby color, or the old RED / BLUE when none is known.
+## The team's lobby color (TeamColors.for_team; no pick -> the defaults, ALPHA red / BRAVO blue).
 func color_for(team: String) -> Color:
-	var t := team.to_upper()
-	var tc := LobbyWaitingRoom._team_colors_script()
-	if tc != null and tc.has_method("for_team"):
-		var c = tc.call("for_team", t, team_colors)
-		if c is Color:
-			return c
-	if team_colors.has(t):
-		return LobbyWaitingRoom.color_of_name(String(team_colors[t]))
-	return RED if t == "ALPHA" else BLUE
+	return TeamColors.for_team(team, team_colors)
 
 func _pull_team_colors() -> void:
 	if not is_inside_tree():

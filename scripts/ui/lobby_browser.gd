@@ -22,8 +22,6 @@ const MODE_LABELS := {"deathmatch": "10-KILL DEATHMATCH", "deathmatch_10": "10-K
 const STATUS_COLORS := {"waiting": Color(0.45, 0.95, 0.35), "in_match": Color(1.0, 0.72, 0.2), "full": Color(1.0, 0.3, 0.25)}
 const NEON := Color(0.95, 1.0, 0.15)
 const SOLO_DIFFICULTIES := ["rookie", "amateur"]
-const RED_TEAM := Color(1.0, 0.32, 0.25)
-const BLUE_TEAM := Color(0.3, 0.6, 1.0)
 
 @export var api_base: String = ""
 ## When false, JOIN only emits lobby_join_requested (the in-place waiting room); true keeps the old page navigation.
@@ -43,6 +41,9 @@ var last_solo_route: String = ""
 
 func _ready() -> void:
 	_build_ui()
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl != null and nl.has_signal("team_colors_changed"):
+		nl.team_colors_changed.connect(_on_team_colors_changed)
 	if api_base == "":
 		api_base = derive_api_base()
 	_http = HTTPRequest.new()
@@ -131,6 +132,21 @@ func set_lobbies(list: Array, error_text: String = "") -> void:
 	_quick_btn.disabled = pick_quick_join(list).is_empty()
 	lobbies_updated.emit(list.size())
 
+## v0.6.4: the lobby rows' team colors. Each /api/lobbies entry carries "team_colors"; the room you are in also
+## re-tints at once on NetworkLobby.team_colors_changed (no wait for the next 4 s refresh).
+var live_team_colors: Dictionary = {}
+
+func _on_team_colors_changed(colors: Dictionary) -> void:
+	live_team_colors = colors.duplicate()
+	set_lobbies(lobbies, last_error)
+
+## The team_colors dict a row uses: the live one for the room you are in, else the entry's own, else {} (defaults).
+func row_team_colors(e: Dictionary) -> Dictionary:
+	var nl := get_node_or_null("/root/NetworkLobby") if is_inside_tree() else null
+	if not live_team_colors.is_empty() and nl != null and String(e.get("id", "")) == String(nl.get("active_room")):
+		return live_team_colors
+	return e.get("team_colors", {}) if e.get("team_colors") is Dictionary else {}
+
 func join(entry: Dictionary) -> void:
 	lobby_join_requested.emit(entry)
 	var url := String(entry.get("join_url", ""))
@@ -214,7 +230,7 @@ func _build_ui() -> void:
 	col.add_child(TournamentSkin.label("PICK A FIELD  //  5 V 5  //  TEAMS AUTO-SPLIT ON JOIN", 15, TournamentSkin.MUTED))
 
 	var cols := HBoxContainer.new()
-	for spec in [["", 10], ["LOBBY", 150], ["FIELD", 270], ["GAME", 210], ["RED", 90], ["BLUE", 90], ["STATUS", 120], ["", 110]]:
+	for spec in [["", 10], ["LOBBY", 150], ["FIELD", 270], ["GAME", 210], ["ALPHA", 90], ["BRAVO", 90], ["STATUS", 120], ["", 110]]:
 		var h := TournamentSkin.label(spec[0], 14, TournamentSkin.MUTED, TournamentSkin.STENCIL, 2)
 		h.custom_minimum_size.x = spec[1]
 		cols.add_child(h)
@@ -287,12 +303,13 @@ func _make_row(e: Dictionary) -> Control:
 	var maxp := int(e.get("max_per_team", 5))
 	var p: Dictionary = e.get("players", {})
 	var mode_key := String(e.get("mode", ""))
+	var tc := row_team_colors(e)
 	var cells := [
 		[String(e.get("name", e.get("id", "LOBBY"))).to_upper(), 150, TournamentSkin.CHALK, TournamentSkin.STENCIL],
 		[MAP_LABELS.get(String(e.get("map", "")), String(e.get("map", "")).to_upper()), 270, Color(0.85, 0.86, 0.8), TournamentSkin.STENCIL],
 		[MODE_LABELS.get(mode_key, "ANY  (LOBBY PICKS)" if mode_key == "" else mode_key.to_upper()), 210, Color(0.78, 0.8, 0.72), TournamentSkin.STENCIL],
-		["%d/%d" % [int(p.get("red", 0)), maxp], 90, RED_TEAM.lightened(0.15), TournamentSkin.LED],
-		["%d/%d" % [int(p.get("blue", 0)), maxp], 90, BLUE_TEAM.lightened(0.15), TournamentSkin.LED],
+		["%d/%d" % [int(p.get("red", 0)), maxp], 90, TeamColors.for_team("ALPHA", tc).lightened(0.15), TournamentSkin.LED],
+		["%d/%d" % [int(p.get("blue", 0)), maxp], 90, TeamColors.for_team("BRAVO", tc).lightened(0.15), TournamentSkin.LED],
 		[status.replace("_", " ").to_upper(), 120, sc, TournamentSkin.LED],
 	]
 	for c in cells:

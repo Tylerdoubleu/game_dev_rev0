@@ -79,9 +79,28 @@ func _process(_d: float) -> bool:
 		var need: Vector2 = wr.find_child("Board", true, false).get_combined_minimum_size()
 		_check(need.x <= 1280 and need.y <= 720, "waiting room fits 1280x720 (%s)" % need)
 
-		_check(rs.color_for("ALPHA").is_equal_approx(RespawnScreen.RED) and rs.color_for("BRAVO").is_equal_approx(RespawnScreen.BLUE), "respawn: no colors -> old red / blue")
+		_check(rs.color_for("ALPHA").is_equal_approx(TeamColors.color_of("red")) and rs.color_for("BRAVO").is_equal_approx(TeamColors.color_of("blue")), "respawn: no colors -> old red / blue")
 		rs.set_team_colors({"ALPHA": "pink", "BRAVO": "cyan"})
 		_check(rs.color_for("ALPHA").is_equal_approx(LobbyWaitingRoom.color_of_name("pink")) and rs._team_color().is_equal_approx(rs.color_for("ALPHA")), "respawn: field + dots use the team colors")
+		# v0.6.4 color fix: headers name the team color from apply_state; lobby browser rows use TeamColors.
+		wr.apply_state(_waiting({"ALPHA": "pink", "BRAVO": "cyan"}))
+		_check(wr._red_head.text == "PINK  1 / 5" and wr._blue_head.text == "CYAN  1 / 5", "headers: '%s' / '%s'" % [wr._red_head.text, wr._blue_head.text])
+		var lb := LobbyBrowser.new()
+		root.add_child(lb)
+		lb.set_lobbies([{"id": "lobby_01", "name": "Lobby 01", "status": "waiting", "players": {"red": 2, "blue": 1}, "team_colors": {"ALPHA": "purple", "BRAVO": "orange"}}])
+		var row: Node = lb._rows.get_child(lb._rows.get_child_count() - 1)
+		var tints := []
+		for l in row.find_children("*", "Label", true, false):
+			if l.text == "2/5" or l.text == "1/5":
+				tints.append(l.get_theme_color("font_color"))
+		_check(tints.size() == 2 and tints[0].is_equal_approx(TeamColors.color_of("purple").lightened(0.15)) and tints[1].is_equal_approx(TeamColors.color_of("orange").lightened(0.15)), "lobby row counts take the lobby's team colors")
+		lb.set_lobbies([{"id": "lobby_02", "status": "waiting", "players": {"red": 2, "blue": 1}}])
+		row = lb._rows.get_child(lb._rows.get_child_count() - 1)
+		tints = []
+		for l in row.find_children("*", "Label", true, false):
+			if l.text == "2/5" or l.text == "1/5":
+				tints.append(l.get_theme_color("font_color"))
+		_check(tints.size() == 2 and tints[0].is_equal_approx(TeamColors.for_team("ALPHA").lightened(0.15)), "no team_colors -> defaults")
 		print("=== [PASS] v0.6.4 team color picker ===" if fails.is_empty() else "=== [FAIL] %s" % [fails])
 		quit(0 if fails.is_empty() else 1)
 	return false
