@@ -160,6 +160,12 @@ const server = http.createServer((req, res) => {
     handleApi(req, res, earlyUrl);
     return;
   }
+  // server.js owns CORS for every /api/* path (Caddy passes OPTIONS through).
+  if (req.method === "OPTIONS" && earlyUrl.pathname.startsWith("/api/")) {
+    res.writeHead(204, lobbyApi.apiCorsHeaders(req.headers.origin));
+    res.end();
+    return;
+  }
   if (
     profiles.handleProfileRequest(req, res, earlyUrl, {
       store: profileStore,

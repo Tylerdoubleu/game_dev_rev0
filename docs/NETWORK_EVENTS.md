@@ -151,9 +151,15 @@ Tests: `cd server && node --test test` (`test/profile_api.test.js`) and
 `godot --headless --path . -s res://scripts/systems/test_profile_hook.gd`.
 
 No sign-up: the client creates a profile once and keeps the private token in `user://profile.cfg`
-(browser storage on the web build; clearing site data loses the profile). All bodies are JSON. CORS is the same
-allow-list as `/api/lobbies` (`CORS_ORIGINS`); preflight allows `GET, POST, PUT, OPTIONS` and
-`Content-Type, Authorization`. Authenticated calls send `Authorization: Bearer <token>`.
+(browser storage on the web build; clearing site data loses the profile). All bodies are JSON. Authenticated
+calls send `Authorization: Bearer <token>`.
+
+**CORS is owned by server.js** (Caddy passes OPTIONS through). `OPTIONS` on any `/api/*` path -> `204` with
+`Access-Control-Allow-Origin: <origin>` (only if allow-listed), `Access-Control-Allow-Methods: GET, POST, PUT, OPTIONS`,
+`Access-Control-Allow-Headers: Authorization, Content-Type`, `Access-Control-Max-Age: 600`, `Vary: Origin`. Every
+`/api/*` response, errors included (401/404/409/413/429), carries the same headers. `/internal/*` never gets CORS.
+Allow-list: `CORS_ORIGINS` (comma-separated), else the defaults `https://tylerdoubleu.github.io`,
+`https://play.jeetball.com`, `https://test.jeetball.com`, `http://localhost:8080`, `http://127.0.0.1:8080`.
 
 | Request | Success | Errors |
 |---|---|---|

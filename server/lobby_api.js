@@ -14,6 +14,8 @@
 const DEFAULT_GAME_CLIENT_URL = "https://tylerdoubleu.github.io/game_dev_rev0/";
 const DEFAULT_CORS_ORIGINS = [
   "https://tylerdoubleu.github.io",
+  "https://play.jeetball.com",
+  "https://test.jeetball.com",
   "http://localhost:8080",
   "http://127.0.0.1:8080",
 ];
@@ -35,7 +37,7 @@ function apiCorsHeaders(origin, env = process.env) {
   if (origin && (list.includes(origin) || list.includes("*"))) {
     h["Access-Control-Allow-Origin"] = origin;
     h["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS";
-    h["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
+    h["Access-Control-Allow-Headers"] = "Authorization, Content-Type";
     h["Access-Control-Max-Age"] = "600";
   }
   return h;

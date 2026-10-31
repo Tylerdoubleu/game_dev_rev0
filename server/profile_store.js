@@ -255,7 +255,10 @@ function handleProfileRequest(req, res, url, ctx) {
   const p = url.pathname;
   const send = (status, body, extra = {}) => ctx.sendJson(res, status, body, { ...ctx.cors, ...extra });
 
-  if (p === "/internal/match_result") {
+  if (p === "/internal/match_result" || p.startsWith("/internal/")) {
+    // /internal/* is loopback-only and never gets CORS headers.
+    const send = (status, body, extra = {}) => ctx.sendJson(res, status, body, extra);
+    if (p !== "/internal/match_result") return send(404, { error: "not_found" }), true;
     if (req.method !== "POST") return send(405, { error: "method_not_allowed" }, { Allow: "POST" }), true;
     if (!isTrustedInternal(req, ctx.internalKey)) return send(403, { error: "forbidden" }), true;
     readBody(req, (err, body) => {
@@ -266,7 +269,6 @@ function handleProfileRequest(req, res, url, ctx) {
     });
     return true;
   }
-  if (p.startsWith("/internal/")) return send(404, { error: "not_found" }), true;
   if (p !== "/api/profile" && !p.startsWith("/api/profile/")) return false;
 
   if (req.method === "OPTIONS") {

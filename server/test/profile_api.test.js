@@ -53,13 +53,19 @@ test("profile API over HTTP", async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "pb_profiles_"));
   let { base, stop } = await startServer(t, dataDir);
 
-  // CORS preflight allows POST/PUT + Authorization
-  const pre = await fetch(`${base}/api/profile/callsign`, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "PUT" } });
-  assert.equal(pre.status, 204);
-  assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN);
-  assert.match(pre.headers.get("access-control-allow-methods"), /PUT/);
-  assert.match(pre.headers.get("access-control-allow-methods"), /POST/);
-  assert.match(pre.headers.get("access-control-allow-headers"), /Authorization/);
+  // CORS preflight: server.js owns it for every /api/* path
+  for (const p of ["/api/profile", "/api/profile/callsign", "/api/profile/career", "/api/profile/public/x", "/api/lobbies", "/api/quickjoin", "/api/other"]) {
+    const pre = await fetch(base + p, { method: "OPTIONS", headers: { Origin: ORIGIN, "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "authorization,content-type" } });
+    assert.equal(pre.status, 204, p);
+    assert.equal(pre.headers.get("access-control-allow-origin"), ORIGIN, p);
+    assert.equal(pre.headers.get("access-control-allow-methods"), "GET, POST, PUT, OPTIONS", p);
+    assert.equal(pre.headers.get("access-control-allow-headers"), "Authorization, Content-Type", p);
+    assert.equal(pre.headers.get("access-control-max-age"), "600", p);
+    assert.match(pre.headers.get("vary") || "", /Origin/, p);
+  }
+  const evil = await fetch(`${base}/api/profile`, { method: "OPTIONS", headers: { Origin: "https://evil.example" } });
+  assert.equal(evil.status, 204);
+  assert.equal(evil.headers.get("access-control-allow-origin"), null, "unlisted origin not echoed");
 
   // create
   const a = await call(base, "POST", "/api/profile");
@@ -160,6 +166,25 @@ test("profile API over HTTP", async (t) => {
   assert.equal((await call(base, "POST", "/api/profile")).status, 201);
   assert.equal((await call(base, "POST", "/api/profile")).status, 429);
 
+  // Allow-Origin on error responses too; none on /internal/*
+  const o = { Origin: ORIGIN };
+  const e401 = await call(base, "GET", "/api/profile", { headers: o });
+  assert.equal(e401.status, 401);
+  assert.equal(e401.headers.get("access-control-allow-origin"), ORIGIN);
+  const e409 = await call(base, "PUT", "/api/profile/callsign", { token: a.json.token, body: { callsign: "VIPER_77" }, headers: o });
+  assert.equal(e409.status, 409);
+  assert.equal(e409.headers.get("access-control-allow-origin"), ORIGIN);
+  const e413 = await call(base, "PUT", "/api/profile/career", { token: a.json.token, body: { career: big }, headers: o });
+  assert.equal(e413.status, 413);
+  assert.equal(e413.headers.get("access-control-allow-origin"), ORIGIN);
+  const e404 = await call(base, "GET", "/api/profile/public/nobody_here", { headers: o });
+  assert.equal(e404.headers.get("access-control-allow-origin"), ORIGIN);
+  const i1 = await internal(base, result, { "X-Internal-Key": KEY, Origin: ORIGIN });
+  assert.equal(i1.headers.get("access-control-allow-origin"), null, "/internal has no CORS");
+  const i2 = await internal(base, result, { "X-Internal-Key": "bad", Origin: ORIGIN });
+  assert.equal(i2.status, 403);
+  assert.equal(i2.headers.get("access-control-allow-origin"), null);
+
   // persistence across restart (SIGTERM flushes)
   await stop();
   ({ base, stop } = await startServer(t, dataDir));
@@ -170,6 +195,19 @@ test("profile API over HTTP", async (t) => {
   assert.deepEqual(again.json.career, career);
   assert.equal((await call(base, "PUT", "/api/profile/callsign", { token: a.json.token, body: { callsign: "viper_77" } })).status, 409, "callsign index rebuilt on load");
   assert.equal((await internal(base, result)).json.duplicate, true, "match ids persisted");
+});
+
+test("default CORS allow-list", () => {
+  const { apiCorsHeaders } = require("../lobby_api");
+  for (const o of ["https://tylerdoubleu.github.io", "https://play.jeetball.com", "https://test.jeetball.com"]) {
+    const h = apiCorsHeaders(o, {});
+    assert.equal(h["Access-Control-Allow-Origin"], o);
+    assert.equal(h["Access-Control-Allow-Methods"], "GET, POST, PUT, OPTIONS");
+    assert.equal(h["Access-Control-Allow-Headers"], "Authorization, Content-Type");
+    assert.equal(h["Access-Control-Max-Age"], "600");
+    assert.equal(h.Vary, "Origin");
+  }
+  assert.equal(apiCorsHeaders("https://evil.example", {})["Access-Control-Allow-Origin"], undefined);
 });
 
 test("store: reload, atomic file, non-loopback rejection", () => {
