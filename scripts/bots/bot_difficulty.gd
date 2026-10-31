@@ -35,6 +35,9 @@ const TIER_LEGEND := "legend"
 @export var peek_time_max: float = 2.2
 @export var tuck_time_min: float = 1.4
 @export var tuck_time_max: float = 2.4
+## Aim turn rate (deg/s, yaw and pitch) when swinging onto a target. A bot only fires once its body / marker is within
+## BotPlayer.FIRE_CONE_DEG of the shot, so a slower turn = a later first ball (Rookie is visibly slower to swing).
+@export var turn_rate_deg: float = 300.0
 
 static func make(tier_id: String) -> Resource:
 	var script: GDScript = load("res://scripts/bots/bot_difficulty.gd")
@@ -42,6 +45,7 @@ static func make(tier_id: String) -> Resource:
 	match tier_id.to_lower():
 		TIER_AMATEUR:
 			d.tier = TIER_AMATEUR
+			d.turn_rate_deg = 480.0
 			d.display_name = "Amateur"
 			d.reaction_s = 0.45
 			d.aim_error_at_20m = 0.7
@@ -62,6 +66,7 @@ static func make(tier_id: String) -> Resource:
 			d.tuck_time_max = 1.6
 		TIER_PRO:
 			d.tier = TIER_PRO
+			d.turn_rate_deg = 660.0
 			d.display_name = "Pro"
 			d.reaction_s = 0.30
 			d.aim_error_at_20m = 0.4
@@ -83,6 +88,7 @@ static func make(tier_id: String) -> Resource:
 			d.tuck_time_max = 1.4
 		TIER_LEGEND:
 			d.tier = TIER_LEGEND
+			d.turn_rate_deg = 840.0
 			d.display_name = "Legend"
 			d.reaction_s = 0.20
 			d.aim_error_at_20m = 0.25

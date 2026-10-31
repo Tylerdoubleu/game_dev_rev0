@@ -38,6 +38,9 @@ var scores := {} # name -> {"kills": int, "deaths": int, "is_player": bool}
 var winner: String = ""
 var active: bool = false
 var _player_name: String = "You"
+## Every credited elimination, oldest first: {"shooter", "victim", "zone", "feed"}. The kill feed line is built from
+## the same shooter / victim names the standings credit, so the feed and the standings can never disagree.
+var kill_log: Array = []
 
 func combatants() -> Array:
 	var out: Array = []
@@ -135,7 +138,7 @@ func _process(delta: float) -> void:
 			var p: Vector3 = (b as Node3D).global_position
 			bs[String(b.get("bot_name"))] = {"x": snappedf(p.x, 0.1), "z": snappedf(p.z, 0.1), "state": String(b.call("state_name")),
 				"moved": snappedf(float(b.get("distance_moved")), 0.1), "shots": int(b.get("shots_fired"))}
-	JavaScriptBridge.eval("window.__ffaState = %s;" % JSON.stringify({"bots": bs, "standings": standings(), "winner": winner}), true)
+	JavaScriptBridge.eval("window.__ffaState = %s;" % JSON.stringify({"bots": bs, "standings": standings(), "winner": winner, "kills": kill_log.slice(-8)}), true)
 
 func stop() -> void:
 	active = false
@@ -160,7 +163,7 @@ func _name_of(n: Node) -> String:
 		return String(n.get("bot_name"))
 	return ""
 
-func on_bot_eliminated(bot: Node, shooter: Node) -> void:
+func on_bot_eliminated(bot: Node, shooter: Node, zone: String = "") -> void:
 	if not active:
 		return
 	var victim := _name_of(bot)
@@ -169,10 +172,17 @@ func on_bot_eliminated(bot: Node, shooter: Node) -> void:
 	var killer := _name_of(shooter)
 	if not killer.is_empty() and killer != victim and scores.has(killer):
 		scores[killer]["kills"] += 1
+	_log_kill(killer, victim, zone)
 	_emit()
 	_check_win(killer)
 
-func _on_player_eliminated(_killer_label: String) -> void:
+## Feed: SHOOTER SPLATTED VICTIM [zone] (same names as the standings rows).
+func _log_kill(killer: String, victim: String, zone: String) -> void:
+	var line := BotPlayerScript.kill_feed_line(killer if not killer.is_empty() else "?", victim, zone)
+	kill_log.append({"shooter": killer, "victim": victim, "zone": zone, "feed": line})
+	IntelBus.intel_feed_updated.emit(line)
+
+func _on_player_eliminated(killer_label: String) -> void:
 	if not active:
 		return
 	scores[_player_name]["deaths"] += 1
@@ -182,6 +192,11 @@ func _on_player_eliminated(_killer_label: String) -> void:
 		var kb := _bot_named(killer)
 		if kb != null:
 			kb.set("kills", int(kb.get("kills")) + 1)
+	var zone := ""
+	var lb := killer_label.rfind("[")
+	if lb >= 0 and killer_label.ends_with("]"):
+		zone = killer_label.substr(lb + 1, killer_label.length() - lb - 2)
+	_log_kill(killer, _player_name, zone)
 	_emit()
 	_check_win(killer)
 
@@ -211,6 +226,7 @@ func standings() -> Array:
 
 func _emit() -> void:
 	standings_changed.emit(standings())
+	_web_state_t = 0.0 # publish window.__ffaState on the next frame, so a browser check never pairs a new feed line with old standings
 
 ## Respawn spot farthest from every live combatant.
 func respawn_point_for(who: Node) -> Dictionary:

@@ -9,6 +9,10 @@ extends CharacterBody3D
 ## Perception (LOS raycasts) runs at ~10 Hz, staggered across bots by bot_index.
 ## Hits use the existing paint path (resolve_hit_subzone / on_paintball_break); the hit marker only shows when the
 ## local player's ball made the elimination (the shooter has award_kill_bonus_pod).
+## v0.7 aim fix (Tyler's playtest: "do the bots look where they are aiming?"): the body (yaw), the aim pitch and the
+## visible marker now swing onto the shot at the tier's turn rate (BotDifficulty.turn_rate_deg, eased), a ball only
+## leaves once the body forward is within FIRE_CONE_DEG of the shot, and it spawns from the muzzle IN FRONT of the bot
+## along the aim (never from a tucked / canted marker pose). The marker pivot is pointed at the aim point while shooting.
 
 const MovementRules = preload("res://scripts/player/movement_rules.gd")
 const ProRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
@@ -33,6 +37,11 @@ const SLIDE_TRIGGER_MIN: float = 4.5 # slide into the pocket from this far ... (
 const SLIDE_TRIGGER_MAX: float = 7.5
 const SLIDE_EXPOSURE_MIN: float = 0.35 # ... when the edge is this exposed
 const SUPPRESS_MEMORY_S: float = 4.0
+const FIRE_CONE_DEG: float = 7.0 # body/aim forward must be this close to the shot before a ball leaves
+const ALIGN_GIVE_UP_S: float = 1.2 # can't line up (target swung behind cover / around us): drop the burst
+const AIM_EASE: float = 12.0 # 1/s: turn speed eases in near the target (smooth), capped by the tier's turn rate
+const MUZZLE_FORWARD: float = 0.62 # metres in front of the eye along the aim (fallback muzzle point)
+const MAX_AIM_PITCH: float = deg_to_rad(60.0)
 
 # --- identity / setup
 var bot_name: String = "Bot"
@@ -81,6 +90,9 @@ var movement_fire_recovery_timer: float = 0.0
 var slide_dir: Vector3 = Vector3.ZERO
 var shot_spread_mult: float = MovementRules.SPREAD_MULT_STANDING
 var yaw: float = 0.0
+var aim_pitch: float = 0.0 # + = up; body/marker pitch toward the aim point
+var _aim_pose_w: float = 0.0 # 0..1 blend of the "marker on target" pose over the rig's procedural pose
+var _align_wait: float = 0.0
 var move_goal: Vector3 = Vector3.ZERO
 var has_move_goal: bool = false
 var path: PackedVector3Array = PackedVector3Array()
@@ -120,6 +132,12 @@ var shots_fired: int = 0
 var snap_shots: int = 0
 var suppress_shots: int = 0
 var shots_blocked_no_los: int = 0
+var shots_waited_for_turn: int = 0 # frames a ready shot was held because the body wasn't on target yet
+var bursts_dropped_unaligned: int = 0
+var last_shot_dir: Vector3 = Vector3.ZERO # actual ball direction (spread included)
+var last_shot_aim_dir: Vector3 = Vector3.ZERO # intended direction (muzzle -> aim point)
+var last_shot_body_fwd: Vector3 = Vector3.ZERO # body/aim forward (yaw + pitch) when the ball left
+var max_shot_body_angle_deg: float = 0.0
 var kills: int = 0
 var deaths: int = 0
 var spawn_point: Vector3 = Vector3.ZERO
@@ -544,6 +562,7 @@ func _start_burst(kind: String) -> void:
 	burst_kind = kind
 	burst_left = rng.randi_range(difficulty.burst_min, difficulty.burst_max)
 	shot_cd = 0.0
+	_align_wait = 0.0
 	# aim error is sampled once per burst (a consistent miss, not a shotgun)
 	var tp := _aim_point()
 	var rng_m := eye_position().distance_to(tp)
@@ -558,10 +577,63 @@ func _aim_point() -> Vector3:
 		return pts[pts.size() - 1] if pts.size() > 1 else pts[0]
 	return look_point
 
-func _muzzle() -> Vector3:
-	if pro_rig != null and pro_rig.get("muzzle_tip_node") != null:
-		return (pro_rig.get("muzzle_tip_node") as Node3D).global_position
-	return eye_position() + Vector3(-sin(yaw), -0.15, -cos(yaw)) * 0.5
+## Body / marker forward from yaw + aim pitch (what the bot visibly points at).
+func aim_forward() -> Vector3:
+	return Vector3(-sin(yaw) * cos(aim_pitch), sin(aim_pitch), -cos(yaw) * cos(aim_pitch))
+
+func body_forward() -> Vector3:
+	return Vector3(-sin(yaw), 0.0, -cos(yaw))
+
+## True while the bot should visibly point its marker at something (a burst, or a seen target from the pocket / peek).
+func is_aiming() -> bool:
+	if is_eliminated:
+		return false
+	if burst_left > 0:
+		return true
+	return current_target != null and is_instance_valid(current_target) and (state == State.PEEK or state == State.HOLD)
+
+## World point the body / marker should face right now, or null.
+func _facing_point() -> Variant:
+	if burst_left > 0:
+		if burst_kind == "snap" and (current_target == null or not is_instance_valid(current_target)):
+			return null
+		return _aim_point() + aim_offset
+	if current_target != null and is_instance_valid(current_target) and (state == State.PEEK or state == State.HOLD):
+		var pts := aim_points_of(current_target)
+		return pts[pts.size() - 1] if pts.size() > 1 else pts[0]
+	return null
+
+func turn_rate() -> float:
+	return deg_to_rad(float(difficulty.get("turn_rate_deg"))) if difficulty != null and difficulty.get("turn_rate_deg") != null else TURN_RATE
+
+## Eased, rate-capped step from `cur` toward `want` (angles, radians).
+static func ease_angle(cur: float, want: float, rate: float, delta: float) -> float:
+	var diff := wrapf(want - cur, -PI, PI)
+	var spd := clampf(diff * AIM_EASE, -rate, rate)
+	var step := spd * delta
+	if absf(step) >= absf(diff):
+		return want
+	return cur + step
+
+## Angle (deg) between the bot's current aim forward and the direction from its eye to `p`.
+func aim_error_deg_to(p: Vector3) -> float:
+	var d := p - eye_position()
+	if d.length() < 0.01:
+		return 0.0
+	return rad_to_deg(aim_forward().angle_to(d.normalized()))
+
+## Muzzle point: the rig's marker tip when it really sits in front of the bot along the aim (the marker is pointed at
+## the aim point while aiming), else a point MUZZLE_FORWARD in front of the eye along the aim. Never behind the bot.
+func _muzzle(aim_dir: Vector3 = Vector3.ZERO) -> Vector3:
+	var fwd := aim_dir if aim_dir.length() > 0.1 else aim_forward()
+	var eye := eye_position()
+	var fallback := eye + fwd * MUZZLE_FORWARD + Vector3(0.0, -0.12, 0.0)
+	if pro_rig != null and pro_rig.get("muzzle_tip_node") != null and _aim_pose_w > 0.9:
+		var tip := (pro_rig.get("muzzle_tip_node") as Node3D).global_position
+		var rel := tip - eye
+		if rel.dot(fwd) > 0.3 and rel.length() < 1.2:
+			return tip
+	return fallback
 
 func _tick_fire(delta: float) -> void:
 	if burst_pause > 0.0:
@@ -577,7 +649,18 @@ func _tick_fire(delta: float) -> void:
 		burst_left = 0
 		return
 	var aim := _aim_point() + aim_offset
-	var origin := _muzzle()
+	# face first: the body / marker must be on the shot before a ball leaves (no shots out of the back or the side)
+	# (and the visible marker must have come up from the pocket carry onto the aim line)
+	if aim_error_deg_to(aim) > FIRE_CONE_DEG or (pro_rig != null and _aim_pose_w < 0.9):
+		shots_waited_for_turn += 1
+		_align_wait += delta
+		if _align_wait > ALIGN_GIVE_UP_S:
+			bursts_dropped_unaligned += 1
+			burst_left = 0
+			burst_pause = 0.25
+			_align_wait = 0.0
+		return
+	_align_wait = 0.0
 	# fire only with a line of sight: snap -> to the target itself, suppress -> to the bunker-edge aim point
 	var los_target: Node = current_target if burst_kind == "snap" else null
 	var los_ok := has_los(eye_position(), _aim_point(), los_target)
@@ -586,6 +669,7 @@ func _tick_fire(delta: float) -> void:
 		burst_left = 0
 		burst_pause = 0.3
 		return
+	var origin := _muzzle((aim - eye_position()).normalized())
 	var dir := (aim - origin).normalized()
 	var right := dir.cross(Vector3.UP).normalized()
 	if right.length() < 0.1:
@@ -594,6 +678,10 @@ func _tick_fire(delta: float) -> void:
 	var spread := base_spread_deg * shot_spread_mult
 	var shot_dir := MovementRules.apply_spread_cone(dir, right, up, spread)
 	PaintBallistics.spawn_paintball(origin, shot_dir, muzzle_fps, self, paint_color)
+	last_shot_dir = shot_dir
+	last_shot_aim_dir = dir
+	last_shot_body_fwd = aim_forward()
+	max_shot_body_angle_deg = maxf(max_shot_body_angle_deg, rad_to_deg(last_shot_body_fwd.angle_to(shot_dir)))
 	shots_fired += 1
 	if burst_kind == "snap":
 		snap_shots += 1
@@ -662,12 +750,17 @@ func _motor(delta: float) -> void:
 					_replan()
 			_stuck_timer = 0.0
 			_stuck_ref = global_position
-	# --- facing: fight target > look point > movement
+	# --- facing: the shot / fight target (yaw + pitch, tier turn rate, eased) > movement > threat direction
 	var face := Vector3.ZERO
-	if current_target != null and is_instance_valid(current_target) and (state == State.PEEK or state == State.HOLD or burst_left > 0):
-		face = current_target.global_position - global_position
-	elif burst_left > 0 and has_look_point:
-		face = look_point - global_position
+	var want_pitch := 0.0
+	var aiming_turn := false
+	var fp: Variant = _facing_point()
+	if fp != null:
+		var to_aim: Vector3 = (fp as Vector3) - eye_position()
+		face = to_aim
+		var flat_len := Vector2(to_aim.x, to_aim.z).length()
+		want_pitch = clampf(atan2(to_aim.y, maxf(flat_len, 0.01)), -MAX_AIM_PITCH, MAX_AIM_PITCH)
+		aiming_turn = true
 	elif move_dir.length() > 0.1 and (state == State.BREAK or state == State.MOVE):
 		face = move_dir
 	elif state == State.HOLD or state == State.PEEK or state == State.TUCK:
@@ -675,8 +768,9 @@ func _motor(delta: float) -> void:
 	face.y = 0.0
 	if face.length() > 0.05:
 		var want := atan2(-face.x, -face.z)
-		yaw = rotate_toward(yaw, want, TURN_RATE * delta)
+		yaw = ease_angle(yaw, want, turn_rate() if aiming_turn else TURN_RATE, delta)
 		rotation.y = yaw
+	aim_pitch = ease_angle(aim_pitch, want_pitch, turn_rate(), delta)
 	# --- slide / dive (player numbers)
 	if dive_timer > 0.0:
 		dive_timer -= delta
@@ -735,7 +829,8 @@ func _motor(delta: float) -> void:
 func _pose(delta: float) -> void:
 	if pro_rig == null:
 		return
-	var tuck := 1.0 if (state == State.HOLD or state == State.TUCK) and not has_move_goal else 0.0
+	var aiming := is_aiming()
+	var tuck := 1.0 if (state == State.HOLD or state == State.TUCK) and not has_move_goal and not aiming else 0.0
 	pro_rig.apply_pose(delta, {
 		"velocity": velocity,
 		"stance": stance,
@@ -749,6 +844,30 @@ func _pose(delta: float) -> void:
 		"team": rig_team,
 		"bracket": bracket_id,
 	})
+	_pose_marker_on_aim(delta, aiming)
+
+## Overlay on the rig's procedural pose: while aiming, the marker pivot is turned so the barrel points along the aim
+## (yaw + pitch) instead of the tucked / canted pocket carry. Blends in/out so it never pops.
+func _pose_marker_on_aim(delta: float, aiming: bool) -> void:
+	var piv: Node3D = pro_rig.get("marker_assembly_pivot") if pro_rig != null else null
+	if piv == null or not piv.is_inside_tree():
+		return
+	var want_w := 1.0 if aiming else 0.0
+	_aim_pose_w = want_w if delta <= 0.0 else move_toward(_aim_pose_w, want_w, delta * 12.0)
+	if _aim_pose_w <= 0.001:
+		return
+	var posed := piv.global_transform.basis.orthonormalized()
+	var aimed := Basis.looking_at(aim_forward(), Vector3.UP)
+	var b := posed.slerp(aimed, _aim_pose_w) if _aim_pose_w < 0.999 else aimed
+	var sc := piv.global_transform.basis.get_scale()
+	piv.global_transform = Transform3D(b.scaled(sc), piv.global_position)
+
+## Visible marker barrel direction (MuzzleTip forward, -Z of the marker pivot), for tests / screenshots.
+func marker_forward() -> Vector3:
+	var piv: Node3D = pro_rig.get("marker_assembly_pivot") if pro_rig != null else null
+	if piv == null or not piv.is_inside_tree():
+		return aim_forward()
+	return -piv.global_transform.basis.z.normalized()
 
 func get_stance_capsule_target() -> float:
 	return MovementRules.stance_capsule_target(slide_timer, dive_timer, stance)
@@ -784,14 +903,21 @@ func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 		local_hit_markers_shown += 1
 		MovementAudioDirector.show_local_hit_marker() # only the local player's own ball gets the marker
 	_die()
-	IntelBus.intel_feed_updated.emit("%s SPLATTED %s [%s]" % [by.to_upper(), bot_name.to_upper(), zone])
+	# Solo FFA: the match emits the feed line from the same shooter / victim it credits in the standings.
+	if match_ctrl == null or not match_ctrl.has_method("on_bot_eliminated"):
+		IntelBus.intel_feed_updated.emit(kill_feed_line(by, bot_name, zone))
 	if shooter != null and is_instance_valid(shooter) and shooter != self and "kills" in shooter and shooter.has_method("on_paintball_break"):
 		shooter.set("kills", int(shooter.get("kills")) + 1)
 	bot_eliminated.emit(self, shooter, zone)
 	if match_ctrl != null and match_ctrl.has_method("on_bot_eliminated"):
-		match_ctrl.call("on_bot_eliminated", self, shooter)
+		match_ctrl.call("on_bot_eliminated", self, shooter, zone)
 	else:
 		GameManager.notify_enemy_eliminated()
+
+## Kill feed line: always SHOOTER SPLATTED VICTIM [zone].
+static func kill_feed_line(shooter_name: String, victim_name: String, zone: String = "") -> String:
+	var s := "%s SPLATTED %s" % [shooter_name.to_upper(), victim_name.to_upper()]
+	return s + (" [%s]" % zone if not zone.is_empty() else "")
 
 func on_paintball_bounce(_hit_pos: Vector3) -> void:
 	pass
@@ -828,6 +954,8 @@ func respawn() -> void:
 	ground_speed = 0.0
 	yaw = y
 	rotation.y = y
+	aim_pitch = 0.0
+	_align_wait = 0.0
 	stance = MovementRules.STANCE_STANDING
 	last_seen_time = -1000.0
 	target_seen_since = -1.0
