@@ -10,6 +10,7 @@ const MatchHudClientScript = preload("res://scripts/ui/match_hud_client.gd")
 const BunkerCalloutsScript = preload("res://scripts/systems/bunker_callouts.gd")
 const MouseCaptureGuardScript = preload("res://scripts/systems/mouse_capture_guard.gd")
 const BuildStampScript = preload("res://scripts/systems/build_stamp.gd")
+const SoloFfaMatchScript = preload("res://scripts/bots/solo_ffa_match.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -51,6 +52,13 @@ var _flag_wave_time: float = 0.0
 ## v0.5 client presentation of Tim's server match rules (HUD, banners, spectate camera, CTF base flags).
 var match_client: Node = null
 var bunker_callouts: Node = null # v0.6 [F] / mouse-thumb bunker callouts
+## v0.7 solo FFA deathmatch vs BotPlayers (offline). null = not running.
+var ffa_match: Node = null
+var ffa_tier: String = "amateur"
+var ffa_tier_btn: Button = null
+var _ffa_zones: Array[Dictionary] = []
+## Survives [T] rematch (scene reload) so a rematch restarts the same FFA setup; cleared by any other start.
+static var ffa_rematch_opts: Dictionary = {}
 var build_stamp: CanvasLayer = null # v0.6.3 "v0.6.3 · <commit>" corner label (HUD + lobby)
 var mouse_guard: Node = null # v0.6.1 single authority for the gameplay mouse capture (CLICK TO RESUME)
 var legacy_center_flag_hidden: bool = false
@@ -100,6 +108,12 @@ func _ready() -> void:
 	if GameManager.has_signal("breakout_countdown_updated"):
 		GameManager.breakout_countdown_updated.connect(_on_breakout_countdown_updated)
 	GameManager.register_round_start(5)
+	if not NetworkLobby.is_dedicated_server:
+		var url_opts := _ffa_opts_from_url()
+		if not url_opts.is_empty():
+			_start_ffa_when_lobby_ready.call_deferred(url_opts)
+		elif not ffa_rematch_opts.is_empty():
+			start_solo_ffa.call_deferred(ffa_rematch_opts)
 
 func _build_environment_and_turf() -> void:
 	var env_node := WorldEnvironment.new()
@@ -707,6 +721,27 @@ func _build_tournament_lobby_overlay() -> void:
 	copy_link_btn.pressed.connect(_on_copy_invite_pressed)
 	row_actions.add_child(copy_link_btn)
 
+	# v0.7 solo FFA deathmatch vs BotPlayers (offline): first to 10 eliminations, everyone for themselves.
+	var row_ffa := HBoxContainer.new()
+	row_ffa.add_theme_constant_override("separation", 14)
+	vbox.add_child(row_ffa)
+	var ffa_btn := Button.new()
+	ffa_btn.name = "SoloFfaButton"
+	ffa_btn.text = "SOLO FFA DEATHMATCH (%d BOTS, FIRST TO %d)" % [SoloFfaMatchScript.DEFAULT_BOTS, SoloFfaMatchScript.KILLS_TO_WIN]
+	ffa_btn.custom_minimum_size = Vector2(0, 40)
+	ffa_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ffa_btn.add_theme_font_size_override("font_size", 16)
+	ffa_btn.add_theme_color_override("font_color", Color(1.0, 0.62, 0.2))
+	ffa_btn.pressed.connect(func(): start_solo_ffa({"bots": SoloFfaMatchScript.DEFAULT_BOTS, "tier": ffa_tier}))
+	row_ffa.add_child(ffa_btn)
+	ffa_tier_btn = Button.new()
+	ffa_tier_btn.name = "SoloFfaTierButton"
+	ffa_tier_btn.custom_minimum_size = Vector2(210, 40)
+	ffa_tier_btn.add_theme_font_size_override("font_size", 15)
+	ffa_tier_btn.pressed.connect(_cycle_ffa_tier)
+	row_ffa.add_child(ffa_tier_btn)
+	_cycle_ffa_tier(false)
+
 	_refresh_lobby_button_highlights()
 	_on_lobby_state_changed(NetworkLobby.get_lobby_state_snapshot())
 
@@ -765,6 +800,7 @@ func _on_connect_ws_pressed() -> void:
 	server_url_input.text = NetworkLobby.current_ws_url
 
 func _on_drop_in_pressed() -> void:
+	stop_solo_ffa()
 	var chosen_room := room_input.text.strip_edges() if not room_input.text.strip_edges().is_empty() else "alpha"
 	NetworkLobby.active_room = chosen_room
 	NetworkLobby.update_local_player_choices(callsign_input.text, NetworkLobby.local_team, NetworkLobby.local_bracket, fill_bots_check.button_pressed)
@@ -934,12 +970,24 @@ func _on_match_over(loser_name: String, winner_label: String) -> void:
 	if scoreboard_canvas != null:
 		scoreboard_canvas.visible = true
 	_refresh_scoreboard_text()
+	if ffa_match != null:
+		_on_status_banner("FFA OVER! %s WINS (first to %d) — Press [T] for Rematch" % [String(ffa_match.get("winner")), int(ffa_match.get("kills_to_win"))], Color(1.0, 0.88, 0.22))
+		return
 	_on_status_banner("MATCH OVER! %s hit 10 Deaths — %s WINS! Press [T] for Rematch" % [loser_name, winner_label], Color(1.0, 0.88, 0.22))
 
 func _refresh_scoreboard_text() -> void:
 	if scoreboard_body_label == null:
 		return
 	var lines: Array[String] = []
+	if ffa_match != null:
+		lines.append_array(ffa_match.call("scoreboard_lines"))
+		lines.append("----------------------------------------------------------------------")
+		if GameManager.match_ended:
+			lines.append(">> FFA OVER — %s WINS — PRESS [T] FOR A REMATCH <<" % String(ffa_match.get("winner")))
+		else:
+			lines.append("Press [M] to Close Scoreboard   |   Press [TAB] for the Menu")
+		scoreboard_body_label.text = "\n".join(lines)
+		return
 	lines.append("----------------------------------------------------------------------")
 	lines.append("PLAYER / SQUAD                  TEAM       KILLS (+PODS)     DEATHS (MAX 10)")
 	lines.append("----------------------------------------------------------------------")
@@ -1055,7 +1103,7 @@ func _open_respawn_screen(killer_name: String) -> void:
 		death_pos = player.get("last_death_position")
 		if bool(player.get("has_last_shooter_position")):
 			shooter_pos = player.get("last_shooter_position")
-	death_respawn_canvas.call("open", killer_name, team, _get_team_respawn_zones(team),
+	death_respawn_canvas.call("open", killer_name, team, _respawn_zones_for_local(true),
 		GameManager.local_deaths, GameManager.MAX_DEATHS_TO_LOSE, shooter_pos, death_pos)
 	_refresh_respawn_map_dots()
 	_sync_mouse_capture()
@@ -1091,6 +1139,8 @@ var respawn_map_mode_override: String = "" # tests / preview renders only
 func respawn_map_mode() -> String:
 	if not respawn_map_mode_override.is_empty():
 		return respawn_map_mode_override
+	if ffa_match != null:
+		return "deathmatch"
 	if not NetworkLobby.is_online_client():
 		return "practice"
 	var m := String(match_client.get("mode")) if match_client != null else ""
@@ -1163,7 +1213,7 @@ func clear_gameplay_input_blocks(reason: String = "") -> void:
 		player.call("clear_input_blocks", reason)
 
 func _on_respawn_zone_selected(zone_index: int) -> void:
-	var zones := _get_team_respawn_zones(NetworkLobby.local_team)
+	var zones := _respawn_zones_for_local(false)
 	if zone_index < 0 or zone_index >= zones.size():
 		zone_index = 2
 	var chosen: Dictionary = zones[zone_index]
@@ -1361,3 +1411,99 @@ func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> 
 			if breakout_horn_label != null:
 				breakout_horn_label.visible = false
 		)
+
+
+## ===== v0.7 solo FFA deathmatch vs BotPlayers (Bluey) ===============================================================
+## Respawn choices: team zones normally; in FFA the 5 spawn spots farthest from the live bots (fixed when the map opens).
+func _respawn_zones_for_local(refresh: bool) -> Array[Dictionary]:
+	if ffa_match == null:
+		return _get_team_respawn_zones(NetworkLobby.local_team)
+	if refresh or _ffa_zones.is_empty():
+		_ffa_zones = []
+		var i := 1
+		for z in ffa_match.call("player_respawn_zones"):
+			var d: Dictionary = z
+			var p: Vector3 = d["pos"]
+			d["id"] = "ffa_%d" % i
+			d["title"] = "[%d] %s" % [i, String(d["title"]).to_upper()]
+			d["map_uv"] = Vector2(clampf(0.5 + p.x / 84.7, 0.03, 0.97), clampf(0.5 + p.z / 100.0, 0.03, 0.97))
+			_ffa_zones.append(d)
+			i += 1
+	return _ffa_zones
+
+func is_solo_ffa_active() -> bool:
+	return ffa_match != null
+
+func _cycle_ffa_tier(advance: bool = true) -> void:
+	if advance:
+		ffa_tier = "rookie" if ffa_tier == "amateur" else "amateur"
+	if ffa_tier_btn != null:
+		ffa_tier_btn.text = "BOTS: %s" % ffa_tier.to_upper()
+
+## Offline only. opts: bots (default 4), tier ("rookie" / "amateur"), kills_to_win (default 10), seed.
+func start_solo_ffa(opts: Dictionary = {}) -> Node:
+	if NetworkLobby.is_online_client() or NetworkLobby.is_dedicated_server:
+		_on_status_banner("Solo FFA is offline only — leave the room first", Color(1.0, 0.5, 0.3))
+		return null
+	stop_solo_ffa()
+	ffa_rematch_opts = opts.duplicate()
+	if woodsball_map_root != null and is_instance_valid(woodsball_map_root):
+		switch_arena_map("speedball") # v1 bunker graph is speedball-only
+	NetworkLobby.fill_bots_enabled = false
+	if fill_bots_check != null:
+		fill_bots_check.button_pressed = false
+	_set_opfor_bots_enabled(false)
+	if player != null and player.has_method("respawn_at_team_gate"):
+		player.call("respawn_at_team_gate", NetworkLobby.local_team)
+	ffa_match = SoloFfaMatchScript.new()
+	ffa_match.name = "SoloFfaMatch"
+	add_child(ffa_match)
+	ffa_match.call("start", self, player, opts)
+	ffa_match.connect("standings_changed", func(_rows): _refresh_scoreboard_text())
+	if lobby_canvas != null:
+		_set_lobby_overlay_visible(false)
+	if has_method("clear_gameplay_input_blocks"):
+		call("clear_gameplay_input_blocks", "solo_ffa")
+	_on_status_banner("SOLO FFA DEATHMATCH — %d %s bots, first to %d eliminations. Break on the horn!" % [
+		int(opts.get("bots", SoloFfaMatchScript.DEFAULT_BOTS)), String(opts.get("tier", ffa_tier)).to_upper(), int(opts.get("kills_to_win", SoloFfaMatchScript.KILLS_TO_WIN))], Color(1.0, 0.62, 0.2))
+	return ffa_match
+
+func stop_solo_ffa() -> void:
+	ffa_rematch_opts = {}
+	if ffa_match == null:
+		return
+	ffa_match.call("stop")
+	ffa_match.queue_free()
+	ffa_match = null
+	_ffa_zones = []
+	GameManager.death_limit_enabled = true
+
+## Web link: ?solo=ffa[&tier=rookie|amateur][&ffa_bots=N] auto-starts the FFA (skips the lobby browser).
+func _ffa_opts_from_url() -> Dictionary:
+	if not OS.has_feature("web"):
+		return {}
+	var q := String(JavaScriptBridge.eval("window.location.search", true))
+	return parse_ffa_query(q)
+
+static func parse_ffa_query(q: String) -> Dictionary:
+	var kv := {}
+	for part in q.trim_prefix("?").split("&", false):
+		var bits := part.split("=", true, 1)
+		kv[bits[0].to_lower()] = bits[1].uri_decode() if bits.size() > 1 else ""
+	if String(kv.get("solo", "")).to_lower() != "ffa":
+		return {}
+	var opts := {"bots": SoloFfaMatchScript.DEFAULT_BOTS, "tier": "amateur"}
+	if kv.has("tier") and String(kv["tier"]).to_lower() in ["rookie", "amateur"]:
+		opts["tier"] = String(kv["tier"]).to_lower()
+	if kv.has("ffa_bots") and String(kv["ffa_bots"]).is_valid_int():
+		opts["bots"] = clampi(int(kv["ffa_bots"]), 1, 7)
+	return opts
+
+func _start_ffa_when_lobby_ready(opts: Dictionary) -> void:
+	# Tim's LobbyEntryFlow attaches within ~10 frames and may open the browser; close it, then start.
+	for _i in 14:
+		await get_tree().process_frame
+	var lef := get_node_or_null("/root/LobbyEntryFlow")
+	if lef != null and lef.has_method("close_browser"):
+		lef.call("close_browser")
+	start_solo_ffa(opts)

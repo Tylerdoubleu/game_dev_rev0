@@ -13,6 +13,8 @@ extends CharacterBody3D
 const GearBracketDataScript = preload("res://scripts/resources/gear_bracket_data.gd")
 const GrittyArtThemeScript = preload("res://scripts/systems/gritty_art_theme.gd")
 const StanceRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
+## v0.7: movement + spread numbers live in MovementRules (shared with the BotPlayer); aliased below under the old names.
+const MovementRules = preload("res://scripts/player/movement_rules.gd")
 
 signal hud_state_changed(state: Dictionary)
 signal status_banner_sent(message: String, color: Color)
@@ -35,30 +37,30 @@ enum Stance {
 # v0.5.0 MOVEMENT TUNING (deliberate tournament pace). Pre-v0.5 values in comments.
 # Strafing uses the same speeds (no separate strafe multiplier). v0.6: back-pedal is slower, see below.
 # ---------------------------------------------------------------------------------------------------------
-const WALK_SPEED: float = 5.6          # was 6.2 (-10%)
-const SPRINT_SPEED: float = 8.4        # was 10.4 (-19%)
-const CROUCH_SPEED: float = 3.3        # was 3.6 (-8%)
-const PRONE_SPEED: float = 1.7         # was 1.85 (-8%)
+const WALK_SPEED: float = MovementRules.WALK_SPEED          # was 6.2 (-10%)
+const SPRINT_SPEED: float = MovementRules.SPRINT_SPEED        # was 10.4 (-19%)
+const CROUCH_SPEED: float = MovementRules.CROUCH_SPEED        # was 3.6 (-8%)
+const PRONE_SPEED: float = MovementRules.PRONE_SPEED         # was 1.85 (-8%)
 ## v0.6 back-pedal: moving backwards runs at this fraction of the forward speed for the same stance/sprint state,
 ## blended by the backward component of the input (pure S = 0.5x, back-diagonal ~0.65x, pure strafe 1.0x).
 ## Sprint never boosts the backward component (pure S + Shift = walking back-pedal speed).
-const BACKPEDAL_SPEED_MULT: float = 0.5
+const BACKPEDAL_SPEED_MULT: float = MovementRules.BACKPEDAL_SPEED_MULT
 ## Ground speed ramps instead of snapping (pre-v0.5 velocity was set instantly every frame).
-const GROUND_ACCEL: float = 28.0       # m/s^2 from rest up to walk/crouch speed (0 -> walk in 0.20s)
-const SPRINT_ACCEL: float = 9.0        # m/s^2 above walk speed (walk -> sprint in 0.31s; 0 -> sprint ~0.51s)
-const GROUND_DECEL: float = 60.0       # m/s^2 when releasing keys or dropping to a slower gait (sprint -> stop 0.14s)
-const SLIDE_INITIAL_SPEED: float = 15.8 # was 17.5 (-10%: ~7.4m -> ~6.6m slide)
-const SLIDE_DURATION: float = 0.85
+const GROUND_ACCEL: float = MovementRules.GROUND_ACCEL       # m/s^2 from rest up to walk/crouch speed (0 -> walk in 0.20s)
+const SPRINT_ACCEL: float = MovementRules.SPRINT_ACCEL        # m/s^2 above walk speed (walk -> sprint in 0.31s; 0 -> sprint ~0.51s)
+const GROUND_DECEL: float = MovementRules.GROUND_DECEL       # m/s^2 when releasing keys or dropping to a slower gait (sprint -> stop 0.14s)
+const SLIDE_INITIAL_SPEED: float = MovementRules.SLIDE_INITIAL_SPEED # was 17.5 (-10%: ~7.4m -> ~6.6m slide)
+const SLIDE_DURATION: float = MovementRules.SLIDE_DURATION
 ## v0.4.5: no firing during the Shift+Q knee-slide or Shift+C Superman dive, plus a short trigger-recovery after.
-const MOVEMENT_FIRE_RECOVERY: float = 0.15
-const DIVE_INITIAL_SPEED: float = 17.6 # was 19.5 (-10%: dive keeps a little more reach than the slide)
-const DIVE_DURATION: float = 0.95
+const MOVEMENT_FIRE_RECOVERY: float = MovementRules.MOVEMENT_FIRE_RECOVERY
+const DIVE_INITIAL_SPEED: float = MovementRules.DIVE_INITIAL_SPEED # was 19.5 (-10%: dive keeps a little more reach than the slide)
+const DIVE_DURATION: float = MovementRules.DIVE_DURATION
 
-const HEIGHT_STANDING: float = 1.58
-const HEIGHT_CROUCH: float = 0.92
-const HEIGHT_SLIDE: float = 0.68
-const HEIGHT_PRONE: float = 0.36
-const HEIGHT_DIVE: float = 0.42
+const HEIGHT_STANDING: float = MovementRules.HEIGHT_STANDING
+const HEIGHT_CROUCH: float = MovementRules.HEIGHT_CROUCH
+const HEIGHT_SLIDE: float = MovementRules.HEIGHT_SLIDE
+const HEIGHT_PRONE: float = MovementRules.HEIGHT_PRONE
+const HEIGHT_DIVE: float = MovementRules.HEIGHT_DIVE
 
 const BASE_FOV: float = 82.0
 const SLIDE_FOV: float = 96.0
@@ -68,18 +70,18 @@ const DIVE_FOV: float = 100.0
 # v0.5.0 SHOT SPREAD (rewards bunker play). Cone half-angle (deg) = bracket base * state multiplier.
 # Pre-v0.5: flat 0.75 deg square spread, +1.3 deg when moving > 3 m/s, identical for every bracket.
 # ---------------------------------------------------------------------------------------------------------
-const SPREAD_BASE_DEG_SPEEDBALL: float = 0.75 # RAMP_10_5 electro
-const SPREAD_BASE_DEG_WOODSBALL: float = 0.60 # SEMI_ONE_PULL mechanical
-const SPREAD_BASE_DEG_PUMP: float = 0.42      # PUMP_MANUAL (most accurate)
-const SPREAD_MULT_POCKET: float = 0.55        # tucked in a bunker pocket (tightest)
-const SPREAD_MULT_PRONE: float = 0.60
-const SPREAD_MULT_CROUCH: float = 0.70
-const SPREAD_MULT_STANDING: float = 1.00      # standing still
-const SPREAD_MULT_WALK: float = 2.00          # at full walk speed (scales with ground speed up to this)
-const SPREAD_MULT_SPRINT: float = 4.50        # at full sprint speed
-const SPREAD_MULT_AIRBORNE: float = 3.00      # off the ground (falls, ramp lips)
-const SPREAD_RECOVERY_TIME: float = 0.40      # s for the cone to shrink from sprint to standing (pocket ~0.45s)
-const SPREAD_BLOOM_TIME: float = 0.15         # s for the cone to open from standing to sprint
+const SPREAD_BASE_DEG_SPEEDBALL: float = MovementRules.SPREAD_BASE_DEG_SPEEDBALL # RAMP_10_5 electro
+const SPREAD_BASE_DEG_WOODSBALL: float = MovementRules.SPREAD_BASE_DEG_WOODSBALL # SEMI_ONE_PULL mechanical
+const SPREAD_BASE_DEG_PUMP: float = MovementRules.SPREAD_BASE_DEG_PUMP      # PUMP_MANUAL (most accurate)
+const SPREAD_MULT_POCKET: float = MovementRules.SPREAD_MULT_POCKET        # tucked in a bunker pocket (tightest)
+const SPREAD_MULT_PRONE: float = MovementRules.SPREAD_MULT_PRONE
+const SPREAD_MULT_CROUCH: float = MovementRules.SPREAD_MULT_CROUCH
+const SPREAD_MULT_STANDING: float = MovementRules.SPREAD_MULT_STANDING      # standing still
+const SPREAD_MULT_WALK: float = MovementRules.SPREAD_MULT_WALK          # at full walk speed (scales with ground speed up to this)
+const SPREAD_MULT_SPRINT: float = MovementRules.SPREAD_MULT_SPRINT        # at full sprint speed
+const SPREAD_MULT_AIRBORNE: float = MovementRules.SPREAD_MULT_AIRBORNE      # off the ground (falls, ramp lips)
+const SPREAD_RECOVERY_TIME: float = MovementRules.SPREAD_RECOVERY_TIME      # s for the cone to shrink from sprint to standing (pocket ~0.45s)
+const SPREAD_BLOOM_TIME: float = MovementRules.SPREAD_BLOOM_TIME         # s for the cone to open from standing to sprint
 const SPREAD_CROSSHAIR_MIN_FONT: int = 20     # crosshair "+" size at the tightest cone
 const SPREAD_CROSSHAIR_MAX_FONT: int = 38     # crosshair "+" size at the widest cone
 
@@ -177,7 +179,7 @@ var _sustained_back_escape_timer: float = 0.0
 # PB-16 (#20): Exposed Hopper/Marker/Mask/Pack Sub-Hitboxes & 2.4x Wrong-Hand Exposure
 var hitbox_mask: CollisionShape3D = null
 # v0.4.4: stance-scaled movement capsule / torso hitbox (feet stay planted at the body origin)
-const TORSO_RADIUS: float = 0.25
+const TORSO_RADIUS: float = MovementRules.TORSO_RADIUS
 const HEADROOM_PROBE_RADIUS: float = 0.22
 const HEADROOM_PROBE_FOOT_LIFT: float = 0.15
 const HEAD_CLEARANCE: float = 0.19 # mask sphere (0.17) + skin above the eye/head pivot
@@ -458,26 +460,16 @@ func _resolve_held_stance() -> Stance:
 
 ## v0.6: 0..1 backward share of a (normalized) move input; +y is back (S). Pure S = 1, back-diagonal ~0.71, strafe 0.
 static func backpedal_amount(input_vec: Vector2) -> float:
-	if input_vec.length_squared() < 0.0001:
-		return 0.0
-	return clampf(input_vec.normalized().y, 0.0, 1.0)
+	return MovementRules.backpedal_amount(input_vec)
 
 ## v0.6: speed multiplier for the backward share of the input (1.0 forward/strafe -> BACKPEDAL_SPEED_MULT pure back).
 static func backpedal_speed_factor(input_vec: Vector2) -> float:
-	return lerpf(1.0, BACKPEDAL_SPEED_MULT, backpedal_amount(input_vec))
+	return MovementRules.backpedal_speed_factor(input_vec)
 
 ## Ground-gait target speed before breakout multipliers. Sprint only boosts the non-backward share of the input,
 ## then the back-pedal factor applies on top, so back-pedalling is 50% of the same stance's forward speed.
 static func gait_target_speed(input_vec: Vector2, sprinting: bool, cur_stance: int) -> float:
-	var back := backpedal_amount(input_vec)
-	var base: float = WALK_SPEED
-	if sprinting:
-		base = lerpf(SPRINT_SPEED, WALK_SPEED, back)
-	elif cur_stance == Stance.CROUCHING:
-		base = CROUCH_SPEED
-	elif cur_stance == Stance.PRONE:
-		base = PRONE_SPEED
-	return base * backpedal_speed_factor(input_vec)
+	return MovementRules.gait_target_speed(input_vec, sprinting, cur_stance)
 
 func _update_movement_and_stance(delta: float) -> void:
 	var input_vec := Vector2(
@@ -540,16 +532,16 @@ func _update_movement_and_stance(delta: float) -> void:
 		_spill_active_pod("Sprint interrupted reload — pod spilled!")
 
 	if dive_timer > 0.0:
-		var dive_factor: float = clamp(dive_timer / DIVE_DURATION, 0.15, 1.0)
-		velocity.x = slide_dir.x * DIVE_INITIAL_SPEED * dive_factor
-		velocity.z = slide_dir.z * DIVE_INITIAL_SPEED * dive_factor
-		ground_speed = minf(DIVE_INITIAL_SPEED * dive_factor, SPRINT_SPEED)
+		var dive_spd: float = MovementRules.dive_speed(dive_timer)
+		velocity.x = slide_dir.x * dive_spd
+		velocity.z = slide_dir.z * dive_spd
+		ground_speed = minf(dive_spd, SPRINT_SPEED)
 		_ground_move_dir = slide_dir
 	elif slide_timer > 0.0:
-		var slide_factor: float = clamp(slide_timer / SLIDE_DURATION, 0.2, 1.0)
-		velocity.x = slide_dir.x * SLIDE_INITIAL_SPEED * slide_factor
-		velocity.z = slide_dir.z * SLIDE_INITIAL_SPEED * slide_factor
-		ground_speed = minf(SLIDE_INITIAL_SPEED * slide_factor, SPRINT_SPEED)
+		var slide_spd: float = MovementRules.slide_speed(slide_timer)
+		velocity.x = slide_dir.x * slide_spd
+		velocity.z = slide_dir.z * slide_spd
+		ground_speed = minf(slide_spd, SPRINT_SPEED)
 		_ground_move_dir = slide_dir
 	else:
 		if not GameManager.breakout_horn_sounded and input_vec.length() > 0.15:
@@ -569,10 +561,7 @@ func _update_movement_and_stance(delta: float) -> void:
 			target_speed = 0.0
 		else:
 			_ground_move_dir = move_dir
-		var accel: float = GROUND_DECEL
-		if target_speed > ground_speed:
-			accel = SPRINT_ACCEL if ground_speed >= WALK_SPEED * speed_mult - 0.01 else GROUND_ACCEL
-		ground_speed = move_toward(ground_speed, target_speed, accel * delta)
+		ground_speed = MovementRules.step_ground_speed(ground_speed, target_speed, speed_mult, delta)
 		velocity.x = _ground_move_dir.x * ground_speed
 		velocity.z = _ground_move_dir.z * ground_speed
 
@@ -590,15 +579,7 @@ func _update_movement_and_stance(delta: float) -> void:
 
 ## Target movement-capsule / torso-hitbox height for the current stance (shared table with ProPaintballRig3D).
 func get_stance_capsule_target() -> float:
-	if dive_timer > 0.0:
-		return StanceRigScript.STANCE_CAPSULE_DIVE
-	if slide_timer > 0.0:
-		return StanceRigScript.STANCE_CAPSULE_SLIDE
-	if stance == Stance.CROUCHING:
-		return StanceRigScript.STANCE_CAPSULE_CROUCH
-	if stance == Stance.PRONE:
-		return StanceRigScript.STANCE_CAPSULE_PRONE
-	return StanceRigScript.STANCE_CAPSULE_STANDING
+	return MovementRules.stance_capsule_target(slide_timer, dive_timer, stance)
 
 ## Smoothly resize the capsule around planted feet: only the center moves (height * 0.5), never the floor contact.
 func _update_stance_capsule(delta: float) -> void:
@@ -769,7 +750,7 @@ func _update_lean_bob_and_viewmodel(delta: float) -> void:
 ## v0.4.5: true for the whole knee-slide (slide_timer > 0), the whole Superman dive (dive_timer > 0), and the
 ## MOVEMENT_FIRE_RECOVERY window after either ends.
 func is_fire_locked_by_movement() -> bool:
-	return slide_timer > 0.0 or dive_timer > 0.0 or movement_fire_recovery_timer > 0.0
+	return MovementRules.is_fire_locked(slide_timer, dive_timer, movement_fire_recovery_timer)
 
 ## "slide" or "dive" while locked (during the move and its recovery), "" when free to fire.
 func get_fire_lock_reason() -> String:
@@ -891,43 +872,20 @@ func get_bracket_base_spread_deg(bracket: Resource = null) -> float:
 		bracket = GearRuleEnforcer.active_bracket
 	if bracket == null:
 		return SPREAD_BASE_DEG_SPEEDBALL
-	match bracket.trigger_mode:
-		GearBracketDataScript.TriggerMode.PUMP_MANUAL:
-			return SPREAD_BASE_DEG_PUMP
-		GearBracketDataScript.TriggerMode.SEMI_ONE_PULL:
-			return SPREAD_BASE_DEG_WOODSBALL
-	return SPREAD_BASE_DEG_SPEEDBALL
+	return MovementRules.bracket_base_spread_deg_for_mode(int(bracket.trigger_mode))
 
 ## Spread multiplier the cone is heading toward this frame: posture floor, opened up by ground speed.
 func get_target_spread_mult() -> float:
-	var posture: float = SPREAD_MULT_STANDING
-	if bunker_pocket_weight > 0.25:
-		posture = SPREAD_MULT_POCKET
-	elif stance == Stance.PRONE:
-		posture = SPREAD_MULT_PRONE
-	elif stance == Stance.CROUCHING:
-		posture = SPREAD_MULT_CROUCH
-	var spd: float = ground_speed
-	var m: float
-	if spd <= WALK_SPEED:
-		m = lerpf(posture, SPREAD_MULT_WALK, clampf(spd / WALK_SPEED, 0.0, 1.0))
-	else:
-		m = lerpf(SPREAD_MULT_WALK, SPREAD_MULT_SPRINT, clampf((spd - WALK_SPEED) / (SPRINT_SPEED - WALK_SPEED), 0.0, 1.0))
-	if slide_timer > 0.0 or dive_timer > 0.0:
-		m = SPREAD_MULT_SPRINT
-	elif not is_on_floor() and is_inside_tree():
-		m = maxf(m, SPREAD_MULT_AIRBORNE)
-	return m
+	var sliding_or_diving: bool = slide_timer > 0.0 or dive_timer > 0.0
+	var airborne: bool = not sliding_or_diving and is_inside_tree() and not is_on_floor()
+	return MovementRules.target_spread_mult(bunker_pocket_weight > 0.25, stance, ground_speed, sliding_or_diving, airborne)
 
 ## Current (smoothed) cone half-angle in degrees that the next shot uses.
 func get_shot_spread_deg() -> float:
 	return get_bracket_base_spread_deg() * shot_spread_mult
 
 func _update_shot_spread(delta: float) -> void:
-	var target: float = get_target_spread_mult()
-	var span: float = SPREAD_MULT_SPRINT - SPREAD_MULT_STANDING
-	var rate: float = span / (SPREAD_BLOOM_TIME if target > shot_spread_mult else SPREAD_RECOVERY_TIME)
-	shot_spread_mult = move_toward(shot_spread_mult, target, rate * delta)
+	shot_spread_mult = MovementRules.step_spread_mult(shot_spread_mult, get_target_spread_mult(), delta)
 	_update_spread_crosshair()
 
 func _update_spread_crosshair() -> void:
@@ -948,9 +906,7 @@ func _update_spread_crosshair() -> void:
 
 ## Random direction inside a circular cone of half-angle spread_deg around base_dir (uniform over the disc).
 static func apply_spread_cone(base_dir: Vector3, right_dir: Vector3, up_dir: Vector3, spread_deg: float) -> Vector3:
-	var r: float = tan(deg_to_rad(spread_deg)) * sqrt(randf())
-	var th: float = randf() * TAU
-	return (base_dir + right_dir * (r * cos(th)) + up_dir * (r * sin(th))).normalized()
+	return MovementRules.apply_spread_cone(base_dir, right_dir, up_dir, spread_deg)
 
 func _fire_single_paintball(bracket: Resource) -> void:
 	if spectating or break_hold_active:
