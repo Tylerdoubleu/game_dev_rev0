@@ -30,7 +30,7 @@ func _process(_d: float) -> bool:
 	L.break_countdown_ms = 0
 	L.match_countdown_ms = 0 # rules tests start instantly; _test_ready_and_countdown covers the 3 s countdown
 	_test_ipc_document()
-	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_ctf_round_timer", "_test_break_and_callouts", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown"]:
+	for t in ["_test_team_balance", "_test_lobby_settings", "_test_deathmatch", "_test_ctf_best_of_5", "_test_ctf_round_timer", "_test_break_and_callouts", "_test_bots_test_mode", "_test_hit_validation", "_test_ready_and_countdown", "_test_team_colors"]:
 		if has_method(t):
 			L.start_dedicated_server(PORT + 1 + f)
 			L.outbound_capture = []
@@ -531,3 +531,42 @@ func _test_ready_and_countdown() -> void:
 	_advance(4000)
 	_check(not L.rooms["lobby_07"].has("countdown_until_ms") and not bool(L.rooms["lobby_07"]["match"]["active"]), "countdown cancelled when the room empties")
 	L.match_countdown_ms = 0
+
+## v0.6.4: request_team_color -> team_colors_changed / team_color_rejected (Ren's waiting-room picker contract).
+func _test_team_colors() -> void:
+	_begin("v0.6.4 team colors")
+	_reg(81, "lobby_07") # ALPHA
+	_reg(82, "lobby_07") # BRAVO
+	var rid := "lobby_07"
+	var rej := func(pid: int) -> Array: return _sent(pid, "cl_room_event").filter(func(m): return m["args"][0] == "team_color_rejected").map(func(m): return m["args"][1]["reason"])
+	_check(L._room_snapshot(rid)["team_colors"] == {"ALPHA": "red", "BRAVO": "blue"}, "room state starts with the defaults")
+	L._server_request_team_color(81, "pink")
+	var ch := _events("team_colors_changed", rid)
+	_check(ch.size() == 1 and ch[0]["data"]["team_colors"] == {"ALPHA": "pink", "BRAVO": "blue"} and ch[0]["data"]["team"] == "ALPHA", "ALPHA picks pink -> team_colors_changed (%s)" % [ch])
+	_check(L._room_snapshot(rid)["team_colors"]["ALPHA"] == "pink", "room state carries the pick")
+	var st := _sent(82, "sync_lobby_state")
+	_check(not st.is_empty() and st.back()["args"][0]["team_colors"]["ALPHA"] == "pink", "room-mates get it in sync_lobby_state")
+	_advance(400)
+	L._server_request_team_color(82, "pink")
+	_check(rej.call(82) == ["taken"] and L._room_snapshot(rid)["team_colors"]["BRAVO"] == "blue", "BRAVO can't take ALPHA's pink (taken)")
+	_advance(400)
+	L._server_request_team_color(82, "Mauve")
+	L._server_request_team_color(82, "Cyan")
+	_check(rej.call(82) == ["taken", "invalid", "invalid"], "unknown / wrong-case names rejected (invalid)")
+	L._server_request_team_color(82, "cyan")
+	_check(L._room_snapshot(rid)["team_colors"]["BRAVO"] == "cyan", "BRAVO picks cyan")
+	L._server_request_team_color(82, "green")
+	_check(rej.call(82).back() == "rate_limited" and L._room_snapshot(rid)["team_colors"]["BRAVO"] == "cyan", "a second pick within 300 ms is rate_limited")
+	_advance(400)
+	L._server_request_team_color(81, "blue")
+	_check(L._room_snapshot(rid)["team_colors"]["ALPHA"] == "blue", "blue is free once BRAVO moved to cyan")
+	var r: Array = _sent(82, "cl_room_event").filter(func(m): return m["args"][0] == "team_color_rejected")
+	_check(r.back()["args"][1].has("team_colors") and r.back()["args"][1]["team_colors"] is Dictionary, "rejection carries the confirmed team_colors")
+	L._server_request_start(81, "speedball")
+	_advance(400)
+	L._server_request_team_color(81, "orange")
+	_check(rej.call(81).back() == "round_active" and L._room_snapshot(rid)["team_colors"]["ALPHA"] == "blue", "colors locked during the match (round_active)")
+	_check(L.team_color_reject_reason({"ALPHA": "red", "BRAVO": "blue"}, "ALPHA", "green", false) == "", "shared rule accepts a free color")
+	L._server_remove_peer(81)
+	L._server_remove_peer(82)
+	_check(L.rooms[rid]["settings"]["team_colors"] == {"ALPHA": "red", "BRAVO": "blue"}, "empty lobby resets to the defaults")
