@@ -40,6 +40,7 @@ var _spots: Array[Button] = []
 var _shooter_pos := NO_POS
 var _death_pos := NO_POS
 var _killer := ""
+var _dots: Array = []
 var _root: Control
 
 func _init() -> void:
@@ -68,6 +69,16 @@ func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deat
 	_root.modulate.a = 0.0
 	var tw := create_tween()
 	tw.tween_property(_root, "modulate:a", 1.0, 0.18)
+
+## Live player dots: [{"team": "ALPHA"/"BRAVO", "pos": Vector3}, ...]. Call as often as you like while open.
+## Only players standing on YOUR half are drawn (Tyler 10/31: no calling out enemies on the far half).
+func set_players(dots: Array) -> void:
+	_dots = dots.filter(func(d) -> bool: return d.has("pos") and on_my_half(d["pos"]))
+	if _map != null:
+		_map.queue_redraw()
+
+func on_my_half(p: Vector3) -> bool:
+	return p.z * _side() > 0.0
 
 func close() -> void:
 	visible = false
@@ -227,6 +238,13 @@ func _draw_map() -> void:
 			var c := _own_to_map(bk[0], float(bk[1]) * half)
 			var sz := Vector2(bk[2] * px, bk[3] * pz) * 1.2
 			_map.draw_rect(Rect2(c - sz * 0.5, sz), Color(0.62, 0.62, 0.55, 0.6))
+	# live players on your half only
+	for d in _dots:
+		var pp: Vector3 = d["pos"]
+		var dc := RED if String(d.get("team", "")) == "ALPHA" else BLUE
+		var mp := _to_map(pp.x, pp.z)
+		_map.draw_circle(mp, 6.5, Color.BLACK)
+		_map.draw_circle(mp, 5.0, dc.lightened(0.15))
 	# shooter, where you went down, and the line between them
 	var has_s := _has(_shooter_pos)
 	var has_d := _has(_death_pos)

@@ -28,5 +28,7 @@ func _initialize() -> void:
 	rs.open("Viper", "ALPHA", _zones(1.0), 3, 10, Vector3(-14, 0, -8), Vector3(-11, 0, 27))
 	_check(rs._to_map(-14, -8).y < rs._to_map(-11, 27).y, "ALPHA: shooter in the enemy half drawn above where you went down")
 	_check(rs._spots[2].position.y > rs._map.custom_minimum_size.y * 0.5, "ALPHA: own base at the bottom of the map")
+	rs.set_players([{"team": "ALPHA", "pos": Vector3(5, 0, 20)}, {"team": "BRAVO", "pos": Vector3(0, 0, 10)}, {"team": "BRAVO", "pos": Vector3(0, 0, -20)}])
+	_check(rs._dots.size() == 2, "ALPHA: only players on your half are drawn")
 	print("=== [%s] v0.6 respawn screen ===" % ("PASS" if fails.is_empty() else "FAIL " + str(fails)))
 	quit(0 if fails.is_empty() else 1)
