@@ -33,9 +33,9 @@ The web client is **not** exported on the server; players load it from GitHub Pa
 - `paintball-server.service`: runs `node server/server.js` with `Restart=always`;
   enabled at boot.
 - `paintball-update.timer` / `paintball-update.service` / `update.sh`: auto-deploy.
-- `Caddyfile`: TLS + reverse proxy to `127.0.0.1:8080` + CORS for `/api/*`. Caddy answers
-  `OPTIONS /api/*` preflight itself with `204` (`Allow-Origin *`, `Allow-Methods GET, POST, PUT, OPTIONS`,
-  `Allow-Headers Authorization, Content-Type`, `Max-Age 600`), so it never reaches Node.
+- `Caddyfile`: TLS + reverse proxy to `127.0.0.1:8080`. Caddy sets no CORS headers and does not
+  answer preflight: `/api/*`, `/ws` and `OPTIONS` all go straight to Node, and `server/server.js`
+  sets `Access-Control-*` itself from `CORS_ORIGINS` (one header, never duplicated).
 - `paintball-backup.timer` / `paintball-backup.service` / `backup-live.sh`: nightly live-data backup (below).
 
 ## Persistent data (profiles, callsigns, clout)
