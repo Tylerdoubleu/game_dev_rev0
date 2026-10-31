@@ -58,11 +58,11 @@ func _process(_delta: float) -> bool:
 	var player := arena.get_node_or_null("Player3D") as CharacterBody3D
 	assert(player != null, "Player3D must exist")
 	assert( not lobby.fill_bots_enabled, "NPC Presence must default to OFF (false)")
-	assert(arena.get_node_or_null("OpFor_Snake50") == null, "No OpFor bots should exist when NPC Presence is OFF")
+	assert(arena.get_node_or_null("Bot_Snake50") == null, "No OpFor bots should exist when NPC Presence is OFF")
 
 	# Enable NPC Presence from the menu and verify bots spawn
 	arena.call("_select_npc_presence", true)
-	var bot := arena.get_node_or_null("OpFor_Snake50") as StaticBody3D
+	var bot := arena.get_node_or_null("Bot_Snake50") as StaticBody3D
 	assert(bot != null and bot.visible, "Selecting NPC Presence ON must spawn OpFor bots")
 
 	# Test +1 Pod reward on kill

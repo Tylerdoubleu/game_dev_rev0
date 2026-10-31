@@ -228,7 +228,7 @@ func _clear_speedball_bunkers() -> void:
 		if child is StaticBody3D:
 			var cname := String(child.name)
 			if cname.begins_with("Bunker_") or cname.begins_with("Home_") or cname.begins_with("OpFor_") or cname.begins_with("Snake_") or cname.begins_with("WoodSpool_"):
-				if not (cname in ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]):
+				if not ("bot_name" in child): # practice bots are Bot_* now; never mistake one for a bunker
 					to_remove.append(child)
 	for n in to_remove:
 		remove_child(n)
@@ -283,20 +283,44 @@ func _spawn_bunker(bunker_name: String, pos: Vector3, size: Vector3, color: Colo
 	GrittyArtThemeScript.decorate_bunker_mesh(body, mesh, size, color)
 	add_child(body)
 
+## v0.6.3: practice bot node names. They used to be OpFor_<stem>, but the speedball bunkers OpFor_CenterAztec and
+## OpFor_BackCenter already held two of those names, so get_node_or_null() found the bunker, the bot was skipped (only 3
+## of 5 spawned) and turning bots off deleted those two bunkers. The Bot_ prefix keeps bot and bunker names apart.
+const OPFOR_BOT_NAMES := ["Bot_Snake50", "Bot_SnakeCorner", "Bot_CenterAztec", "Bot_Dorito2", "Bot_BackCenter"]
+
+## The practice bot called bname, or null (a bunker or anything else with that name never counts).
+func get_opfor_bot(bname: String) -> Node3D:
+	var n := get_node_or_null(bname)
+	if n is Node3D and "bot_name" in n and not n.is_queued_for_deletion():
+		return n as Node3D
+	return null
+
+## Every practice bot currently in the arena.
+func get_opfor_bots() -> Array[Node3D]:
+	var out: Array[Node3D] = []
+	for bname in OPFOR_BOT_NAMES:
+		var b := get_opfor_bot(bname)
+		if b != null:
+			out.append(b)
+	return out
+
 func _spawn_opfor_bots() -> void:
 	var bot_script := load("res://scripts/systems/snap_target_bot.gd")
 
 	var placements := [
-		{"name": "OpFor_Snake50", "label": "OpFor Snake-1", "pos": Vector3(-35.0, 0.0, -11.5), "peek": Vector3(1.3, 0.0, 0.0)},
-		{"name": "OpFor_SnakeCorner", "label": "OpFor Snake-Corner", "pos": Vector3(-28.5, 0.0, -25.8), "peek": Vector3(1.25, 0.0, 0.0)},
-		{"name": "OpFor_CenterAztec", "label": "OpFor Center-Aztec", "pos": Vector3(0.0, 0.0, -20.2), "peek": Vector3(1.55, 0.0, 0.0)},
-		{"name": "OpFor_Dorito2", "label": "OpFor Dorito-2", "pos": Vector3(36.5, 0.0, -12.8), "peek": Vector3(-1.4, 0.0, 0.0)},
-		{"name": "OpFor_BackCenter", "label": "OpFor Back-Center", "pos": Vector3(0.0, 0.0, -39.2), "peek": Vector3(1.6, 0.0, 0.0)}
+		{"name": "Bot_Snake50", "label": "OpFor Snake-1", "pos": Vector3(-35.0, 0.0, -11.5), "peek": Vector3(1.3, 0.0, 0.0)},
+		{"name": "Bot_SnakeCorner", "label": "OpFor Snake-Corner", "pos": Vector3(-28.5, 0.0, -25.8), "peek": Vector3(1.25, 0.0, 0.0)},
+		{"name": "Bot_CenterAztec", "label": "OpFor Center-Aztec", "pos": Vector3(0.0, 0.0, -20.2), "peek": Vector3(1.55, 0.0, 0.0)},
+		{"name": "Bot_Dorito2", "label": "OpFor Dorito-2", "pos": Vector3(36.5, 0.0, -12.8), "peek": Vector3(-1.4, 0.0, 0.0)},
+		{"name": "Bot_BackCenter", "label": "OpFor Back-Center", "pos": Vector3(0.0, 0.0, -39.2), "peek": Vector3(1.6, 0.0, 0.0)}
 	]
 
 	for p in placements:
-		if get_node_or_null(p["name"]) != null:
+		if get_opfor_bot(p["name"]) != null:
 			continue
+		var stale := get_node_or_null(p["name"]) # a bot freed this frame still holds the name: release it first
+		if stale != null:
+			remove_child(stale)
 		var b := StaticBody3D.new()
 		b.set_script(bot_script)
 		b.name = p["name"]
@@ -818,27 +842,18 @@ func _on_network_match_started(_room_id: String, bracket_id: String, fill_bots: 
 	_on_status_banner("MATCH LIVE — Room [%s] | Bracket: %s | Press [TAB] for Lobby" % [NetworkLobby.active_room.to_upper(), bracket_id.to_upper()], Color(0.35, 1.0, 0.55))
 
 func _set_opfor_bots_enabled(enabled: bool) -> void:
-	var bot_names := ["OpFor_Snake50", "OpFor_SnakeCorner", "OpFor_CenterAztec", "OpFor_Dorito2", "OpFor_BackCenter"]
 	if enabled:
-		var any_missing := false
-		for bname in bot_names:
-			if get_node_or_null(bname) == null:
-				any_missing = true
-				break
-		if any_missing:
+		if get_opfor_bots().size() < OPFOR_BOT_NAMES.size():
 			_spawn_opfor_bots()
-		for bname in bot_names:
-			var b := get_node_or_null(bname) as Node3D
-			if b != null and b.has_method("set_bot_enabled"):
+		for b in get_opfor_bots():
+			if b.has_method("set_bot_enabled"):
 				b.call("set_bot_enabled", true)
 	else:
-		for bname in bot_names:
-			var b := get_node_or_null(bname) as Node3D
-			if b != null:
-				if b.has_method("set_bot_enabled"):
-					b.call("set_bot_enabled", false)
-				remove_child(b)
-				b.queue_free()
+		for b in get_opfor_bots():
+			if b.has_method("set_bot_enabled"):
+				b.call("set_bot_enabled", false)
+			remove_child(b)
+			b.queue_free()
 
 func _select_npc_presence(enabled: bool) -> void:
 	NetworkLobby.fill_bots_enabled = enabled

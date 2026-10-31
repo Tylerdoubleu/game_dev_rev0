@@ -127,10 +127,10 @@ func _run() -> void:
 	print("[6] shooter + death spot reach open() (real offline hit path)")
 	_lobby().set("local_team", "ALPHA")
 	_lobby().set("fill_bots_enabled", true)
-	if arena.get_node_or_null("OpFor_CenterAztec") == null:
+	if arena.get_node_or_null("Bot_CenterAztec") == null:
 		arena.call("_spawn_opfor_bots")
 		await _frames(2)
-	var bot := arena.get_node_or_null("OpFor_CenterAztec") as Node3D
+	var bot := arena.get_node_or_null("Bot_CenterAztec") as Node3D
 	_check(bot != null, "OpFor bots present")
 	player.set("_respawn_flash_timer", 0.0)
 	player.global_position = Vector3(6.0, 0.1, 22.0)

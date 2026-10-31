@@ -82,7 +82,7 @@ func _check_map(map_id: String, expect_names: Array) -> Array:
 		_check(names.has(want), "%s has \"%s\"" % [map_id, want])
 	for e in entries:
 		var nm := String((e["node"] as Node).name)
-		if nm.begins_with("OpFor_Snake50") or nm.begins_with("OpFor_SnakeCorner") or nm.begins_with("OpFor_Dorito2"):
+		if nm.begins_with("Bot_") or "bot_name" in (e["node"] as Node):
 			_check(false, "bot %s leaked into the registry" % nm)
 	return entries
 
@@ -150,11 +150,11 @@ func _run() -> void:
 				_check(false, "%s %s mirrors: %s / %s" % [map_id, stem, r, b])
 	_check(String(CalloutsScript.callout_for_node_name("Snake_Beam_Home1", "speedball")) == "Red Snake 2" and String(CalloutsScript.callout_for_node_name("Snake_Beam_OpFor1", "speedball")) == "Blue Snake 2", "snake numbered from each end: Red Snake 2 / Blue Snake 2")
 	_check(String(CalloutsScript.callout_for_node_name("Home_MidCan_L", "woodsball_crash")) == "Red Snake Spool" and String(CalloutsScript.callout_for_node_name("Home_MidCan_L", "speedball")) == "Red Snake Can", "per-map names (Can on speedball, Spool in the woods)")
-	_check(String(CalloutsScript.callout_for_node_name("OpFor_Snake50", "speedball")).is_empty(), "bot names are not bunkers")
+	_check(String(CalloutsScript.callout_for_node_name("Bot_Snake50", "speedball")).is_empty(), "bot names are not bunkers")
 
 	print("[3] speedball registry")
 	var sb := _check_map("speedball", ["Red Home", "Blue Home", "Red Snake 2", "Blue Snake 4", "Snake 50", "Center", "50 Dorito", "Red Cake", "Red Dorito 1", "Blue Dorito 3", "Red Home Spool", "Snake Insert"])
-	_check(_entry(sb, "Blue Cake").is_empty() and _entry(sb, "Blue Back Center").is_empty(), "speedball: OpFor_CenterAztec / OpFor_BackCenter are practice bots there, not bunkers")
+	_check(not _entry(sb, "Blue Cake").is_empty() and not _entry(sb, "Blue Back Center").is_empty(), "speedball: OpFor_CenterAztec / OpFor_BackCenter are real bunkers again (bots are Bot_*)")
 
 	print("[4] aim pick (crosshair collider, nearest along the ray)")
 	await _frames(2)
@@ -173,7 +173,7 @@ func _run() -> void:
 	bot_gd.reload()
 	var bot := StaticBody3D.new()
 	bot.set_script(bot_gd)
-	bot.name = "OpFor_Snake50"
+	bot.name = "Bot_Snake50"
 	var bshape := CollisionShape3D.new()
 	var bbox := BoxShape3D.new()
 	bbox.size = Vector3(0.8, 1.8, 0.8)

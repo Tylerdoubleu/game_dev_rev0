@@ -1391,7 +1391,7 @@ func _is_cover_bunker_collider(col: Object) -> bool:
 		return false
 	var sbody := col as StaticBody3D
 	var n: String = String(sbody.name)
-	if n == "TurfFloor" or n.begins_with("Walkable") or n.begins_with("Ramp_") or n.begins_with("TowerFloor_") or n.begins_with("SafetyNet") or n.begins_with("RemotePlayer") or n.begins_with("OpFor_Snake50") or n.begins_with("OpFor_SnakeCorner") or n.begins_with("OpFor_CenterAztec") or n.begins_with("OpFor_Dorito2") or n.begins_with("OpFor_BackCenter"):
+	if n == "TurfFloor" or n.begins_with("Walkable") or n.begins_with("Ramp_") or n.begins_with("TowerFloor_") or n.begins_with("SafetyNet") or n.begins_with("RemotePlayer") or n.begins_with("Bot_") or "bot_name" in sbody:
 		return false
 	if bool(sbody.get_meta("is_rigid_cover", false)) or bool(sbody.get_meta("rigid_cover", false)) or bool(sbody.get_meta("is_cover_bunker", false)):
 		return true

@@ -126,7 +126,7 @@ func current_map_id() -> String:
 	return "speedball"
 
 static func _is_bunker_candidate(n: Node) -> bool:
-	# bots (snap_target_bot: OpFor_CenterAztec / OpFor_BackCenter ...) and avatars share the names: skip scripted nodes
+	# practice bots (snap_target_bot, Bot_*) and avatars are not bunkers: skip scripted nodes
 	if not (n is Node3D) or n.get_script() != null or "is_eliminated" in n:
 		return false
 	return (n as Node3D).is_visible_in_tree()
@@ -235,7 +235,8 @@ func enemy_nodes() -> Array:
 				out.append(n)
 	elif builder != null:
 		for c in builder.get_children():
-			if c is Node3D and "is_eliminated" in c and String(c.name).begins_with("OpFor_") == (NetworkLobby.local_team == "ALPHA"):
+			# practice bots (Bot_*) always play the OpFor (BRAVO) side, so they are enemies only to ALPHA
+			if c is Node3D and "is_eliminated" in c and String(c.name).begins_with("Bot_") and NetworkLobby.local_team == "ALPHA":
 				out.append(c)
 	return out
 
