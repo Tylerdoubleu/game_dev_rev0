@@ -249,6 +249,7 @@ func _gesture_capture() -> void:
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		focus_outs += 1
+		_release_player_inputs("focus_out")
 		_show_overlay(is_active() and capture_policy() == "capture" and not is_captured())
 	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
 		focus_ins += 1
@@ -259,6 +260,8 @@ func _on_js_pointerlockchange(_args: Array) -> void:
 	browser_lock_changes += 1
 	_grant_pending_until_ms = 0
 	poll_pointer_lock()
+	if browser_lock == 0:
+		_release_player_inputs("pointer_lock_lost") # alt-tab / Esc: keys held at that moment never send a key-up
 	if is_inside_tree():
 		policy = capture_policy()
 		_apply(false)
@@ -269,6 +272,18 @@ func _on_js_pointerlockerror(_args: Array) -> void:
 	if is_inside_tree():
 		policy = capture_policy()
 		_apply(false)
+
+## v0.6.3: the window blur / lost Pointer Lock (alt-tab) also releases every held key action on the player, so Alt
+## (prone_dive) or Ctrl/C/Q pressed as the window lost focus doesn't leave the player stuck prone/crouched.
+var input_releases: int = 0
+func _release_player_inputs(reason: String) -> void:
+	input_releases += 1
+	if player != null and is_instance_valid(player) and player.has_method("release_held_inputs"):
+		player.call("release_held_inputs", reason)
+	else:
+		for a in InputMap.get_actions():
+			if Input.is_action_pressed(a):
+				Input.action_release(a)
 
 func _show_overlay(on: bool) -> void:
 	if overlay != null and overlay.visible != on:

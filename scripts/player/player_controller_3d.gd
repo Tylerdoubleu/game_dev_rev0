@@ -404,6 +404,8 @@ func _physics_process(delta: float) -> void:
 	if NetworkLobby.is_dedicated_server:
 		return
 	time_since_last_shot += delta
+	if not window_focused:
+		release_held_inputs("unfocused") # v0.6.3: key-downs delivered after the blur (Alt of Alt+Tab) never get a key-up
 	if movement_fire_recovery_timer > 0.0 and slide_timer <= 0.0 and dive_timer <= 0.0:
 		movement_fire_recovery_timer = maxf(0.0, movement_fire_recovery_timer - delta)
 	_update_movement_fire_lock_signal()
@@ -1116,6 +1118,39 @@ func clear_input_blocks(reason: String = "", sync: bool = true) -> void:
 		lobby_open = false
 	if sync:
 		_sync_mouse_capture()
+
+## v0.6.3 alt-tab fix (Tyler: "alt tab out and back, my player is stuck to the ground"). Alt is bound to prone_dive
+## (v0.2.4, next to Ctrl/C/Z). Alt+Tab sends the Alt key-down to the game, then the OS takes Tab and the window loses
+## focus, so the Alt key-up never arrives: prone_dive stays "held" and the player stays prone after coming back. The
+## web build also queues key events and dispatches them a frame later, so an Alt key-down that raced the blur can land
+## AFTER the engine's own release-on-blur. Fix: release every InputMap action on focus out, on every physics frame while
+## the window is unfocused (catches those late key-downs), on focus in, and when the browser drops Pointer Lock
+## (MouseCaptureGuard calls release_held_inputs). The stance then falls back to what the (now empty) keys ask for:
+## standing if there is headroom. A knee-slide / superman dive already in progress finishes normally.
+var window_focused: bool = true
+var held_input_releases: int = 0
+var last_held_input_release: String = ""
+
+func release_held_inputs(reason: String = "") -> void:
+	held_input_releases += 1
+	last_held_input_release = reason
+	Input.flush_buffered_events()
+	for a in InputMap.get_actions():
+		if Input.is_action_pressed(a):
+			Input.action_release(a)
+	if slide_timer <= 0.0 and dive_timer <= 0.0 and is_inside_tree():
+		var prev := stance
+		stance = _clamp_stance_to_headroom(_resolve_held_stance(), true)
+		if stance != prev:
+			_emit_hud()
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
+		window_focused = false
+		release_held_inputs("focus_out")
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		window_focused = true
+		release_held_inputs("focus_in")
 
 func _lobby_canvas_on_screen() -> bool:
 	if not is_inside_tree() or get_tree().current_scene == null:
