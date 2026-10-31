@@ -40,7 +40,7 @@ Client → server (always `rpc_id(1)`):
 
 | RPC | Purpose |
 |---|---|
-| `register_player_info(callsign, team, bracket, ready, room, map, mode)` | Join or update. The server picks the team. |
+| `register_player_info(callsign, team, bracket, ready, room, map, mode)` | Join or update. The server picks the team. v0.6.4: the server sanitizes `callsign` to the client rule (uppercase, A-Z 0-9 _ -, 3-16; bad characters stripped, long names truncated, under 3 -> `Player_NNN`). Clients without `?name=` / `--name=` send the title's saved PLAYER TAG (`user://player_tag.cfg`), deep links included. |
 | `srv_player_state(pos, yaw, pitch, lean, packed_stance, eliminated)` | About 20 Hz movement and stance (bracket bits included). |
 | `srv_fire(origin, dir, speed_fps)` | Shot intent. Validated, then relayed to the room as `rpc_fire_paintball`. |
 | `srv_report_hit(victim_peer, hit_pos)` | The shooter's local hit. The server validates it and may emit `player_eliminated`. |

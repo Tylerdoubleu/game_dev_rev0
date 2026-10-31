@@ -144,6 +144,8 @@ func _ready() -> void:
 	_generate_default_callsign()
 	_connect_multiplayer_signals()
 	_parse_runtime_environment_and_url()
+	if not is_dedicated_server:
+		apply_saved_player_tag() # before any auto-connect, so deep links (no title screen) still use the saved tag
 
 	if not is_dedicated_server and profile_token.is_empty():
 		profile_token = load_saved_profile_token()
@@ -235,6 +237,7 @@ func _parse_runtime_environment_and_url() -> void:
 			room_from_url = true
 		elif arg.begins_with("--name="):
 			local_callsign = _sanitize_token(arg.trim_prefix("--name="), local_callsign)
+			name_from_url = true
 		elif arg.begins_with("--ws=") or arg.begins_with("--server="):
 			var raw_arg := arg.split("=", true, 1)[1]
 			current_ws_url = normalize_ws_url(raw_arg)
@@ -277,6 +280,7 @@ func _parse_query_string(query: String) -> void:
 				room_from_url = true
 			elif (key == "name" or key == "callsign") and not val.is_empty():
 				local_callsign = _sanitize_token(val, local_callsign)
+				name_from_url = true
 			elif key == "team" and not normalize_team(val).is_empty():
 				local_team = normalize_team(val)
 			elif key == "bracket" and val.to_lower() in ["speedball", "woodsball", "pump"]:
@@ -292,6 +296,41 @@ func _parse_query_string(query: String) -> void:
 			elif key in ["server", "ws", "edgegap"] and not val.is_empty():
 				current_ws_url = normalize_ws_url(val)
 				server_from_url = true
+
+## v0.6.4: the title screen's PLAYER TAG (user://player_tag.cfg, [player] tag=...). Deep links skip the title, so
+## NetworkLobby applies the saved tag itself unless ?name= / --name= named the player. Read with ConfigFile directly
+## (no TitleScreen class/preload). Returns true when a tag was applied.
+var name_from_url := false
+var player_tag_cfg_path := "user://player_tag.cfg"
+
+static func load_saved_player_tag(path: String) -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load(path) != OK:
+		return ""
+	var t := String(cfg.get_value("player", "tag", "")).strip_edges()
+	return t if sanitize_player_name(t, "") == t.to_upper() else ""
+
+func apply_saved_player_tag() -> bool:
+	if name_from_url:
+		return false
+	var t := load_saved_player_tag(player_tag_cfg_path)
+	if t.is_empty():
+		return false
+	update_local_player_choices(t, local_team, "", fill_bots_enabled) # "" bracket: leave the bracket as it is
+	return true
+
+## v0.6.4 server-side player names match the client's CallsignEntry rule: uppercase, only A-Z 0-9 _ -, 3-16 chars.
+## Bad characters are stripped and long names truncated; under 3 characters left -> fallback (the Player_NNN default).
+const PLAYER_NAME_MIN := 3
+const PLAYER_NAME_MAX := 16
+static func sanitize_player_name(raw: String, fallback: String) -> String:
+	var out := ""
+	for ch in raw.strip_edges().to_upper():
+		if (ch >= "A" and ch <= "Z") or (ch >= "0" and ch <= "9") or ch == "_" or ch == "-":
+			out += ch
+			if out.length() >= PLAYER_NAME_MAX:
+				break
+	return out if out.length() >= PLAYER_NAME_MIN else fallback
 
 func _sanitize_token(raw: String, fallback: String) -> String:
 	var cleaned := raw.strip_edges().substr(0, 20)
@@ -1266,7 +1305,7 @@ func _server_register_peer(pid: int, callsign: String, team: String, bracket_id:
 		if not normalize_mode(mode_id, "").is_empty():
 			room["settings"]["mode"] = normalize_mode(mode_id, "")
 	var info: Dictionary = room["players"].get(pid, {"kills": 0, "deaths": 0, "alive": true, "joined_ms": Time.get_ticks_msec()})
-	info["name"] = _sanitize_token(callsign, "Player_%d" % (pid % 1000))
+	info["name"] = sanitize_player_name(callsign, "Player_%d" % (pid % 1000))
 	info["bracket"] = bracket_id if bracket_id in ["speedball", "woodsball", "pump"] else "speedball"
 	info["ready"] = is_ready
 	info["room"] = rid
