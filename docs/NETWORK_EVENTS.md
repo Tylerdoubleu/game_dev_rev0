@@ -43,6 +43,7 @@ Client → server (always `rpc_id(1)`):
 | `srv_player_state(pos, yaw, pitch, lean, packed_stance, eliminated)` | About 20 Hz movement and stance (bracket bits included). |
 | `srv_fire(origin, dir, speed_fps)` | Shot intent. Validated, then relayed to the room as `rpc_fire_paintball`. |
 | `srv_report_hit(victim_peer, hit_pos)` | The shooter's local hit. The server validates it and may emit `player_eliminated`. |
+| `srv_net_pong(server_ms)` | v0.6.4: echoes `cl_net_ping` straight back (unreliable). Sent automatically by the autoload; feeds the lag-compensation RTT. |
 | `srv_bot_eliminated(name)`, `srv_flag_event(...)` | Cosmetic relays (legacy centre flag). |
 | `srv_set_room_settings(map, mode)` | Change the lobby map or mode (waiting only). |
 | `request_start_match(room, bracket, fill_bots)` | Start the room's match after a 5 s countdown (`match_starting`, then `match_countdown` 5,4,3,2,1, then `round_started`). It does not wait for READY. A second press during the countdown is ignored.<br>If a team is still empty after auto-balance, the requester gets `start_rejected` (reason `team_empty`). That check is skipped when the mode is `bots_test` or the `fill_bots` arg is true.<br>Online clients don't drop in on the press; they wait for `notify_match_start`. |
@@ -53,7 +54,7 @@ Client helpers:
 - `NetworkLobby.set_ready(bool)` sends `srv_set_ready` when online, or updates the offline roster.
 - `NetworkLobby.leave_room()` disconnects cleanly (the server drops the peer from its room) and clears room, match and ready state. On web it strips `room`, `team`, `map` and `mode` from the URL. It then emits `left_room(room_id)`, and LobbyEntryFlow reopens the lobby list.
 
-Server → client (authority, per peer): `sync_lobby_state(state)`, `notify_match_start(room, bracket, fill_bots)`, `cl_room_event(name, data)`, `rpc_sync_player_state(...)`, `rpc_fire_paintball(...)`, `rpc_notify_bot_eliminated`, `rpc_broadcast_flag_event`.
+Server → client (authority, per peer): `sync_lobby_state(state)`, `notify_match_start(room, bracket, fill_bots)`, `cl_room_event(name, data)`, `rpc_sync_player_state(...)`, `rpc_fire_paintball(...)`, `cl_net_ping(server_ms)` (v0.6.4, unreliable, once a second), `rpc_notify_bot_eliminated`, `rpc_broadcast_flag_event`.
 
 Client signals: `match_starting(data)`, `match_countdown(seconds_left, data)`, `match_start_cancelled(data)` and `start_rejected(reason, data)`. These names are stable, and the HUD countdown banner hooks them. `room_roster_changed(roster)` fires on every `sync_lobby_state`, and `left_room(room_id)` fires after `leave_room()`.
 
@@ -119,6 +120,20 @@ Hit (`srv_report_hit`) rejections, in order:
 2. `no_matching_shot`, `aim_mismatch` (more than 12°, drop-compensated, and at most 90 m)
 3. `outside_hitbox`: the stance box from victim history (standing 1.95 m, crouch 1.30 m, prone or dive 0.80 m, slide 1.0 m; radius 0.9 m, or 1.3 m prone or dive)
 4. `no_line_of_sight`: the chord or the gravity+drag arc is blocked by static arena geometry. The server builds a collision-only copy of each map.
+
+`before_horn` and `round_over` are checked before all of the above and are unchanged by lag compensation, as are the shot rejections. `hit_rejected` keeps the same `{victim, reason}` payload; no event changed shape.
+
+### v0.6.4 lag compensation (server rewind)
+The shooter hits what their screen showed, which is the victim slightly in the past. The server now validates the hitbox against that past pose instead of the latest one.
+
+- **History.** For each player the server keeps the last ~1 s of `srv_player_state` samples (`[server_ms, feet, packed_stance]`): at most 1200 ms and 64 samples, stamped on receipt with the rules clock. A jump faster than 20 m/s (and more than 2 m), such as a respawn, clears the history so a victim can't be hit at the old spot.
+- **RTT.** WebSocket has no RTT API, so the server sends `cl_net_ping(server_ms)` to every peer once a second and the client echoes `srv_net_pong(server_ms)`. Only stamps the server actually sent (the last 4) count, so a client can't invent an old stamp to inflate its RTT. Samples are clamped to 0–2000 ms and smoothed (EWMA, 0.25). Until the first pong the RTT is 100 ms.
+- **Rewind.** `rewind_ms = min(250, rtt + 75)`. The 75 ms is the remote-avatar interpolation delay (20 Hz states, 45% lerp per frame). The full RTT is used, not RTT/2, because both legs are measured from server receipt: the victim's state took ~RTT/2 to reach the shooter, and the shooter's report took ~RTT/2 to come back.
+- **Cap: 250 ms.** A shooter with 600 ms RTT still gets only 250 ms of rewind, so high-ping players can't shoot people who are already behind cover by more than that.
+- **Check.** The hit must fit the stance box at some point in `[now - rewind_ms - 50, now - rewind_ms + 50]` (10 ms steps plus every recorded sample in that window). Poses are interpolated between samples. Across a gap longer than 250 ms (lost or held states) or a teleport, both end poses count, because the motion in between is unknown. Outside the recorded range the first or last sample is used. A rejection still says `outside_hitbox`; the server-side verdict also carries `rewind_ms` and `rtt_ms` for logs.
+- **Bounced balls (counted).** If no shot is within the 12° aim cone, or the direct path is blocked, the server traces the newest shots (up to 8) with PaintBallistics gravity and drag and one skip. A skip happens only on a glancing hit (|cos| < 0.42) and keeps 45% of the speed, as on the client. The hit counts (`los = "bounce"`) if the post-skip path passes within 0.75 m of the hit point, plus 1.2 m/s² × t² for the client's Magnus, wobble and wind drift, before touching anything else. A steep shot into the turf, or a point off the skip path, is still `aim_mismatch` or `no_line_of_sight`.
+- **Tuning constants** live in `scripts/autoload/network_lobby.gd` (`REWIND_CAP_MS`, `REWIND_WINDOW_MS`, `REMOTE_INTERP_DELAY_MS`, `HIT_HISTORY_MS`, `BOUNCE_*`).
+- **Tests:** `godot --headless --path . -s res://scripts/systems/test_lag_compensation.gd`. It covers moving targets at 100 and 150 ms RTT (accepted only with rewind), an over-cap shooter, impossible and stale hits, and a skip off the turf.
 
 ## Notes for Bluey and Ren
 - **CTF visuals are still the legacy single centre flag.** Please render the two base flags from `flag_state_changed` and `room_state.match.flags`.

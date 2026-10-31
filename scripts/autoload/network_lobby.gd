@@ -623,6 +623,13 @@ func srv_report_hit(victim_peer_id: int, hit_pos: Vector3) -> void:
 		return
 	_server_on_hit_report(multiplayer.get_remote_sender_id(), victim_peer_id, hit_pos)
 
+## v0.6.4 lag compensation: the client echoes the server's ping stamp so the server can measure its RTT.
+@rpc("any_peer", "call_remote", "unreliable")
+func srv_net_pong(server_ms: int) -> void:
+	if not is_dedicated_server:
+		return
+	_server_on_net_pong(multiplayer.get_remote_sender_id(), server_ms)
+
 @rpc("any_peer", "call_remote", "reliable")
 func srv_bot_eliminated(bot_node_name: String) -> void:
 	if not is_dedicated_server:
@@ -860,6 +867,13 @@ func send_local_player_state(pos: Vector3, body_yaw: float, head_pitch: float, l
 	srv_player_state.rpc_id(1, pos, body_yaw, head_pitch, lean, stance_idx, eliminated)
 
 ## Server -> client relay of one room-mate's state packet.
+## v0.6.4 lag compensation: server RTT probe. The client answers straight away with the same stamp.
+@rpc("authority", "call_remote", "unreliable")
+func cl_net_ping(server_ms: int) -> void:
+	if is_dedicated_server:
+		return
+	srv_net_pong.rpc_id(1, server_ms)
+
 @rpc("authority", "call_remote", "unreliable_ordered")
 func rpc_sync_player_state(peer_id: int, pos: Vector3, body_yaw: float, head_pitch: float, lean: float, stance_idx: int, team: String, callsign: String, eliminated: bool) -> void:
 	if is_dedicated_server:
@@ -1327,13 +1341,9 @@ func _server_on_player_state(pid: int, pos: Vector3, body_yaw: float, head_pitch
 		return
 	var info: Dictionary = players[pid]
 	_note_remote_stance_bits(pid, stance_idx)
-	var now := Time.get_ticks_msec()
+	var now := _rules_now()
 	info["state"] = {"pos": pos, "yaw": body_yaw, "pitch": head_pitch, "lean": lean, "stance": stance_idx, "eliminated": eliminated, "t": now}
-	var hist: Array = info.get("history", [])
-	hist.append([now, pos, stance_idx])
-	while hist.size() > 0 and now - int(hist[0][0]) > 1200:
-		hist.pop_front()
-	info["history"] = hist
+	info["history"] = append_hit_history(info.get("history", []), now, pos, stance_idx)
 	_on_player_moved(rooms[rid], pid, pos)
 	_server_relay_player_state(rid, pid, info)
 
@@ -1569,6 +1579,7 @@ func _server_tick(delta: float) -> void:
 		if room["players"].is_empty():
 			continue
 		_tick_room_match(room, delta)
+	_tick_net_pings()
 	_tick_lobby_state_file(delta)
 
 ## =============================================================================================================
@@ -2030,8 +2041,9 @@ func _tick_room_match(room: Dictionary, _delta: float) -> void:
 ##           muzzle within SHOT_ORIGIN_TOLERANCE of the shooter's last reported position, sane muzzle velocity.
 ##   hit   : same room, different teams, both alive, a matching accepted shot from the last HIT_SHOT_WINDOW_MS
 ##           (range <= HIT_MAX_RANGE, aim within HIT_AIM_TOLERANCE_DEG after gravity drop), hit point inside the
-##           victim's stance-sized hitbox at some point in their recent movement history (lag tolerant), and clear
-##           line of sight against the room map's static geometry (arc or straight chord).
+##           victim's stance-sized hitbox rewound to the shooter's view time (v0.6.4 lag compensation, capped at
+##           REWIND_CAP_MS), and clear line of sight against the room map's static geometry (arc, straight chord,
+##           or v0.6.4: one glancing bounce off the arena).
 ## =============================================================================================================
 const BALL_GRAVITY: float = 9.81 # mirrors PaintBallistics.GRAVITY
 const BALL_AIR_DRAG: float = 0.26 # mirrors PaintBallistics.AIR_DRAG
@@ -2041,7 +2053,6 @@ const SHOT_ORIGIN_TOLERANCE: float = 2.0
 const HIT_SHOT_WINDOW_MS: int = 3000
 const HIT_MAX_RANGE: float = 90.0
 const HIT_AIM_TOLERANCE_DEG: float = 12.0
-const HIT_HISTORY_SLACK_MS: int = 250
 const HIT_BOX_TOP := [1.95, 1.30, 0.80, 0.80] # standing, crouching, prone, (spare) - feet-relative metres
 const HIT_BOX_TOP_SLIDE: float = 1.0
 const HIT_BOX_TOP_DIVE: float = 0.80
@@ -2122,9 +2133,12 @@ func _validate_hit_inner(s: Dictionary, v: Dictionary, hit_pos: Vector3) -> Dict
 		return {"ok": false, "reason": "victim_dead"}
 	var now := _rules_now()
 	var dead_since := int(s.get("dead_since_ms", -1)) if not bool(s.get("alive", true)) else -1
+	var room: Dictionary = rooms.get(String(s.get("room", "")), {})
+	var map_id := String(room.get("settings", {}).get("map", "speedball")) if not room.is_empty() else "speedball"
 	# 1) a matching accepted shot (fired while alive; a ball in flight when the shooter dies still counts)
 	var shot: Dictionary = {}
 	var best_angle := 999.0
+	var candidates: Array = []
 	for sh in s.get("shots", []):
 		var age := now - int(sh["ms"])
 		if age > HIT_SHOT_WINDOW_MS or age < -50:
@@ -2135,6 +2149,7 @@ func _validate_hit_inner(s: Dictionary, v: Dictionary, hit_pos: Vector3) -> Dict
 		var dist := o.distance_to(hit_pos)
 		if dist > HIT_MAX_RANGE:
 			continue
+		candidates.append(sh)
 		var t := dist / maxf(muzzle_fps_to_mps(float(sh["speed"])), 1.0)
 		var aim := hit_pos + Vector3(0.0, 0.5 * BALL_GRAVITY * t * t, 0.0) - o
 		var ang := 0.0 if aim.length() < 0.5 else rad_to_deg(Vector3(sh["dir"]).angle_to(aim))
@@ -2145,30 +2160,206 @@ func _validate_hit_inner(s: Dictionary, v: Dictionary, hit_pos: Vector3) -> Dict
 		return {"ok": false, "reason": "shooter_dead"}
 	if shot.is_empty():
 		return {"ok": false, "reason": "no_matching_shot"}
+	var los := ""
 	if best_angle > HIT_AIM_TOLERANCE_DEG:
-		return {"ok": false, "reason": "aim_mismatch", "angle": best_angle}
-	# 2) stance-sized hitbox somewhere in the victim's recent history (shot time - slack .. now)
-	var in_box := false
+		# v0.6.4: not aimed at the hit point - it may still be a ball that skipped off cover/turf first.
+		var bounced := _find_bounce_shot(map_id, candidates, hit_pos)
+		if bounced.is_empty():
+			return {"ok": false, "reason": "aim_mismatch", "angle": best_angle}
+		shot = bounced
+		los = "bounce"
+	# 2) v0.6.4 lag compensation: the victim's stance-sized hitbox rewound to what the shooter saw
+	var rw := rewind_window(s)
 	var samples: Array = v.get("history", [])
 	if samples.is_empty() and v.has("state"):
 		samples = [[now, v["state"]["pos"], int(v["state"]["stance"])]]
 	if samples.is_empty():
 		return {"ok": false, "reason": "no_victim_state"}
+	if not hitbox_contains_rewound(samples, hit_pos, now - int(rw["rewind_ms"]), REWIND_WINDOW_MS):
+		return {"ok": false, "reason": "outside_hitbox", "rewind_ms": int(rw["rewind_ms"]), "rtt_ms": int(rw["rtt_ms"])}
+	# 3) line of sight against the room map's static geometry (bounced balls were traced in step 1)
+	if los.is_empty():
+		los = line_of_sight_status(map_id, shot["origin"], shot["dir"], float(shot["speed"]), hit_pos)
+		if los == "blocked":
+			if bounce_path_status(map_id, shot["origin"], shot["dir"], float(shot["speed"]), hit_pos) != "bounce":
+				return {"ok": false, "reason": "no_line_of_sight"}
+			los = "bounce"
+	return {"ok": true, "angle": best_angle, "los": los, "rewind_ms": int(rw["rewind_ms"]), "rtt_ms": int(rw["rtt_ms"])}
+
+## =============================================================================================================
+## v0.6.4 LAG COMPENSATION (server rewind). See docs/NETWORK_EVENTS.md "Lag compensation".
+##  - Every srv_player_state is kept in players[pid]["history"] as [rules_ms, feet_pos, stance] for HIT_HISTORY_MS.
+##  - The server pings each peer (cl_net_ping -> srv_net_pong) every NET_PING_INTERVAL_MS and keeps an RTT average.
+##  - A hit report received at server time T is checked against the victim as the shooter saw them:
+##      view_ms = T - rewind_ms,  rewind_ms = min(REWIND_CAP_MS, rtt + REMOTE_INTERP_DELAY_MS)
+##    (one RTT because both legs are measured from server receipt: the victim's state took ~RTT/2 to reach the
+##    shooter, and the shooter's report took ~RTT/2 to come back; that is the classic "RTT/2 + interp" measured
+##    from the client's own send time). The hitbox may match anywhere in view_ms +/- REWIND_WINDOW_MS along the
+##    victim's interpolated path. Nothing older than REWIND_CAP_MS + REWIND_WINDOW_MS is ever accepted.
+## =============================================================================================================
+const HIT_HISTORY_MS: int = 1200
+const HIT_HISTORY_MAX: int = 64
+const REWIND_CAP_MS: int = 250
+const REWIND_WINDOW_MS: int = 50 # jitter + the 20 Hz state interval
+## Remote avatars move 45% of the way to each 20 Hz state (NetworkLobby._update_or_spawn_remote_player): that
+## exponential smoothing trails the newest state by ~1.2 packets (~60 ms) plus ~half a tick of age -> ~75 ms.
+const REMOTE_INTERP_DELAY_MS: int = 75
+const DEFAULT_RTT_MS: int = 100 # until the first pong arrives
+const NET_PING_INTERVAL_MS: int = 1000
+const RTT_SMOOTHING: float = 0.25
+const MAX_INTERP_GAP_MS: int = 250 # longer gaps = unknown motion between the two states
+const TELEPORT_SPEED_MPS: float = 20.0 # faster than any dive/sprint: a respawn or teleport, never interpolated
+const BOUNCE_COS_THRESHOLD: float = 0.42 # mirrors PaintBallistics.BOUNCE_ANGLE_COS_THRESHOLD
+const BOUNCE_SPEED_KEEP: float = 0.45 # mirrors PaintBallistics (vel.bounce(n) * 0.45)
+const BOUNCE_PATH_TOLERANCE: float = 0.75 # + BOUNCE_DRIFT_PER_S2 * t^2 for Magnus/wobble/wind drift
+const BOUNCE_DRIFT_PER_S2: float = 1.2
+const BOUNCE_MAX_SHOTS: int = 8
+var _net_ping_last_ms: int = -1000000
+
+## Appends one state sample; same-ms samples replace, older than HIT_HISTORY_MS drop off, and a jump faster
+## than TELEPORT_SPEED_MPS (respawn) starts a fresh history so nobody is "rewound" across the field.
+static func append_hit_history(hist: Array, now: int, pos: Vector3, stance_idx: int) -> Array:
+	if hist.size() > 0:
+		var last: Array = hist[hist.size() - 1]
+		var dt := now - int(last[0])
+		if dt <= 0:
+			hist.pop_back()
+		elif Vector3(last[1]).distance_to(pos) / (float(dt) / 1000.0) > TELEPORT_SPEED_MPS and Vector3(last[1]).distance_to(pos) > 2.0:
+			hist.clear()
+	hist.append([now, pos, stance_idx])
+	while hist.size() > 0 and (now - int(hist[0][0]) > HIT_HISTORY_MS or hist.size() > HIT_HISTORY_MAX):
+		hist.pop_front()
+	return hist
+
+## The shooter's rewind: {"rtt_ms", "rewind_ms"}; rewind = min(REWIND_CAP_MS, rtt + REMOTE_INTERP_DELAY_MS).
+func rewind_window(shooter_info: Dictionary) -> Dictionary:
+	var rtt := int(shooter_info.get("rtt_ms", DEFAULT_RTT_MS))
+	return {"rtt_ms": rtt, "rewind_ms": clampi(rtt + REMOTE_INTERP_DELAY_MS, 0, REWIND_CAP_MS)}
+
+## Victim pose(s) at time t along the history: an Array of [pos, stance]. Linear between samples; across a
+## teleport or a gap longer than MAX_INTERP_GAP_MS (lost/held states) the motion is unknown, so both ends count.
+## Clamped to the first/last sample outside the recorded range.
+static func history_poses_at(samples: Array, t: int) -> Array:
+	var first: Array = samples[0]
+	if t <= int(first[0]):
+		return [[first[1], int(first[2])]]
+	for i in range(1, samples.size()):
+		var b: Array = samples[i]
+		if t <= int(b[0]):
+			var a: Array = samples[i - 1]
+			var span := float(int(b[0]) - int(a[0]))
+			var pa: Vector3 = a[1]
+			var pb: Vector3 = b[1]
+			if span > MAX_INTERP_GAP_MS or pa.distance_to(pb) / maxf(span / 1000.0, 0.001) > TELEPORT_SPEED_MPS:
+				return [[pa, int(a[2])], [pb, int(b[2])]]
+			var k := clampf(float(t - int(a[0])) / maxf(span, 1.0), 0.0, 1.0)
+			return [[pa.lerp(pb, k), int(a[2])], [pa.lerp(pb, k), int(b[2])]]
+	var last: Array = samples[samples.size() - 1]
+	return [[last[1], int(last[2])]]
+
+## True if hit_pos fits the stance hitbox anywhere in [view_ms - window, view_ms + window] (10 ms steps plus every
+## recorded sample inside the window).
+static func hitbox_contains_rewound(samples: Array, hit_pos: Vector3, view_ms: int, window_ms: int) -> bool:
+	if samples.is_empty():
+		return false
+	var times: Array = []
+	var t := view_ms - window_ms
+	while t <= view_ms + window_ms:
+		times.append(t)
+		t += 10
 	for smp in samples:
-		if int(smp[0]) < int(shot["ms"]) - HIT_HISTORY_SLACK_MS and smp != samples[samples.size() - 1]:
+		if absi(int(smp[0]) - view_ms) <= window_ms:
+			times.append(int(smp[0]))
+	for tt in times:
+		for pose in history_poses_at(samples, int(tt)):
+			if point_in_stance_box(hit_pos, pose[0], int(pose[1])):
+				return true
+	return false
+
+func _tick_net_pings() -> void:
+	var now := _rules_now()
+	if now - _net_ping_last_ms < NET_PING_INTERVAL_MS:
+		return
+	_net_ping_last_ms = now
+	for pid in peer_room.keys():
+		var info: Dictionary = players.get(int(pid), {})
+		if info.is_empty():
 			continue
-		if point_in_stance_box(hit_pos, smp[1], int(smp[2])):
-			in_box = true
+		var pending: Array = info.get("ping_pending", [])
+		pending.append(now)
+		while pending.size() > 4:
+			pending.pop_front()
+		info["ping_pending"] = pending
+		_send(int(pid), &"cl_net_ping", [now])
+
+## Only stamps the server really sent count (a client can't invent an older stamp to buy a bigger rewind, and
+## the rewind is capped at REWIND_CAP_MS anyway).
+func _server_on_net_pong(pid: int, server_ms: int) -> void:
+	var info: Dictionary = players.get(pid, {})
+	if info.is_empty():
+		return
+	var pending: Array = info.get("ping_pending", [])
+	var idx := pending.find(server_ms)
+	if idx == -1:
+		return
+	pending = pending.slice(idx + 1)
+	info["ping_pending"] = pending
+	var sample := clampi(_rules_now() - server_ms, 0, 2000)
+	if not info.has("rtt_ms"):
+		info["rtt_ms"] = sample
+	else:
+		info["rtt_ms"] = int(round(lerpf(float(info["rtt_ms"]), float(sample), RTT_SMOOTHING)))
+
+## v0.6.4 bounced balls: the newest few candidate shots are traced with one skip (see bounce_path_status).
+func _find_bounce_shot(map_id: String, candidates: Array, hit_pos: Vector3) -> Dictionary:
+	var tried := 0
+	for i in range(candidates.size() - 1, -1, -1):
+		if tried >= BOUNCE_MAX_SHOTS:
 			break
-	if not in_box:
-		return {"ok": false, "reason": "outside_hitbox"}
-	# 3) line of sight against the room map's static geometry
-	var room: Dictionary = rooms.get(String(s.get("room", "")), {})
-	var map_id := String(room.get("settings", {}).get("map", "speedball")) if not room.is_empty() else "speedball"
-	var los := line_of_sight_status(map_id, shot["origin"], shot["dir"], float(shot["speed"]), hit_pos)
-	if los == "blocked":
-		return {"ok": false, "reason": "no_line_of_sight"}
-	return {"ok": true, "angle": best_angle, "los": los}
+		tried += 1
+		var sh: Dictionary = candidates[i]
+		if bounce_path_status(map_id, sh["origin"], sh["dir"], float(sh["speed"]), hit_pos) == "bounce":
+			return sh
+	return {}
+
+## "bounce" if the ball, integrated with PaintBallistics' gravity + drag, skips once off the arena (glancing hit,
+## |cos| < BOUNCE_COS_THRESHOLD, keeps 45% speed) and then passes within BOUNCE_PATH_TOLERANCE (+ drift) of
+## hit_pos before touching anything else. "none" otherwise; "unchecked" with no collision world for the map.
+func bounce_path_status(map_id: String, origin: Vector3, dir: Vector3, speed_fps: float, hit_pos: Vector3) -> String:
+	var world: World3D = collision_worlds.get(normalize_map(map_id), null)
+	if world == null or world.direct_space_state == null:
+		return "unchecked"
+	var space := world.direct_space_state
+	var p := origin
+	var vel := dir.normalized() * muzzle_fps_to_mps(speed_fps)
+	var dt := 1.0 / 60.0
+	var bounced := false
+	var age := 0.0
+	for _i in range(0, 240):
+		vel.y -= BALL_GRAVITY * dt
+		vel *= maxf(0.0, 1.0 - BALL_AIR_DRAG * dt)
+		var nxt := p + vel * dt
+		age += dt
+		if bounced:
+			var seg := nxt - p
+			var k := clampf((hit_pos - p).dot(seg) / maxf(seg.length_squared(), 0.000001), 0.0, 1.0)
+			if (p + seg * k).distance_to(hit_pos) <= BOUNCE_PATH_TOLERANCE + BOUNCE_DRIFT_PER_S2 * age * age:
+				return "bounce"
+		var q := PhysicsRayQueryParameters3D.create(p, nxt)
+		q.collide_with_areas = false
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			var n: Vector3 = hit["normal"]
+			if bounced or absf(vel.normalized().dot(n)) >= BOUNCE_COS_THRESHOLD:
+				return "none"
+			bounced = true
+			vel = vel.bounce(n) * BOUNCE_SPEED_KEEP
+			p = Vector3(hit["position"]) + n * 0.03
+			continue
+		p = nxt
+		if p.y < -5.0:
+			break
+	return "none"
 
 ## Builds one private World3D per map containing a collision copy of the arena (bunkers, trees, wreck, walls).
 ## Called on the real dedicated server; tests call it explicitly. Returns the number of worlds available.
