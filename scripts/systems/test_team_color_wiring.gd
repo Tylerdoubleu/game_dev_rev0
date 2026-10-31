@@ -1,9 +1,9 @@
 extends SceneTree
 ## v0.6.4 team colors (Bluey): one lookup (ProPaintballRig3D.team_color / team_color_name) for every Bluey-owned team
 ## visual. Defaults ALPHA red / BRAVO blue; reads the lobby's team_colors ({"ALPHA": "red", ...}) when NetworkLobby
-## has it; names become colors through Ren's TeamPalette when present (palette_script_override here), else the
+## has it; names become colors through Tim's TeamColors (palette_script_override swaps it here), else the
 ## fallback map; HUD score labels, flags, flag tags, jerseys and markers follow, and re-tint on team_colors_changed.
-## Run: godot --headless --path . -s scripts/systems/test_team_colors.gd
+## Run: godot --headless --path . -s scripts/systems/test_team_color_wiring.gd
 
 var arena: Node3D
 var failures: Array[String] = []
@@ -18,8 +18,7 @@ func set_colors(d: Dictionary) -> void:
 	team_colors = d
 	team_colors_changed.emit(d)
 """
-## Stand-ins for the two shapes the team may ship (never named TeamColors / TeamPalette here):
-## for_team(team, team_colors) (TeamColors / TeamPalette) and a by-name color_of(name).
+## Swap-in palette stand-ins (not named TeamColors): for_team(team, team_colors) and a by-name color_of(name).
 const FAKE_FOR_TEAM_SRC := """extends RefCounted
 const COLORS := {"red": Color(0.9, 0.1, 0.1), "blue": Color(0.1, 0.2, 0.9), "green": Color(0.1, 0.8, 0.2)}
 static func for_team(team: String, team_colors: Dictionary) -> Color:
@@ -58,15 +57,18 @@ func _near(a: Color, b: Color) -> bool:
 func _run() -> void:
 	await _frames(4)
 	var Rig: GDScript = load("res://scripts/player/pro_paintball_rig_3d.gd")
-	var red: Color = Rig.FALLBACK_TEAM_COLORS["red"]
-	var blue: Color = Rig.FALLBACK_TEAM_COLORS["blue"]
+	var red: Color = Rig.color_for_name("red")
+	var blue: Color = Rig.color_for_name("blue")
+	var green: Color = Rig.color_for_name("green")
+	var tcs: Script = load("res://scripts/systems/team_colors.gd")
+	_check(_near(Rig.team_color("ALPHA"), tcs.call("for_team", "ALPHA", {})) and _near(Rig.team_color("BRAVO"), tcs.call("for_team", "BRAVO", {})), "team_color == TeamColors.for_team")
+	_check(_near(red, Rig.FALLBACK_TEAM_COLORS["red"]) and _near(blue, Rig.FALLBACK_TEAM_COLORS["blue"]), "fallback red/blue equal the palette's")
 	var hud: Node = arena.get("match_client")
 
-	# 1) Defaults (no lobby team_colors yet, no TeamPalette): ALPHA red, BRAVO blue, same as the HUD's old constants.
+	# 1) Defaults (lobby on its defaults): ALPHA red, BRAVO blue.
 	_check(Rig.team_color_name("ALPHA") == "red" and Rig.team_color_name("BRAVO") == "blue", "default names ALPHA red / BRAVO blue")
 	_check(Rig.team_color_name("red") == "red" and Rig.team_color_name("blue") == "blue", "HUD side tags red/blue map to ALPHA/BRAVO")
 	_check(_near(Rig.team_color("ALPHA"), red) and _near(Rig.team_color("BRAVO"), blue), "default colors")
-	_check(_near(Rig.team_color("ALPHA"), hud.TEAM_COLORS["red"]) and _near(Rig.team_color("BRAVO"), hud.TEAM_COLORS["blue"]), "defaults equal the HUD's old TEAM_COLORS")
 	if hud != null:
 		_check(_near(hud.call("_tc", "red"), red) and _near(hud.call("_tc", "blue"), blue), "HUD _tc defaults")
 		_check(_near(hud.call("_tc", "draw"), hud.GOLD), "HUD _tc non-team -> GOLD fallback")
@@ -98,7 +100,7 @@ func _run() -> void:
 	r2.call("build_rig", "ALPHA", "speedball")
 	_check(_jersey_tex(r2).ends_with("jersey_pro_alpha.png"), "lobby ALPHA=blue -> blue jersey")
 	fake_lobby.call("set_colors", {"ALPHA": "green", "BRAVO": "blue"})
-	_check(_jersey_tex(r2) == "" and _near(_marker(r2), Rig.FALLBACK_TEAM_COLORS["green"]), "team_colors_changed re-tints a live rig (green, plain jersey)")
+	_check(_jersey_tex(r2) == "" and _near(_marker(r2), green), "team_colors_changed re-tints a live rig (green, plain jersey)")
 	fake_lobby.call("set_colors", {"ALPHA": "chartreuse", "BRAVO": ""})
 	_check(Rig.team_color_name("ALPHA") == "red" and Rig.team_color_name("BRAVO") == "blue", "unknown / empty names fall back to defaults")
 
@@ -107,21 +109,19 @@ func _run() -> void:
 	if hud != null:
 		hud.call("apply_team_colors")
 		var rsl: Label = hud.get("red_score_label")
-		_check(rsl != null and _near(rsl.get_theme_color("font_color"), Rig.FALLBACK_TEAM_COLORS["green"]), "ALPHA score label green")
+		_check(rsl != null and _near(rsl.get_theme_color("font_color"), green), "ALPHA score label green")
 		_check(rsl != null and rsl.text.begins_with("GREEN"), "ALPHA score label reads GREEN (%s)" % (rsl.text if rsl != null else ""))
 		var fl: Dictionary = hud.get("flag_nodes")
 		if fl.has("red"):
 			var cloth := (fl["red"] as Node).get_node("Cloth") as MeshInstance3D
-			_check(_near((cloth.material_override as StandardMaterial3D).albedo_color, Rig.FALLBACK_TEAM_COLORS["green"]), "ALPHA flag cloth green")
+			_check(_near((cloth.material_override as StandardMaterial3D).albedo_color, green), "ALPHA flag cloth green")
 			_check(((fl["red"] as Node).get_node("FlagTag") as Label3D).text == "GREEN FLAG", "ALPHA flag tag GREEN FLAG")
 		else:
 			_check(true, "flags not built in this headless setup (skipped)")
 		_check(hud.call("_tn", "red") == "GREEN" and hud.call("_tn", "blue") == "BLUE", "HUD _tn names")
 
-	# 5) Palette script (TeamColors / TeamPalette, whichever exists) supplies the actual colors.
-	Rig.reset_palette_lookup()
-	var on_disk := ResourceLoader.exists("res://scripts/systems/team_colors.gd") or ResourceLoader.exists("res://scripts/ui/team_palette.gd")
-	_check(on_disk == (Rig._team_palette() != null), "palette found iff team_colors.gd / team_palette.gd exists (on disk: %s)" % on_disk)
+	# 5) The palette script supplies the actual colors (TeamColors; swappable).
+	_check(Rig._team_palette() == load("res://scripts/systems/team_colors.gd"), "palette is Tim's TeamColors")
 	var ps := GDScript.new()
 	ps.source_code = FAKE_FOR_TEAM_SRC
 	ps.reload()
@@ -141,7 +141,20 @@ func _run() -> void:
 	fake_lobby.name = "NetworkLobbyFake"
 	real_lobby.name = "NetworkLobby"
 	await _frames(1)
-	_check(Rig.team_color_name("ALPHA") == "red", "real NetworkLobby without team_colors -> default again")
+	_check(Rig.team_color_name("ALPHA") == "red", "real NetworkLobby on defaults -> red again")
+	# 6) Tim's real NetworkLobby: a server team_colors_changed re-tints the live HUD + rigs via the signal (no manual call).
+	_check(real_lobby.has_signal("team_colors_changed"), "NetworkLobby has team_colors_changed")
+	var r3: Node3D = Rig.new()
+	root.add_child(r3)
+	r3.call("build_rig", "BRAVO", "speedball")
+	real_lobby.call("_client_set_team_colors", {"ALPHA": "pink", "BRAVO": "cyan"})
+	await _frames(1)
+	_check(_near(_marker(r3), tcs.call("color_of", "cyan")), "live rig BRAVO -> cyan from the signal")
+	if hud != null:
+		var bsl: Label = hud.get("blue_score_label")
+		_check(bsl != null and bsl.text.contains("CYAN") and _near(bsl.get_theme_color("font_color"), tcs.call("color_of", "cyan")), "HUD BRAVO score label CYAN from the signal (%s)" % (bsl.text if bsl != null else ""))
+	real_lobby.call("_client_set_team_colors", {"ALPHA": "red", "BRAVO": "blue"})
+	r3.queue_free()
 	for n in [ra, rb, r2]:
 		n.queue_free()
 	if failures.is_empty():

@@ -1059,23 +1059,19 @@ func _make_sphere(radius: float, height: float, mat: Material) -> MeshInstance3D
 
 ## ===== v0.6.4 team colors (Bluey) - the one place Bluey-owned visuals get a team's color =========================
 ## Order: the lobby's team_colors ({"ALPHA": "red", "BRAVO": "blue"}, lowercase names, from Tim's NetworkLobby when it
-## has them) -> DEFAULT_TEAM_COLOR_NAMES. Colors come from the team palette script when one exists - TeamColors
-## (res://scripts/systems/team_colors.gd) or TeamPalette (res://scripts/ui/team_palette.gd), found at runtime and
-## never defined here (swap with palette_script_override) - via for_team(team, team_colors), else by name via
-## color_of / color_for / get_color / color or a COLORS / PALETTE dict; otherwise FALLBACK_TEAM_COLORS
-## (ALPHA red, BRAVO blue). Listeners: NetworkLobby.team_colors_changed.
+## has them) -> DEFAULT_TEAM_COLOR_NAMES. Colors come from Tim's TeamColors (scripts/systems/team_colors.gd):
+## for_team(team, team_colors), names validated with is_valid(); palette_script_override swaps the palette script.
+## FALLBACK_TEAM_COLORS only backs a swapped-in palette that lacks a name. Listeners: NetworkLobby.team_colors_changed.
 const DEFAULT_TEAM_COLOR_NAMES := {"ALPHA": "red", "BRAVO": "blue"}
+## Used only when no palette script is on the branch; same values as Tim's TeamColors.PALETTE.
 const FALLBACK_TEAM_COLORS := {
-	"red": Color(0.96, 0.24, 0.18), "blue": Color(0.24, 0.56, 1.0), "green": Color(0.3, 0.85, 0.3),
-	"yellow": Color(1.0, 0.86, 0.2), "orange": Color(1.0, 0.55, 0.12), "purple": Color(0.68, 0.36, 0.95),
-	"pink": Color(1.0, 0.42, 0.7), "black": Color(0.16, 0.16, 0.18), "white": Color(0.92, 0.92, 0.9),
+	"red": Color(0.86, 0.2, 0.17), "blue": Color(0.2, 0.45, 0.95), "yellow": Color(0.95, 1.0, 0.15),
+	"pink": Color(1.0, 0.28, 0.62), "orange": Color(1.0, 0.55, 0.1), "purple": Color(0.58, 0.3, 0.9),
+	"cyan": Color(0.1, 0.8, 0.85), "green": Color(0.16, 0.5, 0.2),
 }
-const PALETTE_SCRIPT_PATHS := ["res://scripts/systems/team_colors.gd", "res://scripts/ui/team_palette.gd"]
-const PALETTE_CLASS_NAMES := ["TeamColors", "TeamPalette"]
+const TeamColorsScript = preload("res://scripts/systems/team_colors.gd") # Tim's shared palette (TeamColors)
 const JERSEY_TEXTURES := {"blue": "res://assets/textures/jersey_pro_alpha.png", "red": "res://assets/textures/jersey_pro_bravo.png"}
 static var palette_script_override: Script = null
-static var _palette_script: Script = null
-static var _palette_looked_up: bool = false
 
 ## "ALPHA"/"BRAVO" (also the HUD's "red"/"blue" side tags) -> the team's lowercase color name.
 static func team_color_name(team: String) -> String:
@@ -1141,32 +1137,25 @@ static func color_for_name(color_name: String) -> Color:
 
 static func _palette_has(n: String) -> bool:
 	var pal := _team_palette()
-	if pal != null and _palette_lookup(pal, n) is Color:
-		return true
+	if pal != null:
+		if _script_has_method(pal, "is_valid"):
+			return bool(pal.call("is_valid", n))
+		var consts := pal.get_script_constant_map()
+		if consts.get("NAMES") is Array:
+			return (consts["NAMES"] as Array).has(n)
+		if _palette_lookup(pal, n) is Color:
+			return true
 	return FALLBACK_TEAM_COLORS.has(n)
 
-## TeamColors / TeamPalette (whichever the team ships), found at runtime so this file compiles with or without them.
+## Tim's TeamColors (palette_script_override swaps it in tests).
 static func _team_palette() -> Script:
 	if palette_script_override != null:
 		return palette_script_override
-	if not _palette_looked_up:
-		_palette_looked_up = true
-		for path in PALETTE_SCRIPT_PATHS:
-			if ResourceLoader.exists(path):
-				_palette_script = load(path) as Script
-				if _palette_script != null:
-					break
-		if _palette_script == null:
-			for g in ProjectSettings.get_global_class_list():
-				if PALETTE_CLASS_NAMES.has(String(g.get("class", ""))):
-					_palette_script = load(String(g.get("path", ""))) as Script
-					break
-	return _palette_script
+	return TeamColorsScript
 
-## Re-scan for the palette script (tests; or after a hot reload).
+## Back to TeamColors (tests).
 static func reset_palette_lookup() -> void:
-	_palette_looked_up = false
-	_palette_script = null
+	palette_script_override = null
 
 static func _script_has_method(pal: Script, fn: String) -> bool:
 	for m in pal.get_script_method_list():
