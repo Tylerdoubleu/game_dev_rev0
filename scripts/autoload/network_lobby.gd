@@ -48,6 +48,10 @@ signal break_countdown(seconds_left: int, data: Dictionary)
 signal break_horn(data: Dictionary)
 signal break_line_reset(data: Dictionary)
 signal callout_pinged(data: Dictionary)
+## v0.6.4 team colors (Ren's waiting room / respawn screen): server-confirmed {"ALPHA": name, "BRAVO": name},
+## and the reason your own request_team_color() was refused: round_active | taken | invalid | rate_limited.
+signal team_colors_changed(team_colors: Dictionary)
+signal team_color_rejected(reason: String)
 
 const DEFAULT_WS_PORT: int = 9080
 
@@ -56,6 +60,7 @@ const PERMANENT_LOBBY_COUNT: int = 10
 ## v0.7: how many permanent lobbies this server runs (LOBBY_COUNT env or --lobbies=N, 1..10). The test server runs 2.
 static var permanent_lobby_count: int = PERMANENT_LOBBY_COUNT
 const BuildInfo = preload("res://scripts/systems/build_info.gd")
+const TeamColorsScript = preload("res://scripts/systems/team_colors.gd") # v0.6.4 shared palette (not an autoload)
 const MAX_PER_TEAM: int = 5
 const DEFAULT_ROOM: String = "alpha"
 const MAPS: Array[String] = ["speedball", "woodsball_crash"]
@@ -112,6 +117,8 @@ var rooms: Dictionary = {}
 var peer_room: Dictionary = {}
 ## Client: last public room state from the server (status, settings, match summary).
 var room_state: Dictionary = {}
+## v0.6.4: client view of the room's team colors (server-confirmed).
+var team_colors: Dictionary = TeamColorsScript.DEFAULTS.duplicate()
 
 ## v0.7 profiles: the client's private profile token (user://profile.cfg, written by ProfileApi). It is sent to the
 ## server ONLY with srv_set_profile_token and kept server-side in _peer_profile_tokens (peer_id -> token), never in
@@ -350,6 +357,7 @@ func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 	profile_internal_key = OS.get_environment("INTERNAL_KEY").strip_edges()
 	rejected_shots.clear()
 	rejected_hits.clear()
+	rejected_team_colors.clear()
 	_ensure_permanent_rooms()
 	lobby_state_file = _resolve_lobby_state_file()
 	if not lobby_state_file.is_empty():
@@ -404,6 +412,33 @@ func set_ready(is_ready: bool) -> void:
 	else:
 		_refresh_offline_local_roster()
 
+## v0.6.4: ask the server for a team color for YOUR team (waiting room only). The answer is team_colors_changed
+## (also in the lobby state) or team_color_rejected(reason). Offline there is no room to confirm it, so nothing is
+## sent or emitted (the waiting room keeps its optimistic pick).
+func request_team_color(color_name: String) -> void:
+	if is_online_client():
+		srv_request_team_color.rpc_id(1, color_name)
+
+## Shared rule (server side): "" if team may take color_name given the room's current colors.
+static func team_color_reject_reason(colors: Dictionary, team: String, color_name: String, locked: bool) -> String:
+	if locked:
+		return "round_active"
+	if not TeamColorsScript.is_valid(color_name):
+		return "invalid"
+	var other := "BRAVO" if team == "ALPHA" else "ALPHA"
+	if String(colors.get(other, TeamColorsScript.DEFAULTS[other])) == color_name:
+		return "taken"
+	return ""
+
+func _client_set_team_colors(colors: Dictionary) -> void:
+	var next := {}
+	for t in TEAMS:
+		next[t] = TeamColorsScript.name_for_team(t, colors)
+	if next == team_colors:
+		return
+	team_colors = next
+	team_colors_changed.emit(team_colors.duplicate())
+
 ## v0.5: leave the current room cleanly and go back to the lobby list. Disconnects (the server drops the peer from
 ## its room on disconnect), clears room state, strips ?room= from the page URL and emits left_room.
 func leave_room() -> void:
@@ -415,6 +450,7 @@ func leave_room() -> void:
 	match_active = false
 	room_state = {}
 	local_ready = false
+	_client_set_team_colors(TeamColorsScript.DEFAULTS)
 	if GameManager:
 		GameManager.match_ended = false
 	if OS.has_feature("web"):
@@ -461,6 +497,7 @@ func get_lobby_state_snapshot() -> Dictionary:
 		"ready_count": int(room_state.get("ready_count", 0)),
 		"countdown_ms_left": int(room_state.get("countdown_ms_left", 0)),
 		"local_ready": local_ready,
+		"team_colors": team_colors.duplicate(),
 	}
 
 ## Lobby menu map picker. Online: asks the server to change the room's map (validated, synced to the whole room,
@@ -651,6 +688,12 @@ func srv_set_ready(is_ready: bool) -> void:
 	_server_set_ready(multiplayer.get_remote_sender_id(), is_ready)
 
 @rpc("any_peer", "call_remote", "reliable")
+func srv_request_team_color(color_name: String) -> void:
+	if not is_dedicated_server:
+		return
+	_server_request_team_color(multiplayer.get_remote_sender_id(), color_name)
+
+@rpc("any_peer", "call_remote", "reliable")
 func srv_set_room_settings(map_id: String, mode_id: String) -> void:
 	if not is_dedicated_server:
 		return
@@ -701,6 +744,8 @@ func sync_lobby_state(state_dict: Dictionary) -> void:
 			if srv_team in TEAMS and srv_team != local_team:
 				local_team = srv_team
 			local_ready = bool(players[my_id].get("ready", local_ready))
+	if state_dict.get("team_colors") is Dictionary:
+		_client_set_team_colors(state_dict["team_colors"])
 	if state_dict.has("room_roster"):
 		room_roster_changed.emit(state_dict["room_roster"])
 	if state_dict.has("status"):
@@ -757,6 +802,13 @@ func cl_room_event(event_name: String, data: Dictionary) -> void:
 	elif event_name == "start_rejected":
 		match_active = false
 		start_rejected.emit(String(data.get("reason", "")), data)
+	elif event_name == "team_colors_changed":
+		if data.get("team_colors") is Dictionary:
+			_client_set_team_colors(data["team_colors"])
+	elif event_name == "team_color_rejected":
+		if data.get("team_colors") is Dictionary:
+			_client_set_team_colors(data["team_colors"])
+		team_color_rejected.emit(String(data.get("reason", "invalid")))
 
 func copy_invite_link() -> String:
 	var invite_url := "http://127.0.0.1:8080/?room=%s&bracket=%s&map=%s" % [active_room.uri_encode(), local_bracket.uri_encode(), selected_map.uri_encode()]
@@ -1024,13 +1076,13 @@ func _new_room(rid: String, display_name: String, permanent: bool, map_id: Strin
 		"permanent": permanent,
 		"players": {},
 		"join_order": [],
-		"settings": {"map": map_id, "mode": mode_id},
+		"settings": {"map": map_id, "mode": mode_id, "team_colors": TeamColorsScript.DEFAULTS.duplicate()},
 		"match": _new_match_state(),
 	}
 
 func _reset_room(room: Dictionary) -> void:
 	var idx := int(String(room["id"]).substr(6, 2)) if bool(room["permanent"]) else 1
-	room["settings"] = {"map": default_map_for_lobby(idx), "mode": "deathmatch"}
+	room["settings"] = {"map": default_map_for_lobby(idx), "mode": "deathmatch", "team_colors": TeamColorsScript.DEFAULTS.duplicate()}
 	room["match"] = _new_match_state()
 	room["join_order"] = []
 	room.erase("countdown_until_ms")
@@ -1113,6 +1165,7 @@ func _room_snapshot(rid: String) -> Dictionary:
 		"room_roster": _room_roster(room),
 		"ready_count": _room_roster(room).filter(func(r): return bool(r["ready"])).size(),
 		"countdown_ms_left": maxi(0, int(room.get("countdown_until_ms", 0)) - _rules_now()) if room.has("countdown_until_ms") else 0,
+		"team_colors": _room_team_colors(room),
 	}
 
 ## v0.5 room_roster: join order, one row per player (READY is informational only).
@@ -1373,6 +1426,45 @@ func _server_set_room_settings(pid: int, map_id: String, mode_id: String) -> voi
 	room["settings"]["map"] = m
 	room["settings"]["mode"] = md
 	_send_room_event(rid, "room_settings_changed", {"map": m, "mode": md, "by": pid, "by_name": players[pid].get("name", "")})
+	_broadcast_room_state(rid)
+
+## v0.6.4 team colors: any room member picks the color of their own team while the room is waiting (not during
+## the countdown or a match). Exact TeamColors.NAMES only, never the other team's color, at most one pick per
+## TEAM_COLOR_MIN_INTERVAL_MS per player. Accepted: room event team_colors_changed + room state; refused: the
+## requester gets team_color_rejected {reason, color, team_colors}.
+const TEAM_COLOR_MIN_INTERVAL_MS: int = 300
+
+func _room_team_colors(room: Dictionary) -> Dictionary:
+	var cur: Dictionary = room.get("settings", {}).get("team_colors", {})
+	var out := {}
+	for t in TEAMS:
+		out[t] = TeamColorsScript.name_for_team(t, cur)
+	return out
+
+func _server_request_team_color(pid: int, color_name: String) -> void:
+	var rid := String(peer_room.get(pid, ""))
+	if rid.is_empty() or not rooms.has(rid) or not players.has(pid):
+		return
+	var room: Dictionary = rooms[rid]
+	var info: Dictionary = players[pid]
+	var team := String(TeamColorsScript.team_key(String(info.get("team", "ALPHA"))))
+	var colors := _room_team_colors(room)
+	var now := _rules_now()
+	var locked := bool(room["match"].get("active", false)) or room.has("countdown_until_ms")
+	var reason := team_color_reject_reason(colors, team, color_name, locked)
+	if reason.is_empty() and info.has("team_color_ms") and now - int(info["team_color_ms"]) < TEAM_COLOR_MIN_INTERVAL_MS:
+		reason = "rate_limited"
+	if not reason.is_empty():
+		_count_reject(rejected_team_colors, reason)
+		_send_peer_event(pid, "team_color_rejected", {"reason": reason, "color": color_name.left(32), "team": team, "team_colors": colors})
+		return
+	info["team_color_ms"] = now
+	if String(colors[team]) == color_name:
+		_broadcast_room_state(rid)
+		return
+	colors[team] = color_name
+	room["settings"]["team_colors"] = colors
+	_send_room_event(rid, "team_colors_changed", {"team_colors": colors.duplicate(), "team": team, "color": color_name, "by": pid, "by_name": info.get("name", "")})
 	_broadcast_room_state(rid)
 
 ## v0.5: any player in the room may cancel a running pre-match countdown.
@@ -1945,6 +2037,7 @@ const HIT_BOX_RADIUS_PRONE: float = 1.3
 const LOS_END_SLACK: float = 0.45
 var rejected_shots: Dictionary = {} # reason -> count
 var rejected_hits: Dictionary = {} # reason -> count
+var rejected_team_colors: Dictionary = {} # v0.6.4 reason -> count
 ## map_id -> World3D holding a private, collision-only copy of that arena (server only, see ensure_collision_worlds).
 var collision_worlds: Dictionary = {}
 

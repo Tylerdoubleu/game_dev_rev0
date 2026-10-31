@@ -143,6 +143,23 @@ Hit (`srv_report_hit`) rejections, in order:
 - Client API: `NetworkLobby.ping_callout(callout: String, world_pos: Vector3, count := 1)`. Alive players only, with a 1.2 s cooldown per player. Extra pings are dropped silently.
 - Tests set `NetworkLobby.break_countdown_ms = 0` to skip the break.
 
+## v0.6.4 team colors (Tim + Ren)
+
+Shared palette: `scripts/systems/team_colors.gd` (`class_name TeamColors`, not an autoload).
+`TeamColors.NAMES` / `names()` = `red blue yellow pink orange purple cyan green` (lowercase, exact match),
+`PALETTE` (name → Color), `DEFAULTS = {"ALPHA": "red", "BRAVO": "blue"}`, `color_of(name)`, `for_team(team, team_colors)`.
+
+- **Client → server:** `NetworkLobby.request_team_color(color_name)` → `srv_request_team_color(color_name)` (reliable). Only for your own team; offline it is a no-op.
+- **Server rules** (first failure wins, counted in `NetworkLobby.rejected_team_colors`):
+  - `round_active`: a countdown is running or the match is live (picks only in the waiting room).
+  - `rate_limited`: less than 300 ms since your last accepted pick.
+  - `invalid`: not in `TeamColors.NAMES`.
+  - `taken`: the other team already has it.
+- **Accepted:** room event `team_colors_changed` `{team_colors, team, color, by, by_name}` to everyone in the room, then a state broadcast.
+- **Rejected:** peer-only room event `team_color_rejected` `{reason, color, team, team_colors}` (the current confirmed colors).
+- **Room state:** `sync_lobby_state` carries `team_colors: {"ALPHA": name, "BRAVO": name}`. It resets to `DEFAULTS` when the lobby empties or resets.
+- **Client signals:** `NetworkLobby.team_colors_changed(team_colors: Dictionary)`, fired only when the colors actually change (from state or event), and `team_color_rejected(reason: String)`. `get_lobby_state_snapshot()["team_colors"]` holds the latest colors; `leave_room()` resets them to the defaults.
+
 ## v0.7 profile API (anonymous profiles, callsigns, clout)
 
 Code: `server/profile_store.js` (store + HTTP handlers, mounted by `server/server.js`), client helper
