@@ -1,5 +1,5 @@
 extends Node
-## v0.6 (Ren): attaches MovementFoley to the local player (player_controller_3d.gd) whenever one enters the
+## v0.6 (Ren): attaches MovementFoley (and the local death sound) to the local player (player_controller_3d.gd) whenever one enters the
 ## tree, and plays the tournament air horn on NetworkLobby.break_horn (Tim's server-run break).
 ## Also loops Tyler's menu track while the lobby browser / waiting room (LobbyEntryFlow) is open and fades it
 ## out when a match starts.
@@ -16,6 +16,12 @@ const PLAYER_HIT := preload("res://assets/audio/paint/player_hit.wav")
 const PLAYER_HIT_DB := -2.0
 const PLAYER_HIT_3D_DB := 2.0
 var player_hit_count := 0
+## Tyler 10-31: solo FFA / offline bot kills never reach the server, so the local player's own player_eliminated
+## signal also plays the sound. Online the same death arrives twice (the signal, then the server room_event in the
+## same frame), so a death of *mine* inside this window is played once. The 2.8 s respawn flash means two real
+## deaths can never land this close together.
+const SELF_HIT_DEDUPE_MS := 1500
+var _last_self_hit_ms := -100000
 const MENU_MUSIC := preload("res://assets/audio/music/menu_loop.ogg")
 const MENU_MUSIC_DB := -12.0
 const MUSIC_FADE_DB_PER_SEC := 30.0   # ~1 s fade in / out
@@ -80,12 +86,17 @@ func _on_room_event(event_name: String, data: Dictionary) -> void:
 		play_player_hit(data)
 
 func play_player_hit(data: Dictionary = {}) -> void:
-	player_hit_count += 1
-	if not is_inside_tree():
-		return
 	var nl := get_node_or_null("/root/NetworkLobby")
 	var victim := int(data.get("victim", 0))
 	var my_id := int(nl.call("_my_peer_id")) if nl != null and nl.has_method("_my_peer_id") else 0
+	if victim == my_id:
+		var now := Time.get_ticks_msec()
+		if now - _last_self_hit_ms < SELF_HIT_DEDUPE_MS:
+			return
+		_last_self_hit_ms = now
+	player_hit_count += 1
+	if not is_inside_tree():
+		return
 	var avatar: Node3D = null
 	if nl != null and victim != my_id and "remote_player_nodes" in nl:
 		var n = nl.remote_player_nodes.get(victim)
@@ -127,6 +138,14 @@ func _on_node_added(n: Node) -> void:
 func _attach(n: Node) -> void:
 	if is_instance_valid(n) and n.get_node_or_null("MovementFoley") == null:
 		n.add_child(MovementFoley.new(n))
+	if is_instance_valid(n) and n.has_signal("player_eliminated") and not n.is_connected("player_eliminated", _on_local_player_eliminated):
+		n.connect("player_eliminated", _on_local_player_eliminated)
+
+## The local player went down (solo FFA / offline bots, or online right before the server's room_event).
+func _on_local_player_eliminated(_killer_name: String = "") -> void:
+	var nl := get_node_or_null("/root/NetworkLobby")
+	var my_id := int(nl.call("_my_peer_id")) if nl != null and nl.has_method("_my_peer_id") else 0
+	play_player_hit({"victim": my_id})
 
 func is_menu_open() -> bool:
 	if debug_menu_open != null:

@@ -66,6 +66,21 @@ func _process(_d: float) -> bool:
 		_check(hm.show_count == m0 + 1, "hit marker shows when my shot is the confirmed elimination")
 		root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": me, "shooter": 999, "scored": true})
 		_check(hm.show_count == m0 + 1, "no hit marker when I'm the one eliminated")
+		# Tyler 10-31: solo FFA / offline bots kill the local player through PlayerController.on_paintball_break ->
+		# player_eliminated (no server room_event), which used to be silent.
+		if players.size() >= 1:
+			var pl: Node = players[0]
+			pl.set("_respawn_flash_timer", 0.0)
+			dir.set("_last_self_hit_ms", -100000)  # the hit-marker check above was also a death of mine
+			var h1: int = dir.player_hit_count
+			pl.call("on_paintball_break", pl.global_position + Vector3(0, 1.2, 0), null)
+			_check(dir.player_hit_count == h1 + 1, "offline bot splat on the local player plays the hit/death sound")
+			root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": me, "shooter": 999, "scored": true})
+			_check(dir.player_hit_count == h1 + 1, "a server player_eliminated for me right after the local death doesn't double-play")
+			var h2: int = dir.player_hit_count
+			dir.set("_last_self_hit_ms", -100000)
+			root.get_node("NetworkLobby").emit_signal("room_event", "player_eliminated", {"victim": me, "shooter": 999, "scored": true})
+			_check(dir.player_hit_count == h2 + 1, "online: the server's player_eliminated for me still plays the sound once it's not a duplicate")
 	if f == 31:
 		root.get_node("MovementAudioDirector").debug_menu_open = true
 	if f == 40:
