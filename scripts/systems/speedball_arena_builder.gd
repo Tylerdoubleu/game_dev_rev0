@@ -1475,15 +1475,48 @@ func _on_network_flag_event(event_type: String, p_name: String, team: String, wo
 		GameManager.notify_flag_hung(p_name, team)
 		_on_status_banner("FLAG HUNG BY %s (%s)! Flag Reset to Center-50!" % [p_name.to_upper(), team], Color(1.0, 0.42, 0.42))
 
+## v0.6.4 solo FFA sound: the online 3-2-1 beeps + air horn come from NetworkLobby.break_countdown / break_horn
+## (server-run), which never fire offline. GameManager's local 3 s break drives the solo FFA, so mirror it into
+## MovementAudioDirector here: beep as the countdown crosses 2 and 1, full horn on GO. Only while a solo FFA is running,
+## never online (the server's events already play there) and never on the dedicated server.
+var _solo_break_last_s: int = -1
+var solo_break_beeps: int = 0
+var solo_break_horns: int = 0
+
+func _solo_break_audio(seconds_left: float, horn_sounded: bool) -> void:
+	if ffa_match == null or NetworkLobby.is_dedicated_server or NetworkLobby.is_online_client():
+		_solo_break_last_s = -1
+		return
+	var dir := get_node_or_null("/root/MovementAudioDirector")
+	if horn_sounded:
+		if _solo_break_last_s != 0:
+			_solo_break_last_s = 0
+			solo_break_horns += 1
+			if dir != null and dir.has_method("play_horn"):
+				dir.call("play_horn", {"solo": true})
+		return
+	var s := int(ceil(seconds_left))
+	if seconds_left >= GameManager.BREAKOUT_COUNTDOWN_DURATION - 0.05:
+		_solo_break_last_s = s # a fresh break (match start / rematch)
+		if dir != null and "_beeped" in dir:
+			(dir.get("_beeped") as Dictionary).clear() # an interrupted earlier break must not mute this one
+		return
+	if s != _solo_break_last_s and (s == 2 or s == 1):
+		solo_break_beeps += 1
+		if dir != null and dir.has_method("play_countdown_beep"):
+			dir.call("play_countdown_beep", s, {"solo": true})
+	_solo_break_last_s = s
+
 func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> void:
+	_solo_break_audio(seconds_left, horn_sounded)
 	if breakout_horn_label == null:
 		return
 	if not horn_sounded:
 		breakout_horn_label.visible = true
-		breakout_horn_label.text = "BARRELS ON THE GATE NET — BREAKOUT IN %.1fs..." % seconds_left
+		breakout_horn_label.text = ("GET READY — %d..." % int(ceil(seconds_left))) if ffa_match != null else ("BARRELS ON THE GATE NET — BREAKOUT IN %.1fs..." % seconds_left)
 		breakout_horn_label.add_theme_color_override("font_color", Color(1.0, 0.86, 0.16))
 	else:
-		breakout_horn_label.text = "!! HORN SOUNDED — BREAKOUT !! GO GET THE CENTER-50 FLAG !!"
+		breakout_horn_label.text = "GO!" if ffa_match != null else "!! HORN SOUNDED — BREAKOUT !! GO GET THE CENTER-50 FLAG !!"
 		breakout_horn_label.add_theme_color_override("font_color", Color(0.32, 1.0, 0.52))
 		var tw := create_tween()
 		tw.tween_interval(2.2)
