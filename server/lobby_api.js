@@ -4,10 +4,11 @@
  *
  * The headless Godot room router (scripts/autoload/network_lobby.gd) writes its real room state to
  * LOBBY_STATE_FILE as {"version":1,"generated_at":<unix s>,"max_per_team":5,"lobbies":[{id,name,map,mode,
- * players:{red,blue},max_per_team,status,bots}]}. This module turns that into the public /api/lobbies shape:
+ * players:{red,blue,bench},max_per_team,status,bots}]}. red/blue count only READY players while waiting (everyone
+ * during a live match); bench = unready players. Occupancy (full / quick-join) is red + blue + bench. This module turns that into the public /api/lobbies shape:
  *
  *   {"lobbies":[{"id":"lobby_01","name":"Lobby 01","map":"speedball","mode":"deathmatch",
- *                "players":{"red":3,"blue":4},"max_per_team":5,"status":"waiting","bots":false,
+ *                "players":{"red":3,"blue":4,"bench":1},"max_per_team":5,"status":"waiting","bots":false,
  *                "join_url":"https://tylerdoubleu.github.io/game_dev_rev0/?server=wss://host:port/ws&room=lobby_01&map=speedball"}]}
  */
 
@@ -65,16 +66,17 @@ function normalizeLobby(raw, maxPerTeam) {
   const players = raw.players && typeof raw.players === "object" ? raw.players : {};
   const red = Math.max(0, parseInt(players.red, 10) || 0);
   const blue = Math.max(0, parseInt(players.blue, 10) || 0);
+  const bench = Math.max(0, parseInt(players.bench, 10) || 0);
   const max = parseInt(raw.max_per_team, 10) || maxPerTeam || 5;
   const mode = MODES.has(raw.mode) ? raw.mode : "deathmatch";
   let status = STATUSES.has(raw.status) ? raw.status : "waiting";
-  if (red + blue >= max * 2) status = "full";
+  if (red + blue + bench >= max * 2) status = "full";
   return {
     id: raw.id,
     name: typeof raw.name === "string" ? raw.name : raw.id,
     map: MAPS.has(raw.map) ? raw.map : "speedball",
     mode,
-    players: { red, blue },
+    players: { red, blue, bench },
     max_per_team: max,
     status,
     bots: mode === "bots_test" || raw.bots === true,
@@ -101,7 +103,7 @@ function buildLobbiesResponse(stateDoc, { headers = {}, env = process.env, now =
   return { status: 200, body: { lobbies } };
 }
 
-const total = (l) => l.players.red + l.players.blue;
+const total = (l) => l.players.red + l.players.blue + (l.players.bench || 0);
 
 /** Quick-join: the "waiting" lobby with the most players that still has room (ties -> lowest id). */
 function pickQuickJoin(lobbies) {

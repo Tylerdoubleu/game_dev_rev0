@@ -40,8 +40,8 @@ function assertLobbyShape(l) {
   assert.equal(l.name, `Lobby ${l.id.slice(6)}`);
   assert.ok(["speedball", "woodsball_crash"].includes(l.map));
   assert.ok(["deathmatch", "ctf", "bots_test"].includes(l.mode));
-  assert.deepEqual(Object.keys(l.players).sort(), ["blue", "red"]);
-  assert.ok(Number.isInteger(l.players.red) && Number.isInteger(l.players.blue));
+  assert.deepEqual(Object.keys(l.players).sort(), ["bench", "blue", "red"]);
+  assert.ok(Number.isInteger(l.players.red) && Number.isInteger(l.players.blue) && Number.isInteger(l.players.bench));
   assert.equal(l.max_per_team, 5);
   assert.ok(["waiting", "in_match", "full"].includes(l.status));
   assert.equal(typeof l.bots, "boolean");
@@ -64,7 +64,7 @@ test("buildLobbiesResponse returns the exact public shape", () => {
     name: "Lobby 01",
     map: "speedball",
     mode: "deathmatch",
-    players: { red: 3, blue: 4 },
+    players: { red: 3, blue: 4, bench: 0 },
     max_per_team: 5,
     status: "waiting",
     bots: false,
@@ -163,4 +163,19 @@ test("server.js serves /api/lobbies and /api/quickjoin over HTTP", async (t) => 
   fs.writeFileSync(stateFile, JSON.stringify(fixture(Date.now() - 60000)));
   const stale = await get(port, "/api/lobbies");
   assert.equal(stale.status, 503);
+});
+
+test("v0.6.4: unready players are on the bench, not a team, but still count toward the 10-player cap", () => {
+  const doc = fixture();
+  doc.lobbies[1] = { ...doc.lobbies[1], players: { red: 0, blue: 0, bench: 1 }, status: "waiting" };
+  doc.lobbies[4] = { ...doc.lobbies[4], players: { red: 2, blue: 2, bench: 6 }, status: "waiting" };
+  doc.lobbies[5] = { ...doc.lobbies[5], players: { red: 4, blue: 4 } }; // older Godot: no bench key
+  const out = api.buildLobbiesResponse(doc, { headers: HEADERS, env: ENV });
+  const [l2, l5, l6] = [out.body.lobbies[1], out.body.lobbies[4], out.body.lobbies[5]];
+  assert.deepEqual(l2.players, { red: 0, blue: 0, bench: 1 });
+  assert.equal(l2.status, "waiting");
+  assert.equal(l5.status, "full", "2 + 2 + 6 bench = 10 -> full");
+  assert.deepEqual(l6.players, { red: 4, blue: 4, bench: 0 });
+  const quick = api.pickQuickJoin(out.body.lobbies.map((l) => (l.id === "lobby_01" ? { ...l, status: "in_match" } : l)));
+  assert.equal(quick.id, "lobby_06", "8 players beats lobby_02's 1 bench player; lobby_05 (bench-full) skipped");
 });

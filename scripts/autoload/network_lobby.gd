@@ -1128,6 +1128,21 @@ func room_team_counts(room: Dictionary, exclude_peer: int = 0) -> Dictionary:
 		c[t] = int(c.get(t, 0)) + 1
 	return c
 
+## v0.6.4 lobby list counts: while the room is waiting only READY players count for their team; unready players
+## are on the NOT READY bench. During a live match everyone is playing, so everyone counts for their team.
+## Occupancy (full at MAX_PER_TEAM * 2) is red + blue + bench.
+func room_public_counts(room: Dictionary) -> Dictionary:
+	var c := {"ALPHA": 0, "BRAVO": 0, "bench": 0}
+	var live := bool(room.get("match", {}).get("active", false))
+	for pid in room.get("players", {}).keys():
+		var info: Dictionary = room["players"][pid]
+		if live or bool(info.get("ready", false)):
+			var t := String(info.get("team", "ALPHA"))
+			c[t] = int(c.get(t, 0)) + 1
+		else:
+			c["bench"] = int(c["bench"]) + 1
+	return c
+
 func room_status_of(room: Dictionary) -> String:
 	if room.get("players", {}).size() >= MAX_PER_TEAM * 2:
 		return "full"
@@ -2452,14 +2467,14 @@ func get_public_lobby_list() -> Array:
 		var room: Dictionary = rooms.get(rid, {})
 		if room.is_empty():
 			continue
-		var c := room_team_counts(room)
+		var c := room_public_counts(room)
 		var mode := String(room["settings"]["mode"])
 		out.append({
 			"id": rid,
 			"name": String(room["name"]),
 			"map": String(room["settings"]["map"]),
 			"mode": mode,
-			"players": {"red": int(c["ALPHA"]), "blue": int(c["BRAVO"])},
+			"players": {"red": int(c["ALPHA"]), "blue": int(c["BRAVO"]), "bench": int(c["bench"])},
 			"max_per_team": MAX_PER_TEAM,
 			"status": room_status_of(room),
 			"bots": mode == "bots_test",

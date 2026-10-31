@@ -128,8 +128,13 @@ func _test_moving_target(rtt: int, room: String) -> void:
 	_set_clock(now)
 	var verdict: Dictionary = L._server_validate_hit(s, v, hit)
 	_check(bool(verdict.get("ok")) and int(verdict["rewind_ms"]) == rtt + 75 and verdict["los"] == "clear", "rewound hit accepted (%s)" % [verdict])
+	(L.outbound_capture as Array).clear()
 	L._server_on_hit_report(s, v, hit)
 	_check(not _alive(v), "victim eliminated")
+	# The victim's death sound / HUD key off this event: same name and args as before the rewind path (pre-268cd13).
+	var ev := (L.outbound_capture as Array).filter(func(m): return int(m["peer"]) == v and m["method"] == &"cl_room_event" and m["args"][0] == "player_eliminated")
+	var want_keys := ["victim", "victim_name", "victim_team", "shooter", "shooter_name", "shooter_team", "victim_kills", "victim_deaths", "shooter_kills", "shooter_deaths", "reason", "scored", "respawn_in_ms", "room"]
+	_check(ev.size() == 1 and (ev[0]["args"][1] as Dictionary).keys() == want_keys and int(ev[0]["args"][1]["victim"]) == v and int(ev[0]["args"][1]["shooter"]) == s and ev[0]["args"][1]["reason"] == "paint", "rewound hit sends the victim player_eliminated with the unchanged args (%s)" % [ev[0]["args"][1].keys() if ev.size() > 0 else ev])
 
 func _test_over_cap(room: String) -> void:
 	print("--- over-cap latency ---")

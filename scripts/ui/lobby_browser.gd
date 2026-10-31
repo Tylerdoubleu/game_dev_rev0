@@ -80,7 +80,7 @@ static func parse_lobbies(body: String) -> Array:
 
 static func player_total(entry: Dictionary) -> int:
 	var p: Dictionary = entry.get("players", {})
-	return int(p.get("red", 0)) + int(p.get("blue", 0))
+	return int(p.get("red", 0)) + int(p.get("blue", 0)) + int(p.get("bench", 0))  # Tim v0.6.4: unready bench counts toward the cap
 
 static func has_room(entry: Dictionary) -> bool:
 	return player_total(entry) < int(entry.get("max_per_team", 5)) * 2
@@ -99,11 +99,21 @@ func refresh() -> void:
 	if api_base == "" or _http == null:
 		set_lobbies([], "NO SERVER IN LINK  -  SOLO TEST STILL WORKS")
 		return
-	if _http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+	# Tim v0.6.4: one request at a time. The client status can read DISCONNECTED while HTTPRequest is still busy
+	# (resolving, or before request_completed fires), so track it ourselves and run one queued refresh after.
+	if http_busy or _http.get_http_client_status() != HTTPClient.STATUS_DISCONNECTED:
+		refresh_queued = true
 		return
-	_http.request(api_base + "/api/lobbies")
+	http_busy = _http.request(api_base + "/api/lobbies") == OK
+
+var http_busy := false
+var refresh_queued := false
 
 func _on_request_completed(result: int, code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	http_busy = false
+	if refresh_queued:
+		refresh_queued = false
+		refresh.call_deferred()
 	if result != HTTPRequest.RESULT_SUCCESS or code != 200:
 		set_lobbies([], "SERVER OFFLINE  -  RETRYING...")
 		return

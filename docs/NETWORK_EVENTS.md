@@ -28,9 +28,10 @@ Clients send intents. The server sends facts back, and only to the members of th
 `GET /api/lobbies` returns:
 ```json
 {"lobbies":[{"id":"lobby_01","name":"Lobby 01","map":"speedball","mode":"deathmatch",
-  "players":{"red":2,"blue":1},"max_per_team":5,"status":"waiting|in_match|full","bots":false,
+  "players":{"red":2,"blue":1,"bench":1},"max_per_team":5,"status":"waiting|in_match|full","bots":false,
   "join_url":"https://tylerdoubleu.github.io/game_dev_rev0/?server=wss://play.jeetball.com/ws&room=lobby_01&map=speedball&mode=deathmatch"}]}
 ```
+- `players.red` / `players.blue` count only READY players while the lobby is waiting (everyone on the team during a live match). `players.bench` is the unready players on the NOT READY bench. Occupancy (`full`, quick join, the 10-player cap) is `red + blue + bench`.
 - `GET /api/quickjoin` returns the waiting lobby with the most players that still has room, as `{lobby, join_url}`. With `?redirect=1` it returns a 302 instead.
 - If the Godot state is stale, the response is 503.
 

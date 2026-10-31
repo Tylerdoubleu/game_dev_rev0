@@ -54,12 +54,30 @@ func _test_ipc_document() -> void:
 	var l1: Dictionary = list[0]
 	_check(l1.keys() == ["id", "name", "map", "mode", "players", "max_per_team", "status", "bots"], "row keys %s" % [l1.keys()])
 	_check(l1["id"] == "lobby_01" and l1["name"] == "Lobby 01" and l1["map"] == "speedball" and l1["mode"] == "deathmatch", "lobby_01 identity/settings")
-	_check(int(l1["players"]["red"]) + int(l1["players"]["blue"]) == 3 and l1["max_per_team"] == 5 and l1["status"] == "waiting" and l1["bots"] == false, "lobby_01 counts/status %s" % [l1])
+	_check(l1["players"] == {"red": 1, "blue": 2, "bench": 0}, "ready players count for their team (%s)" % [l1["players"]])
+	for pid in [101, 102, 103]:
+		L._server_set_ready(pid, false)
+	l1 = L.get_public_lobby_list()[0]
+	_check(l1["players"] == {"red": 0, "blue": 0, "bench": 3}, "v0.6.4: 3 unready players sit on the bench, not a team (%s)" % [l1["players"]])
+	L._server_set_ready(101, true)
+	l1 = L.get_public_lobby_list()[0]
+	_check(l1["players"] == {"red": 1, "blue": 0, "bench": 2}, "v0.6.4: READY moves a player from the bench onto red (%s)" % [l1["players"]])
+	L._server_set_ready(101, false)
+	l1 = L.get_public_lobby_list()[0]
+	_check(int(l1["players"]["red"]) + int(l1["players"]["blue"]) + int(l1["players"]["bench"]) == 3 and l1["max_per_team"] == 5 and l1["status"] == "waiting" and l1["bots"] == false, "lobby_01 counts/status %s" % [l1])
 	_check(list[1]["map"] == "woodsball_crash", "lobby_02 defaults to woodsball_crash")
 	_check(list[3]["map"] == "woodsball_crash" and list[3]["mode"] == "ctf", "first joiner's ?map=&mode= set lobby_04")
 	for i in 7:
 		_reg(110 + i, "lobby_01")
-	_check(L.get_public_lobby_list()[0]["status"] == "full", "10 players -> full")
+	for pid in L.rooms["lobby_01"]["players"].keys():
+		L._server_set_ready(int(pid), false)
+	var full_row: Dictionary = L.get_public_lobby_list()[0]
+	_check(full_row["status"] == "full" and full_row["players"]["bench"] == 10, "10 players -> full, even with all 10 unready on the bench")
+	var room1: Dictionary = L.rooms["lobby_01"]
+	room1["match"]["active"] = true
+	var live_row: Dictionary = L.get_public_lobby_list()[0]
+	_check(int(live_row["players"]["red"]) + int(live_row["players"]["blue"]) == 10 and live_row["players"]["bench"] == 0, "during a live match everyone counts for their team (%s)" % [live_row["players"]])
+	room1["match"]["active"] = false
 	(L.outbound_capture as Array).clear()
 	_reg(199, "lobby_01")
 	_check(not L.peer_room.has(199), "11th player rejected from a full lobby")
