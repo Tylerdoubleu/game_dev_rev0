@@ -4,3 +4,6 @@ extends RefCounted
 const VERSION := "v0.6.3"
 const COMMIT := "dev"
 const BUILT_UTC := ""
+## v0.7 test/play split: the WebSocket server this build connects to by default ("" = the live server,
+## wss://play.jeetball.com/ws). tools/export_web.sh stamps it from BUILD_SERVER_URL, or wss://test.jeetball.com/ws on the test branch.
+const SERVER_URL := ""

@@ -10,6 +10,7 @@ signal solo_requested
 signal lobbies_updated(count: int)
 
 const REFRESH_SECONDS: float = 4.0
+const BuildInfo = preload("res://scripts/systems/build_info.gd")  # v0.7: SERVER_URL stamped per build (test vs live)
 const DEFAULT_SERVER_URL := "wss://play.jeetball.com/ws"  # Grok Bot's always-on DigitalOcean server
 const MAP_LABELS := {"speedball": "NPPL SPEEDBALL", "woodsball_crash": "WOODSBALL HELI CRASH"}
 const MODE_LABELS := {"deathmatch": "10-KILL DEATHMATCH", "deathmatch_10": "10-KILL DEATHMATCH", "ctf": "1-LIFE CTF  BO5", "ctf_bo5": "1-LIFE CTF  BO5", "bots_test": "TEST VS BOTS", "bot_test": "TEST VS BOTS", "test": "TEST VS BOTS"}
@@ -50,6 +51,8 @@ static func derive_api_base(server_url: String = "") -> String:
 	if url == "" and OS.has_feature("web"):
 		var q = JavaScriptBridge.eval("new URLSearchParams(window.location.search).get('server') || ''", true)
 		url = str(q) if q != null else ""
+	if url == "":
+		url = String(BuildInfo.SERVER_URL).strip_edges()
 	if url == "":
 		url = DEFAULT_SERVER_URL
 	url = url.replace("wss://", "https://").replace("ws://", "http://")

@@ -29,6 +29,14 @@ func _process(_d: float) -> bool:
 	_check(not L.room_from_url and not L.server_from_url, "bare link: no room, default server")
 	L._parse_query_string("?server=wss://play.jeetball.com/ws&room=lobby_03&map=woodsball_crash")
 	_check(L.room_from_url and L.active_room == "lobby_03" and L.server_from_url and L.current_ws_url == "wss://play.jeetball.com/ws", "join_url link: room + server parsed (%s %s)" % [L.active_room, L.current_ws_url])
+	# v0.7 test/play split: lobby count setting + per-build default server.
+	_check(L.parse_lobby_count("") == 10 and L.parse_lobby_count("2") == 2 and L.parse_lobby_count("0") == 1 and L.parse_lobby_count("99") == 10 and L.parse_lobby_count("x") == 10, "LOBBY_COUNT parsing (default 10, clamped 1..10)")
+	var old_count: int = L.permanent_lobby_count
+	L.permanent_lobby_count = 2
+	_check(L.is_permanent_room_id("lobby_02") and not L.is_permanent_room_id("lobby_03"), "LOBBY_COUNT=2: only lobby_01..02 are permanent")
+	L.permanent_lobby_count = old_count
+	_check(L.build_default_ws_url() == "wss://play.jeetball.com/ws" and L.default_ws_url == "wss://play.jeetball.com/ws", "unstamped build defaults to the live server")
+	_check(flow._explicit_server_url() == L.default_ws_url, "bare link uses the build's default server")
 	L.room_from_url = false
 	L.server_from_url = false
 	L.active_room = "alpha"

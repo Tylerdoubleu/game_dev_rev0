@@ -53,6 +53,9 @@ const DEFAULT_WS_PORT: int = 9080
 
 ## --- v0.5 room constants ---
 const PERMANENT_LOBBY_COUNT: int = 10
+## v0.7: how many permanent lobbies this server runs (LOBBY_COUNT env or --lobbies=N, 1..10). The test server runs 2.
+static var permanent_lobby_count: int = PERMANENT_LOBBY_COUNT
+const BuildInfo = preload("res://scripts/systems/build_info.gd")
 const MAX_PER_TEAM: int = 5
 const DEFAULT_ROOM: String = "alpha"
 const MAPS: Array[String] = ["speedball", "woodsball_crash"]
@@ -84,6 +87,20 @@ var server_from_url: bool = false
 var show_lobby_browser_on_start: bool = false
 ## Always-on DigitalOcean server (deploy/digitalocean) used when the page host does not serve /ws itself (GitHub Pages).
 const DEFAULT_PUBLIC_WS_URL := "wss://play.jeetball.com/ws"
+## The server a bare link connects to: the build's stamped SERVER_URL (test builds), else the page's own host /ws when
+## served by our server (test.jeetball.com), else DEFAULT_PUBLIC_WS_URL. ?server= / --ws= still override it.
+var default_ws_url: String = DEFAULT_PUBLIC_WS_URL
+
+## SERVER_URL stamped into this build by tools/export_web.sh, else the live server.
+static func build_default_ws_url() -> String:
+	var stamped := String(BuildInfo.SERVER_URL).strip_edges()
+	return stamped if not stamped.is_empty() else DEFAULT_PUBLIC_WS_URL
+
+static func parse_lobby_count(raw: String) -> int:
+	var t := raw.strip_edges()
+	if t.is_empty() or not t.is_valid_int():
+		return PERMANENT_LOBBY_COUNT
+	return clampi(int(t), 1, PERMANENT_LOBBY_COUNT)
 
 ## Clients: the roster of the room we are in (peer_id -> {name, team, bracket, ready, room, kills, deaths, alive}).
 ## Server: every registered peer (same dictionaries as rooms[rid]["players"]).
@@ -186,9 +203,13 @@ func _parse_runtime_environment_and_url() -> void:
 	var all_args := OS.get_cmdline_args() + OS.get_cmdline_user_args()
 	if "--server" in all_args or OS.get_environment("DEDICATED_SERVER") == "1":
 		is_dedicated_server = true
+	default_ws_url = build_default_ws_url()
+	permanent_lobby_count = parse_lobby_count(OS.get_environment("LOBBY_COUNT"))
 
 	for arg in all_args:
-		if arg.begins_with("--room="):
+		if arg.begins_with("--lobbies="):
+			permanent_lobby_count = parse_lobby_count(arg.trim_prefix("--lobbies="))
+		elif arg.begins_with("--room="):
 			active_room = sanitize_room_id(arg.trim_prefix("--room="))
 			room_from_url = true
 		elif arg.begins_with("--name="):
@@ -207,12 +228,15 @@ func _parse_runtime_environment_and_url() -> void:
 		var host_v: Variant = JavaScriptBridge.eval("window.location.host || ''")
 		var host := String(host_v) if typeof(host_v) == TYPE_STRING else ""
 		if host.is_empty() or host.ends_with("github.io") or host.ends_with("itch.zone") or host.ends_with("itch.io"):
-			# Static hosts (GitHub Pages) have no /ws: default to the always-on server.
-			current_ws_url = DEFAULT_PUBLIC_WS_URL
+			# Static hosts (GitHub Pages) have no /ws: default to the build's server (live unless stamped otherwise).
+			if not server_from_url:
+				current_ws_url = default_ws_url
 		else:
 			var auto_ws: Variant = JavaScriptBridge.eval("(window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.host + '/ws'")
 			if typeof(auto_ws) == TYPE_STRING and not String(auto_ws).is_empty():
-				current_ws_url = String(auto_ws)
+				default_ws_url = String(auto_ws)
+				if not server_from_url:
+					current_ws_url = default_ws_url
 		var search_str: Variant = JavaScriptBridge.eval("window.location.search || ''")
 		if typeof(search_str) == TYPE_STRING and not String(search_str).is_empty():
 			_parse_query_string(String(search_str))
@@ -316,7 +340,7 @@ func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 		print("[NetworkLobby] Writing lobby state for /api/lobbies to %s" % lobby_state_file)
 	var edgegap_ip := OS.get_environment("ARBITRIUM_PUBLIC_IP")
 	var edgegap_tag := (" [Edgegap Public IP: %s]" % edgegap_ip) if not edgegap_ip.is_empty() else ""
-	print("[NetworkLobby] Dedicated WebSocket Server listening on 0.0.0.0:%d (%d permanent lobbies, %d per team)%s" % [port, PERMANENT_LOBBY_COUNT, MAX_PER_TEAM, edgegap_tag])
+	print("[NetworkLobby] Dedicated WebSocket Server listening on 0.0.0.0:%d (%d permanent lobbies, %d per team)%s" % [port, permanent_lobby_count, MAX_PER_TEAM, edgegap_tag])
 	connection_status_changed.emit("DEDICATED SERVER LIVE ON PORT %d%s" % [port, edgegap_tag], true)
 	return OK
 
@@ -923,13 +947,13 @@ static func is_permanent_room_id(rid: String) -> bool:
 	if not rid.begins_with("lobby_") or rid.length() != 8:
 		return false
 	var n := rid.substr(6, 2)
-	return n.is_valid_int() and int(n) >= 1 and int(n) <= PERMANENT_LOBBY_COUNT
+	return n.is_valid_int() and int(n) >= 1 and int(n) <= permanent_lobby_count
 
 static func default_map_for_lobby(index: int) -> String:
 	return MAPS[(index - 1) % MAPS.size()]
 
 func _ensure_permanent_rooms() -> void:
-	for i in range(1, PERMANENT_LOBBY_COUNT + 1):
+	for i in range(1, permanent_lobby_count + 1):
 		var rid := "lobby_%02d" % i
 		if not rooms.has(rid):
 			rooms[rid] = _new_room(rid, "Lobby %02d" % i, true, default_map_for_lobby(i), "deathmatch")
@@ -2023,7 +2047,7 @@ static func team_label(team: String) -> String:
 ## The permanent lobbies in the exact /api/lobbies row shape (minus join_url, which server.js adds).
 func get_public_lobby_list() -> Array:
 	var out: Array = []
-	for i in range(1, PERMANENT_LOBBY_COUNT + 1):
+	for i in range(1, permanent_lobby_count + 1):
 		var rid := "lobby_%02d" % i
 		var room: Dictionary = rooms.get(rid, {})
 		if room.is_empty():

@@ -13,10 +13,17 @@ if [ -n "$(git status --porcelain -- scripts scenes assets project.godot export_
 	COMMIT="$COMMIT+dirty"
 fi
 BUILT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+# v0.7 test/play split: which server a bare link connects to. BUILD_SERVER_URL wins; on the test branch it defaults to
+# the test server; otherwise "" (the live server, wss://play.jeetball.com/ws).
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+SERVER_URL="${BUILD_SERVER_URL-}"
+if [ -z "${BUILD_SERVER_URL+x}" ] && [ "$BRANCH" = "test" ]; then
+	SERVER_URL="wss://test.jeetball.com/ws"
+fi
 cp "$INFO" /tmp/build_info.gd.bak
 trap 'cp /tmp/build_info.gd.bak "$INFO"' EXIT
-sed -i "s/^const COMMIT := \".*\"/const COMMIT := \"$COMMIT\"/; s/^const BUILT_UTC := \".*\"/const BUILT_UTC := \"$BUILT\"/" "$INFO"
-echo "build stamp: $VERSION · $COMMIT ($BUILT)"
+sed -i "s/^const COMMIT := \".*\"/const COMMIT := \"$COMMIT\"/; s/^const BUILT_UTC := \".*\"/const BUILT_UTC := \"$BUILT\"/; s#^const SERVER_URL := \".*\"#const SERVER_URL := \"$SERVER_URL\"#" "$INFO"
+echo "build stamp: $VERSION · $COMMIT ($BUILT) server=${SERVER_URL:-live default}"
 "$GODOT" --headless --path . --export-release "Web" build/web/index.html
 cp build/web/index.* docs/
 PCK=$(stat -c %s build/web/index.pck)

@@ -81,9 +81,10 @@ func close_browser() -> void:
 	if _layer != null:
 		_layer.visible = false
 
-## ?server= from the page URL (or a manual URL), else the always-on server (NetworkLobby.DEFAULT_PUBLIC_WS_URL).
+## ?server= from the page URL (or a manual URL), else this build's default server (NetworkLobby.default_ws_url: live,
+## or test.jeetball.com for a test build / a page served from the test server).
 func _explicit_server_url() -> String:
-	return NetworkLobby.current_ws_url if NetworkLobby.server_from_url else NetworkLobby.DEFAULT_PUBLIC_WS_URL
+	return NetworkLobby.current_ws_url if NetworkLobby.server_from_url else NetworkLobby.default_ws_url
 
 func _on_lobby_join_requested(entry: Dictionary) -> void:
 	# Ren v0.5: JOIN connects to the lobby in place (web and desktop) and shows the waiting room; the match only
