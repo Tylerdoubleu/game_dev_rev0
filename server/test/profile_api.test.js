@@ -82,7 +82,7 @@ test("profile API over HTTP", async (t) => {
   // get + 401
   const g = await call(base, "GET", "/api/profile", { token: a.json.token });
   assert.equal(g.status, 200);
-  assert.deepEqual(Object.keys(g.json).sort(), ["callsign", "career", "clout", "created_at", "profile_id", "stats"]);
+  assert.deepEqual(Object.keys(g.json).sort(), ["callsign", "career", "clout", "clout_by_source", "created_at", "profile_id", "stats"]);
   assert.deepEqual(g.json.stats, { matches: 0, wins: 0, eliminations: 0, flags: 0, rounds_won: 0 });
   assert.equal(g.json.token, undefined);
   assert.equal((await call(base, "GET", "/api/profile")).status, 401);
@@ -156,7 +156,8 @@ test("profile API over HTTP", async (t) => {
   assert.deepEqual(ga.json.stats, { matches: 1, wins: 1, eliminations: 4, flags: 2, rounds_won: 3 });
   const pub = await call(base, "GET", "/api/profile/public/VIPER_77");
   assert.equal(pub.status, 200);
-  assert.deepEqual(Object.keys(pub.json).sort(), ["callsign", "clout", "stats"]);
+  assert.deepEqual(Object.keys(pub.json).sort(), ["callsign", "clout", "clout_by_source", "stats"]);
+  assert.deepEqual(pub.json.clout_by_source, { online: wantB, solo: 0 });
   assert.equal(pub.json.clout, wantB);
   assert.equal(pub.json.stats.eliminations, 50);
   assert.equal((await call(base, "GET", "/api/profile/public/nobody_here")).status, 404);
@@ -165,6 +166,45 @@ test("profile API over HTTP", async (t) => {
   assert.equal((await call(base, "POST", "/api/profile")).status, 201);
   assert.equal((await call(base, "POST", "/api/profile")).status, 201);
   assert.equal((await call(base, "POST", "/api/profile")).status, 429);
+
+  // solo awards (client-reported): star +100 once, challenge +50 then +13, tier +500 once
+  const solo = (body, token = a.json.token) => call(base, "POST", "/api/profile/solo_award", { token, body });
+  let r = await solo({ kind: "star", id: "speedball:s1" });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json, { awarded: 100, clout: wantA + 100, clout_by_source: { online: wantA, solo: 100 } });
+  assert.equal((await solo({ kind: "star", id: "speedball:s1" })).json.awarded, 0, "same star again: 0");
+  assert.equal((await solo({ kind: "star", id: "speedball:s2" })).json.awarded, 100);
+  assert.equal((await solo({ kind: "challenge", id: "ch_01" })).json.awarded, 50);
+  assert.equal((await solo({ kind: "challenge", id: "ch_01" })).json.awarded, 13);
+  assert.equal((await solo({ kind: "challenge", id: "ch_01" })).json.awarded, 13);
+  assert.equal((await solo({ kind: "tier", id: "tier.1" })).json.awarded, 500);
+  r = await solo({ kind: "tier", id: "tier.1" });
+  assert.equal(r.json.awarded, 0);
+  const soloTotal = 100 + 100 + 50 + 13 + 13 + 500;
+  assert.deepEqual(r.json.clout_by_source, { online: wantA, solo: soloTotal });
+  assert.equal(r.json.clout, wantA + soloTotal);
+  for (const bad of [{ kind: "medal", id: "x" }, { id: "x" }, { kind: "star" }, { kind: "star", id: "" }, { kind: "star", id: "x".repeat(65) }, { kind: "star", id: "bad id" }, { kind: "star", id: "a/b" }, { kind: "star", id: 5 }]) {
+    const e = await solo(bad);
+    assert.equal(e.status, 400, JSON.stringify(bad));
+    assert.match(e.json.error, /^invalid_(kind|id)$/);
+  }
+  assert.equal((await call(base, "POST", "/api/profile/solo_award", { body: { kind: "star", id: "x" } })).status, 401);
+  assert.equal((await solo({ kind: "star", id: "x" }, "0".repeat(64))).status, 401);
+  assert.equal((await call(base, "GET", "/api/profile/solo_award", { token: a.json.token })).status, 405);
+  const gs = await call(base, "GET", "/api/profile", { token: a.json.token });
+  assert.deepEqual(gs.json.clout_by_source, { online: wantA, solo: soloTotal });
+  // online awards keep counting as online
+  await internal(base, { room: "lobby_01", mode: "deathmatch", match_id: "m2", results: [{ token: a.json.token, won: false, eliminations: 1 }] });
+  const gs2 = await call(base, "GET", "/api/profile", { token: a.json.token });
+  assert.deepEqual(gs2.json.clout_by_source, { online: wantA + 5, solo: soloTotal });
+  assert.equal(gs2.json.clout, wantA + 5 + soloTotal);
+  // 60 solo awards per minute per profile (b has used 0)
+  const burst = [];
+  for (let i = 0; i < 61; i++) burst.push((await solo({ kind: "challenge", id: "rl" }, b.json.token)).status);
+  assert.equal(burst.filter((s) => s === 200).length, 60);
+  assert.equal(burst[60], 429);
+  assert.equal((await solo({ kind: "star", id: "other" })).status, 200, "limit is per profile");
+  const bSolo = 50 + 59 * 13;
 
   // Allow-Origin on error responses too; none on /internal/*
   const o = { Origin: ORIGIN };
@@ -191,7 +231,11 @@ test("profile API over HTTP", async (t) => {
   const again = await call(base, "GET", "/api/profile", { token: a.json.token });
   assert.equal(again.status, 200);
   assert.equal(again.json.callsign, "Viper-2");
-  assert.equal(again.json.clout, wantA);
+  assert.equal(again.json.clout, wantA + 5 + soloTotal + 100);
+  assert.deepEqual(again.json.clout_by_source, { online: wantA + 5, solo: soloTotal + 100 });
+  assert.equal((await solo({ kind: "tier", id: "tier.1" })).json.awarded, 0, "solo ids persisted");
+  assert.equal((await solo({ kind: "challenge", id: "ch_01" })).json.awarded, 13);
+  assert.deepEqual((await call(base, "GET", "/api/profile/public/viper_77")).json.clout_by_source, { online: wantB, solo: bSolo });
   assert.deepEqual(again.json.career, career);
   assert.equal((await call(base, "PUT", "/api/profile/callsign", { token: a.json.token, body: { callsign: "viper_77" } })).status, 409, "callsign index rebuilt on load");
   assert.equal((await internal(base, result)).json.duplicate, true, "match ids persisted");
@@ -208,6 +252,23 @@ test("default CORS allow-list", () => {
     assert.equal(h.Vary, "Origin");
   }
   assert.equal(apiCorsHeaders("https://evil.example", {})["Access-Control-Allow-Origin"], undefined);
+});
+
+test("store: older profiles get clout_by_source {online: clout, solo: 0}", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pb_migrate_"));
+  const token = "c".repeat(64);
+  fs.writeFileSync(path.join(dir, "profiles.json"), JSON.stringify({ version: 1, profiles: { p_old: {
+    id: "p_old", token_hash: ps.sha256(token), callsign: "Old", clout: 240,
+    stats: { matches: 2, wins: 1, eliminations: 5, flags: 1, rounds_won: 0 }, career: null, created_at: "2026-10-30T00:00:00Z",
+  } } }));
+  const s = new ps.ProfileStore({ dataDir: dir, debounceMs: 0 });
+  const p = s.byToken(token);
+  assert.deepEqual(p.clout_by_source, { online: 240, solo: 0 });
+  assert.deepEqual(ps.publicView(p).clout_by_source, { online: 240, solo: 0 });
+  assert.deepEqual(s.soloAward(p, "star", "a"), { awarded: 100 });
+  assert.deepEqual(p.clout_by_source, { online: 240, solo: 100 });
+  assert.equal(p.clout, 340);
+  assert.deepEqual(ps.SOLO_CLOUT, { star: { first: 100, repeat: 0 }, challenge: { first: 50, repeat: 13 }, tier: { first: 500, repeat: 0 } });
 });
 
 test("store: reload, atomic file, non-loopback rejection", () => {

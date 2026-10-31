@@ -7,8 +7,10 @@
  * (write <file>.tmp, then rename). Only a SHA-256 hash of each bearer token is stored; the token itself is shown
  * once, in the POST /api/profile response.
  *
- * Clout is never client-writable. It is awarded only by POST /internal/match_result, which the headless Godot
- * server calls at match end (loopback only + X-Internal-Key). See docs/NETWORK_EVENTS.md "v0.7 profile API".
+ * Online clout is awarded only by POST /internal/match_result, which the headless Godot server calls at match end
+ * (loopback only + X-Internal-Key). Solo clout comes from POST /api/profile/solo_award with fixed per-id values
+ * (client-reported, trusted for now). Totals are split in clout_by_source {online, solo}.
+ * See docs/NETWORK_EVENTS.md "v0.7 profile API".
  */
 const fs = require("fs");
 const os = require("os");
@@ -22,6 +24,19 @@ const CLOUT = Object.freeze({
   CTF_ROUND_WIN: 25, // per CTF round your team won
   MATCH_WIN: 75, // your team won the match
 });
+/**
+ * Solo clout (client-reported via POST /api/profile/solo_award; trusted for now, no anti-cheat).
+ * star: +100 the first time a star id is awarded (then 0); challenge: +50 first win per id, +13 on repeats;
+ * tier: +500 the first clear of a tier id (then 0).
+ */
+const SOLO_CLOUT = Object.freeze({
+  star: { first: 100, repeat: 0 },
+  challenge: { first: 50, repeat: 13 },
+  tier: { first: 500, repeat: 0 },
+});
+const SOLO_ID_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
+const SOLO_LIMIT_PER_MIN = 60;
+const SOLO_MAX_IDS_PER_KIND = 1000;
 /** Per-player, per-match clamps (limits abuse from a buggy or tampered match report). */
 const MATCH_CAPS = Object.freeze({ eliminations: 50, flags: 5, rounds_won: 5 });
 const MAX_RESULTS_PER_MATCH = 10;
@@ -68,6 +83,7 @@ class ProfileStore {
     if (doc && doc.profiles && typeof doc.profiles === "object") {
       for (const p of Object.values(doc.profiles)) {
         if (!p || typeof p.id !== "string" || typeof p.token_hash !== "string") continue;
+        normalizeProfile(p);
         this.profiles.set(p.id, p);
         this.byTokenHash.set(p.token_hash, p.id);
         if (p.callsign) this.byCallsign.set(p.callsign.toLowerCase(), p.id);
@@ -100,7 +116,9 @@ class ProfileStore {
     const now = new Date().toISOString();
     const p = {
       id, token_hash: sha256(token), callsign: null, clout: 0,
+      clout_by_source: { online: 0, solo: 0 },
       stats: { matches: 0, wins: 0, eliminations: 0, flags: 0, rounds_won: 0 },
+      solo_awards: { star: {}, challenge: {}, tier: {} },
       career: null, created_at: now, updated_at: now,
     };
     this.profiles.set(id, p);
@@ -133,6 +151,22 @@ class ProfileStore {
     this.byCallsign.set(key, p.id);
     this._schedule();
     return "ok";
+  }
+
+  /** @returns {{error:string}|{awarded:number}} */
+  soloAward(p, kind, id) {
+    if (typeof kind !== "string" || !Object.prototype.hasOwnProperty.call(SOLO_CLOUT, kind)) return { error: "invalid_kind" };
+    if (typeof id !== "string" || !SOLO_ID_RE.test(id)) return { error: "invalid_id" };
+    const seen = p.solo_awards[kind];
+    const count = Object.prototype.hasOwnProperty.call(seen, id) ? seen[id] : 0;
+    if (!count && Object.keys(seen).length >= SOLO_MAX_IDS_PER_KIND) return { error: "too_many_ids" };
+    const awarded = count ? SOLO_CLOUT[kind].repeat : SOLO_CLOUT[kind].first;
+    seen[id] = count + 1;
+    p.clout += awarded;
+    p.clout_by_source.solo += awarded;
+    p.updated_at = new Date().toISOString();
+    this._schedule();
+    return { awarded };
   }
 
   setCareer(p, career) {
@@ -168,6 +202,7 @@ class ProfileStore {
       };
       const gained = clout(r);
       p.clout += gained;
+      p.clout_by_source.online += gained;
       p.stats.matches += 1;
       p.stats.wins += r.won ? 1 : 0;
       p.stats.eliminations += r.eliminations;
@@ -182,9 +217,23 @@ class ProfileStore {
 }
 
 const privateView = (p) => ({
-  profile_id: p.id, callsign: p.callsign, clout: p.clout, stats: { ...p.stats }, career: p.career, created_at: p.created_at,
+  profile_id: p.id, callsign: p.callsign, clout: p.clout, clout_by_source: { ...p.clout_by_source },
+  stats: { ...p.stats }, career: p.career, created_at: p.created_at,
 });
-const publicView = (p) => ({ callsign: p.callsign, clout: p.clout, stats: { ...p.stats } });
+const publicView = (p) => ({ callsign: p.callsign, clout: p.clout, clout_by_source: { ...p.clout_by_source }, stats: { ...p.stats } });
+
+/** Upgrades older records: clout_by_source defaults to {online: clout, solo: 0}; solo_awards to empty. */
+function normalizeProfile(p) {
+  p.clout = Math.max(0, Math.floor(Number(p.clout) || 0));
+  const cbs = p.clout_by_source;
+  if (!cbs || typeof cbs !== "object" || !Number.isFinite(cbs.online) || !Number.isFinite(cbs.solo)) {
+    p.clout_by_source = { online: p.clout, solo: 0 };
+  }
+  const sa = p.solo_awards && typeof p.solo_awards === "object" ? p.solo_awards : {};
+  p.solo_awards = {};
+  for (const k of Object.keys(SOLO_CLOUT)) p.solo_awards[k] = sa[k] && typeof sa[k] === "object" ? sa[k] : {};
+  return p;
+}
 
 /** Sliding one-hour window per key. */
 class RateLimiter {
@@ -292,7 +341,7 @@ function handleProfileRequest(req, res, url, ctx) {
     return send(201, { profile_id: profile.id, token, callsign: null, clout: 0, career: null }), true;
   }
 
-  const routes = { "/api/profile": "GET", "/api/profile/callsign": "PUT", "/api/profile/career": "PUT" };
+  const routes = { "/api/profile": "GET", "/api/profile/callsign": "PUT", "/api/profile/career": "PUT", "/api/profile/solo_award": "POST" };
   if (!routes[p]) return send(404, { error: "not_found" }), true;
   if (req.method !== routes[p]) {
     return send(405, { error: "method_not_allowed" }, { Allow: `${p === "/api/profile" ? "GET, POST" : routes[p]}, OPTIONS` }), true;
@@ -300,10 +349,18 @@ function handleProfileRequest(req, res, url, ctx) {
   const prof = ctx.store.byToken(bearer(req));
   if (!prof) return send(401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" }), true;
   if (p === "/api/profile") return send(200, privateView(prof)), true;
+  if (p === "/api/profile/solo_award" && ctx.soloLimiter && !ctx.soloLimiter.allow(prof.id)) {
+    return send(429, { error: "rate_limited" }, { "Retry-After": "60" }), true;
+  }
 
   readBody(req, (err, body) => {
     if (err === "too_large") return send(413, { error: "too_large" });
     if (err || !body || typeof body !== "object") return send(400, { error: "bad_json" });
+    if (p === "/api/profile/solo_award") {
+      const r = ctx.store.soloAward(prof, body.kind, body.id);
+      if (r.error) return send(400, { error: r.error });
+      return send(200, { awarded: r.awarded, clout: prof.clout, clout_by_source: { ...prof.clout_by_source } });
+    }
     if (p === "/api/profile/callsign") {
       const r = ctx.store.setCallsign(prof, body.callsign);
       if (r === "invalid_callsign") return send(400, { error: r });
@@ -321,7 +378,7 @@ function handleProfileRequest(req, res, url, ctx) {
 }
 
 module.exports = {
-  CLOUT, MATCH_CAPS, CAREER_MAX_BYTES, CALLSIGN_RE, CREATE_LIMIT_PER_HOUR,
+  CLOUT, SOLO_CLOUT, SOLO_ID_RE, SOLO_LIMIT_PER_MIN, SOLO_MAX_IDS_PER_KIND, normalizeProfile, MATCH_CAPS, CAREER_MAX_BYTES, CALLSIGN_RE, CREATE_LIMIT_PER_HOUR,
   ProfileStore, RateLimiter, defaultDataDir, clout, sha256, clientIp, isTrustedInternal, handleProfileRequest,
   privateView, publicView,
 };

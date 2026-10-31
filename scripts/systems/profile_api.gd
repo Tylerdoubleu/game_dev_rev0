@@ -1,7 +1,7 @@
 class_name ProfileApi
 extends Node
 ## v0.7 client helper for the anonymous profile API (server/profile_store.js, docs/NETWORK_EVENTS.md "v0.7 profile API").
-## Add as a child, then call ensure_profile() / fetch_profile() / set_callsign() / save_career().
+## Add as a child, then call ensure_profile() / fetch_profile() / set_callsign() / save_career() / solo_award().
 ## The private token lives in user://profile.cfg (IndexedDB on the web build; clearing browser data loses the profile).
 ## After a create/load it is handed to NetworkLobby.set_profile_token() so the server can award online clout.
 ## Every reply arrives on `completed(action, status, data)`; e.g. set_callsign -> status 409 + {"error":"callsign_taken"}.
@@ -43,6 +43,11 @@ func set_callsign(callsign: String) -> void:
 func save_career(career: Dictionary) -> void:
 	_request("save_career", "/api/profile/career", HTTPClient.METHOD_PUT, {"career": career})
 
+## Solo clout (client-reported): kind "star" | "challenge" | "tier", id 1-64 chars of A-Z a-z 0-9 _ . : -
+## Reply data: {awarded, clout, clout_by_source:{online, solo}}; 400 bad kind/id, 429 over 60/min.
+func solo_award(kind: String, id: String) -> void:
+	_request("solo_award", "/api/profile/solo_award", HTTPClient.METHOD_POST, {"kind": kind, "id": id})
+
 func fetch_public(callsign: String) -> void:
 	_request("public", "/api/profile/public/" + callsign.uri_encode(), HTTPClient.METHOD_GET, null)
 
@@ -77,6 +82,9 @@ func _on_reply(action: String, code: int, d: Dictionary) -> void:
 		_save()
 	if code == 200 and action in ["get", "set_callsign", "save_career"]:
 		profile = d
+	elif code == 200 and action == "solo_award" and not profile.is_empty():
+		profile["clout"] = d.get("clout", profile.get("clout", 0))
+		profile["clout_by_source"] = d.get("clout_by_source", profile.get("clout_by_source", {}))
 	completed.emit(action, code, d)
 
 func _load() -> void:

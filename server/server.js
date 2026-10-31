@@ -55,6 +55,7 @@ const profileStore = new profiles.ProfileStore({ dataDir: DATA_DIR });
 const profileLimiter = new profiles.RateLimiter(
   parseInt(process.env.PROFILE_CREATE_LIMIT_PER_HOUR || "", 10) || profiles.CREATE_LIMIT_PER_HOUR
 );
+const profileSoloLimiter = new profiles.RateLimiter(profiles.SOLO_LIMIT_PER_MIN, 60 * 1000);
 function flushProfilesAndExit() {
   try {
     profileStore.flush();
@@ -171,6 +172,7 @@ const server = http.createServer((req, res) => {
       store: profileStore,
       internalKey: INTERNAL_KEY,
       limiter: profileLimiter,
+      soloLimiter: profileSoloLimiter,
       cors: lobbyApi.apiCorsHeaders(req.headers.origin),
       sendJson,
     })

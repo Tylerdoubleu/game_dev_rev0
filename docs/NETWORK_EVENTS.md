@@ -164,12 +164,14 @@ Allow-list: `CORS_ORIGINS` (comma-separated), else the defaults `https://tylerdo
 | Request | Success | Errors |
 |---|---|---|
 | `POST /api/profile` (no body) | `201 {profile_id, token, callsign:null, clout:0, career:null}`. `token` = 64 hex chars, shown only here. | `429 {error:"rate_limited"}` after 10 creates per IP per hour |
-| `GET /api/profile` | `200 {profile_id, callsign, clout, stats:{matches,wins,eliminations,flags,rounds_won}, career, created_at}` | `401 {error:"unauthorized"}` |
+| `GET /api/profile` | `200 {profile_id, callsign, clout, clout_by_source:{online,solo}, stats:{matches,wins,eliminations,flags,rounds_won}, career, created_at}` | `401 {error:"unauthorized"}` |
 | `PUT /api/profile/callsign` `{callsign}` | `200` same shape as GET. Display case is kept; uniqueness is case-insensitive; the old name is released. | `400 {error:"invalid_callsign"}` unless 3-16 of `A-Z a-z 0-9 _ -`; `409 {error:"callsign_taken"}`; `401` |
 | `PUT /api/profile/career` `{career:<object or null>}` | `200` same shape as GET. Opaque blob for career mode. | `413 {error:"career_too_large"}` if `JSON.stringify(career)` > 32 KB (any body > 64 KB is `413 {error:"too_large"}`); `400 {error:"invalid_career"}` if not an object; `401` |
-| `GET /api/profile/public/<callsign>` (case-insensitive) | `200 {callsign, clout, stats}` (never id/token) | `404 {error:"not_found"}` |
+| `POST /api/profile/solo_award` `{kind, id}` | `200 {awarded, clout, clout_by_source}` (see Solo clout below) | `400 invalid_kind/invalid_id`; `401`; `429` past 60/min per profile |
+| `GET /api/profile/public/<callsign>` (case-insensitive) | `200 {callsign, clout, clout_by_source, stats}` (never id/token) | `404 {error:"not_found"}` |
 
-Clout is **never client-writable** (there is no clout endpoint; extra fields in bodies are ignored).
+Clout can't be set directly (there is no clout endpoint; extra fields in bodies are ignored). Online clout is
+server-awarded only; solo clout comes from the fixed per-id values of `solo_award` below.
 
 ### Server-awarded clout
 
@@ -213,8 +215,26 @@ online). The server keeps it in `_peer_profile_tokens` (peer -> token), drops it
 - `PROFILE_CREATE_LIMIT_PER_HOUR`: optional, default 10. Behind Caddy the rate-limit IP is the right-most
   `X-Forwarded-For` entry.
 
-### TODO (needs a separate decision)
+### Solo clout (`POST /api/profile/solo_award`)
 
-Solo rewards (stars, challenges, tiers vs bots) are **not** part of this API. They would be client-reported, so they
-cannot be trusted like online clout; decide whether they stay in the career blob only or get their own capped,
-clearly-separate counter.
+Client-reported and **trusted for now (no anti-cheat)**; Bearer token required. Body
+`{"kind":"star"|"challenge"|"tier","id":"<1-64 chars of A-Z a-z 0-9 _ . : ->"}`. The server tracks which ids each
+profile has been awarded (`solo_awards`, server-side only) and applies `SOLO_CLOUT` in `server/profile_store.js`:
+
+| kind | first award of that id | repeats |
+|---|---|---|
+| `star` | +100 | 0 |
+| `challenge` (win) | +50 | +13 |
+| `tier` (clear) | +500 | 0 |
+
+- `200 {awarded, clout, clout_by_source:{online, solo}}` (`awarded` may be 0)
+- `400 {error:"invalid_kind"}` / `400 {error:"invalid_id"}` (also `400 {error:"too_many_ids"}` past 1000 distinct ids per kind)
+- `401 {error:"unauthorized"}`; `429 {error:"rate_limited"}` past 60 calls per minute per profile
+
+Client: `ProfileApi.solo_award(kind, id)`.
+
+### Clout by source
+
+Every award is recorded by source: `clout` is the total and `clout_by_source = {online, solo}` splits it (online =
+`/internal/match_result`, solo = `/api/profile/solo_award`). `GET /api/profile` and `GET /api/profile/public/<callsign>`
+both return `clout_by_source`. Profiles saved before this existed load as `{online: clout, solo: 0}`.
