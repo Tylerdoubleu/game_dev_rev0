@@ -1148,6 +1148,7 @@ func _open_respawn_screen(killer_name: String) -> void:
 ## half again itself; deathmatch always sends []).
 const RESPAWN_DOTS_INTERVAL := 0.25
 var respawn_map_dots: Array = []
+var respawn_map_show_all: bool = false # the show_all flag of the last set_players(dots, show_all) call (true in bot matches)
 var _respawn_dots_timer: float = 0.0
 
 static func is_on_team_half(team: String, world_pos: Vector3) -> bool:
@@ -1178,7 +1179,8 @@ func respawn_map_mode() -> String:
 	return m if not m.is_empty() else String(NetworkLobby.selected_mode)
 
 ## Live players from the client snapshots: remote avatars (NetworkLobby.players team/name/alive + the avatar's
-## interpolated position, falling back to players[pid].state.pos) online, the OpFor bots offline. Excludes me.
+## interpolated position, falling back to players[pid].state.pos) online, plus every live local bot (practice OpFor bots,
+## fill-bots, Solo FFA bots) tagged "bot": true. Excludes me.
 func respawn_map_candidates() -> Array:
 	var me := NetworkLobby.local_team
 	var out: Array = []
@@ -1199,18 +1201,62 @@ func respawn_map_candidates() -> Array:
 			if pos is Vector3:
 				var t := String(info.get("team", "ALPHA"))
 				out.append({"team": t, "pos": pos, "name": String(info.get("name", "")), "teammate": t == me})
+	out.append_array(respawn_map_bot_candidates())
+	return out
+
+## v0.7 (Tyler): every live local bot - practice OpFor bots, fill-bots online and the Solo FFA bots. Practice / fill
+## bots fight for the other side; FFA bots have team "FFA" (never a teammate).
+func respawn_map_bot_candidates() -> Array:
+	var me := NetworkLobby.local_team
+	var enemy := "BRAVO" if me == "ALPHA" else "ALPHA"
+	var out: Array = []
+	for c in get_children():
+		if c is Node3D and "bot_name" in c and not bool(c.get("is_eliminated")) and (c as Node3D).visible:
+			var t := enemy
+			if "ffa" in c and bool(c.get("ffa")):
+				t = "FFA"
+			elif "team" in c and String(c.get("team")) in ["ALPHA", "BRAVO"]:
+				t = String(c.get("team"))
+			out.append({"team": t, "pos": (c as Node3D).global_position, "name": String(c.get("bot_name")), "teammate": t == me, "bot": true})
+	return out
+
+## A match with bots in it: Solo FFA, the offline practice range, an online bots_test room or fill-bots with live bots.
+func is_bot_match() -> bool:
+	if ffa_match != null:
+		return true
+	if not NetworkLobby.is_online_client():
+		return true # offline is always you vs the practice / FFA bots
+	var m := respawn_map_mode()
+	if m == "bots_test":
+		return true
+	return NetworkLobby.fill_bots_enabled and not respawn_map_bot_candidates().is_empty()
+
+## v0.7 respawn minimap (Tyler): in any bot match every live bot is shown wherever it stands (deathmatch / FFA
+## included); humans keep the v0.6.3 rule (your half only, none in deathmatch). Pure (tested).
+static func respawn_dots_for(candidates: Array, my_team: String, match_mode: String, bot_match: bool) -> Array:
+	var humans: Array = []
+	var bots: Array = []
+	for c in candidates:
+		if c is Dictionary and bool((c as Dictionary).get("bot", false)):
+			bots.append(c)
+		else:
+			humans.append(c)
+	var out := filter_dots_to_half(humans, my_team, match_mode)
+	if bot_match:
+		out.append_array(bots.filter(func(d) -> bool: return (d as Dictionary).has("pos")))
 	else:
-		var enemy := "BRAVO" if me == "ALPHA" else "ALPHA"
-		for c in get_children():
-			if c is Node3D and "bot_name" in c and not bool(c.get("is_eliminated")) and (c as Node3D).visible:
-				out.append({"team": enemy, "pos": (c as Node3D).global_position, "name": String(c.get("bot_name")), "teammate": false})
+		out.append_array(filter_dots_to_half(bots, my_team, match_mode))
 	return out
 
 func _refresh_respawn_map_dots() -> void:
 	_respawn_dots_timer = RESPAWN_DOTS_INTERVAL
-	respawn_map_dots = filter_dots_to_half(respawn_map_candidates(), NetworkLobby.local_team, respawn_map_mode())
+	var bot_match := is_bot_match()
+	respawn_map_dots = respawn_dots_for(respawn_map_candidates(), NetworkLobby.local_team, respawn_map_mode(), bot_match)
+	# Ren's RespawnScreen.set_players(dots, show_all): show_all in a bot match draws every dot anywhere (bots in orange);
+	# humans were already filtered to your half above, so the screen's own-half filter is only skipped for bot matches.
 	if death_respawn_canvas != null and death_respawn_canvas.has_method("set_players"):
-		death_respawn_canvas.call("set_players", respawn_map_dots)
+		respawn_map_show_all = bot_match
+		death_respawn_canvas.call("set_players", respawn_map_dots, bot_match)
 
 func _process_respawn_map_dots(delta: float) -> void:
 	if death_respawn_canvas == null or not death_respawn_canvas.visible:

@@ -1,8 +1,11 @@
 extends SceneTree
 ## v0.7 Solo FFA deathmatch (Bluey, plan "Smarter bots"): ?solo=ffa query parsing, 4 bots with unique callsigns spawn
-## through the arena entry point, the respawn map runs in deathmatch mode, FFA bots paint EACH OTHER (bot-on-bot kills
-## credited in the standings), every snap shot had an independent raycast line of sight to its target, first-to-N ends
-## the match with a winner, and stopping restores the GameManager death limit.
+## through the arena entry point, the respawn map runs in deathmatch mode, ALL BOTS vs YOU (v0.7, Tyler): every bot shot
+## is at the human player, never at another bot, there are NO bot-on-bot eliminations (a bot ball on a bot is ignored and
+## never scored), the bots' eliminations of the player are credited in the standings, every snap shot had an independent
+## raycast line of sight to its target, first-to-N ends the match (you at N, or any bot reaching N on you), and stopping
+## restores the GameManager death limit. Respawn minimap: in a bot match every live bot is sent to set_players, also in
+## deathmatch mode.
 ## Aim fix (Tyler: "do the bots look where they are aiming? bullets going behind them?"): EVERY shot is audited — the
 ## angle between the bot's body/aim forward and the ball direction is under SHOT_CONE_DEG, the spawn point is in front
 ## of the bot (dot > 0, also in front of the eye) and the visible marker barrel points along the shot; a bot whose
@@ -20,6 +23,8 @@ var started := false
 var snap_checked := 0
 var snap_no_los := 0
 var bot_on_bot_kills := 0
+var shots_at_bots := 0
+var player_respawns := 0
 const SHOT_CONE_DEG := 10.0 # body forward vs actual ball dir (FIRE_CONE_DEG 7 + MovementRules spread)
 var shots_audited := 0
 var shots_bad_angle := 0
@@ -88,6 +93,9 @@ func _test_query() -> void:
 
 func _on_shot(bot: Node, origin: Vector3, _aim: Vector3, kind: String) -> void:
 	_audit_shot(bot, origin, kind)
+	var ct: Variant = bot.get("current_target")
+	if ct != null and is_instance_valid(ct) and not BotPlayerScript.is_human(ct):
+		shots_at_bots += 1
 	if kind != "snap":
 		return
 	snap_checked += 1
@@ -132,6 +140,7 @@ func _audit_shot(bot: Node, origin: Vector3, kind: String) -> void:
 		worst_shot_msg = "%s %s state=%d ang=%.1f" % [bot.get("bot_name"), kind, int(bot.get("state")), ang]
 	if ang >= SHOT_CONE_DEG:
 		shots_bad_angle += 1
+		print("    DBG bad shot %s %s ang %.1f: impact dist %.1f (dy %.2f), flight %.2f, dir pitch %.1f, aim pitch %.1f, yaw diff %.1f" % [bot.get("bot_name"), kind, ang, (bot.call("eye_position") as Vector3).distance_to(bot.get("last_shot_impact")), (bot.get("last_shot_impact") as Vector3).y - (bot.call("eye_position") as Vector3).y, float(bot.get("last_shot_flight_t")), rad_to_deg(asin(dir.y)), rad_to_deg(float(bot.get("aim_pitch"))), rad_to_deg(Vector2(dir.x, dir.z).angle_to(Vector2(body_fwd.x, body_fwd.z)))])
 	if front_dot <= 0.0 or eye_dot <= 0.0:
 		shots_behind += 1
 	if marker_ang > 15.0:
@@ -179,8 +188,7 @@ func _test_ffa_match() -> void:
 	_check(m != null and bool(arena.call("is_solo_ffa_active")), "start_solo_ffa creates the match")
 	if m == null:
 		return
-	if player != null:
-		player.global_position = Vector3(0, 0.1, 62.5) # park the human behind the gate so the bots fight each other
+	# the human stays on the field (the ALPHA gate): every bot comes for them.
 	var bots: Array = m.get("bots")
 	_check(bots.size() == 4, "default FFA has 4 bots (%d)" % bots.size())
 	var names := {}
@@ -190,6 +198,12 @@ func _test_ffa_match() -> void:
 		b.connect("bot_eliminated", _on_bot_elim)
 		_check(b.get("difficulty") != null and float(b.get("difficulty").get("turn_rate_deg")) > 0.0, "%s has a tier turn rate (%s deg/s)" % [b.get("bot_name"), str(b.get("difficulty").get("turn_rate_deg")) if b.get("difficulty") != null else "?"])
 		_check(bool(b.get("ffa")), "%s is FFA" % b.get("bot_name"))
+		_check(bool(b.get("hunt_player_only")), "%s hunts only the player" % b.get("bot_name"))
+		if player != null:
+			_check(bool(b.call("_is_hostile", player)), "%s: the player is hostile" % b.get("bot_name"))
+		for o in bots:
+			if o != b:
+				_check(not bool(b.call("_is_hostile", o)), "%s: %s is not a target" % [b.get("bot_name"), o.get("bot_name")])
 	root.get_node("IntelBus").intel_feed_updated.connect(_on_feed)
 	_standings_before = _snap_standings(m)
 	m.connect("standings_changed", _on_standings.bind(m))
@@ -214,26 +228,53 @@ func _test_ffa_match() -> void:
 	var start_pos := {}
 	for b in bots:
 		start_pos[b] = (b as Node3D).global_position
+	m.set("kills_to_win", 1000) # keep the soak going: a bot reaching 10 on a parked player would end it early
 	var t := 0.0
-	while t < 150.0 and bot_on_bot_kills < 2:
+	var pdeaths := 0
+	while t < 150.0 and not (shots_audited >= 300 and pdeaths >= 2):
 		await _sim(1.0)
 		t += 1.0
+		pdeaths = _player_deaths(m)
+		if player != null and bool(player.get("awaiting_respawn_choice")):
+			arena.call("_on_respawn_zone_selected", 0) # pick spawn 1 like the browser check
+			player_respawns += 1
 	var moved := 0
 	for b in bots:
 		if float(b.get("distance_moved")) > 5.0:
 			moved += 1
 	_check(moved >= 3, "bots move around (%d of 4 moved > 5 m)" % moved)
-	_check(bot_on_bot_kills >= 1, "FFA bots eliminate each other (%d bot-on-bot kills in %.0f s)" % [bot_on_bot_kills, t])
+	_check(bot_on_bot_kills == 0, "no bot-on-bot eliminations (%d in %.0f s)" % [bot_on_bot_kills, t])
+	_check(shots_at_bots == 0, "every bot shot was at the player (%d of %d at a bot)" % [shots_at_bots, shots_audited])
+	var ignored := 0
+	for b in bots:
+		ignored += int(b.get("bot_friendly_hits_ignored"))
+	print("    stray bot balls on bots ignored: %d" % ignored)
+	pdeaths = _player_deaths(m)
+	_check(pdeaths >= 1, "the bots splat the player (%d deaths in %.0f s, %d respawns)" % [pdeaths, t, player_respawns])
 	var bot_kills_in_standings := 0
+	var bot_deaths_in_standings := 0
 	for row in m.call("standings"):
 		if not bool(row["is_player"]):
 			bot_kills_in_standings += int(row["kills"])
-	_check(bot_kills_in_standings >= bot_on_bot_kills, "standings credit the kills (%d)" % bot_kills_in_standings)
+			bot_deaths_in_standings += int(row["deaths"])
+	_check(bot_kills_in_standings == pdeaths, "standings: bot kills (%d) == player deaths (%d)" % [bot_kills_in_standings, pdeaths])
+	_check(bot_deaths_in_standings == 0, "standings: no bot deaths with a parked player (%d)" % bot_deaths_in_standings)
+	for k in (m.get("kill_log") as Array):
+		_check(String(k["victim"]) == String(m.get("_player_name")) or String(k["shooter"]) == String(m.get("_player_name")), "kill log entry involves the player: %s" % String(k["feed"]))
+	# respawn minimap in a bot match (Solo FFA = deathmatch mode): every live bot is sent, anywhere on the field.
+	arena.call("_refresh_respawn_map_dots")
+	var dots: Array = arena.get("respawn_map_dots")
+	var live := 0
+	for b in bots:
+		if not bool(b.get("is_eliminated")) and (b as Node3D).visible:
+			live += 1
+	_check(bool(arena.call("is_bot_match")), "Solo FFA is a bot match")
+	_check(dots.size() == live and live > 0, "FFA respawn minimap gets every live bot (%d dots, %d live) in deathmatch mode" % [dots.size(), live])
 	_check(shots_audited > 50 and shots_bad_angle == 0, "every shot within %.0f deg of the bot's body/aim forward (%d shots, %d outside, worst %s)" % [SHOT_CONE_DEG, shots_audited, shots_bad_angle, worst_shot_msg])
 	_check(shots_behind == 0, "every ball spawned in front of the bot (dot > 0) (%d shots, %d behind)" % [shots_audited, shots_behind])
 	_check(shots_marker_off == 0, "visible marker barrel within 15 deg of every shot (%d off)" % shots_marker_off)
 	var klog: Array = m.get("kill_log")
-	_check(klog.size() >= bot_on_bot_kills and klog.size() > 0, "kill log records eliminations (%d)" % klog.size())
+	_check(klog.size() == pdeaths and klog.size() > 0, "kill log records every elimination (%d)" % klog.size())
 	_check(feed_mismatch.is_empty(), "every kill feed line reads SHOOTER SPLATTED VICTIM, matching the standings (%d kills; %s)" % [klog.size(), str(feed_mismatch.slice(0, 3))])
 	_check(snap_checked > 0 and snap_no_los == 0, "every snap shot had raycast LOS to its target (%d shots, %d without)" % [snap_checked, snap_no_los])
 	var respawned := 0
@@ -251,22 +292,54 @@ func _test_ffa_match() -> void:
 	_check(rl2 == null or rl2.text.contains("FLAG:"), "CTF HUD text back after FFA stops")
 
 func _test_first_to_n() -> void:
+	# you win at N
 	var m: Node = arena.call("start_solo_ffa", {"bots": 2, "tier": "amateur", "kills_to_win": 2})
 	var bots: Array = m.get("bots")
 	var a: Node = bots[0]
 	var b: Node = bots[1]
+	var pl: Node = m.get("player")
+	var me := String(m.get("_player_name"))
 	var over := [""]
 	m.connect("ffa_match_over", func(w): over[0] = w)
 	m.call("on_bot_eliminated", b, a)
+	_check(String(m.get("winner")) == "" and _row(m, String(a.get("bot_name"))).get("kills", -1) == 0 and _row(m, String(b.get("bot_name"))).get("deaths", -1) == 0, "a bot credited with a bot: ignored (no kill, no death)")
+	m.call("on_bot_eliminated", b, pl)
 	_check(String(m.get("winner")) == "" and not bool(GM.get("match_ended")), "1 kill: match continues")
-	m.call("on_bot_eliminated", b, a)
-	_check(String(m.get("winner")) == String(a.get("bot_name")) and over[0] == String(a.get("bot_name")), "2 kills with kills_to_win=2: %s wins" % a.get("bot_name"))
+	m.call("on_bot_eliminated", a, pl)
+	_check(String(m.get("winner")) == me and over[0] == me, "you reach kills_to_win=2: you win (%s)" % String(m.get("winner")))
 	_check(bool(GM.get("match_ended")), "GameManager match ended")
 	arena.call("stop_solo_ffa")
 	await _frames(2)
+	GM.set("match_ended", false)
+	# any bot reaching N on you ends it
+	m = arena.call("start_solo_ffa", {"bots": 2, "tier": "amateur", "kills_to_win": 2})
+	bots = m.get("bots")
+	a = bots[0]
+	pl = m.get("player")
+	over = [""]
+	m.connect("ffa_match_over", func(w): over[0] = w)
+	if pl != null and pl.has_signal("player_eliminated"):
+		for i in 2:
+			pl.set("last_shooter_name", String(a.get("bot_name")))
+			pl.emit_signal("player_eliminated", "%s [MASK / GOGGLES]" % a.get("bot_name"))
+			if i == 0:
+				_check(String(m.get("winner")) == "", "bot 1 kill on you: match continues")
+		_check(String(m.get("winner")) == String(a.get("bot_name")) and over[0] == String(a.get("bot_name")) and bool(GM.get("match_ended")), "%s reaches 2 on you: match over, bot wins" % a.get("bot_name"))
+	arena.call("stop_solo_ffa")
+	await _frames(2)
+	GM.set("match_ended", false)
 
-## Deterministic feed check: Hammer paints Rook -> "HAMMER SPLATTED ROOK", Hammer +1 kill, Rook +1 death (never the
-## reverse); a bot painting the player names the bot first and the player's standings name second.
+func _row(m: Node, n: String) -> Dictionary:
+	for r in m.call("standings"):
+		if String(r["name"]) == n:
+			return r
+	return {}
+
+func _player_deaths(m: Node) -> int:
+	return int(_row(m, String(m.get("_player_name"))).get("deaths", 0))
+
+## Deterministic feed check: Hammer's ball on Rook is ignored (all bots vs you); you paint Rook -> "<YOU> SPLATTED ROOK",
+## you +1 kill, Rook +1 death (never the reverse); a bot painting the player names the bot first and the player second.
 func _test_feed_order() -> void:
 	var m: Node = arena.call("start_solo_ffa", {"bots": 2, "tier": "amateur", "kills_to_win": 10})
 	var bots: Array = m.get("bots")
@@ -285,19 +358,22 @@ func _test_feed_order() -> void:
 	hammer.set("bot_name", "Hammer")
 	rook.set("bot_name", "Rook")
 	feed_lines.clear()
+	# all bots vs you: Hammer's ball on Rook is ignored - no elimination, no feed line, no score
 	rook.call("on_paintball_break", (rook as Node3D).global_position + Vector3(0, 1.3, 0), hammer)
 	await _frames(1)
-	var ham_row := {}
-	var rook_row := {}
-	for row in m.call("standings"):
-		if row["name"] == "Hammer":
-			ham_row = row
-		if row["name"] == "Rook":
-			rook_row = row
+	_check(not bool(rook.get("is_eliminated")) and feed_lines.is_empty() and int(_row(m, "Hammer").get("kills", -1)) == 0 and int(_row(m, "Rook").get("deaths", -1)) == 0, "Hammer's ball on Rook is ignored (no elim, no feed, no score; feed %s)" % str(feed_lines))
+	var pl0: Node = m.get("player")
+	var me := String(m.get("_player_name"))
+	feed_lines.clear()
+	rook.call("on_paintball_break", (rook as Node3D).global_position + Vector3(0, 1.3, 0), pl0)
+	await _frames(1)
+	var ham_row := _row(m, "Hammer")
+	var rook_row := _row(m, "Rook")
+	var me_row := _row(m, me)
 	var line: String = feed_lines[feed_lines.size() - 1] if not feed_lines.is_empty() else ""
-	_check(line.begins_with("HAMMER SPLATTED ROOK"), "Hammer paints Rook -> feed '%s'" % line)
+	_check(line.begins_with("%s SPLATTED ROOK" % me.to_upper()), "you paint Rook -> feed '%s'" % line)
 	_check(feed_lines.size() == 1, "exactly one feed line per elimination (%d)" % feed_lines.size())
-	_check(int(ham_row.get("kills", -1)) == 1 and int(rook_row.get("deaths", -1)) == 1 and int(rook_row.get("kills", -1)) == 0, "standings credit Hammer (shooter), not Rook: %s / %s" % [str(ham_row), str(rook_row)])
+	_check(int(me_row.get("kills", -1)) == 1 and int(rook_row.get("deaths", -1)) == 1 and int(rook_row.get("kills", -1)) == 0 and int(ham_row.get("kills", -1)) == 0, "standings credit you (shooter), not Rook: %s / %s" % [str(me_row), str(rook_row)])
 	var pl: Node = m.get("player")
 	if pl != null and pl.has_signal("player_eliminated"):
 		pl.set("last_shooter_name", "Hammer")

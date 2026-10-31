@@ -18,6 +18,7 @@ const MovementRules = preload("res://scripts/player/movement_rules.gd")
 const ProRigScript = preload("res://scripts/player/pro_paintball_rig_3d.gd")
 const BotDifficultyScript = preload("res://scripts/bots/bot_difficulty.gd")
 const BunkerGraphScript = preload("res://scripts/bots/bunker_graph.gd")
+const PaintBallisticsScript = preload("res://scripts/autoload/paint_ballistics.gd")
 
 signal shot_fired(bot: Node, origin: Vector3, aim_point: Vector3, kind: String)
 signal bot_eliminated(bot: Node, shooter: Node, zone: String)
@@ -42,11 +43,22 @@ const ALIGN_GIVE_UP_S: float = 1.2 # can't line up (target swung behind cover / 
 const AIM_EASE: float = 12.0 # 1/s: turn speed eases in near the target (smooth), capped by the tier's turn rate
 const MUZZLE_FORWARD: float = 0.62 # metres in front of the eye along the aim (fallback muzzle point)
 const MAX_AIM_PITCH: float = deg_to_rad(60.0)
+## Ball drop (Tyler: "bot aim ignores drop"): PaintBallistics.spawn_paintball launches at fps * FPS_TO_MPS * 0.68 and
+## each physics tick does vel.y -= GRAVITY*dt; vel *= 1 - AIR_DRAG*dt; vel += STADIUM_WIND_ACCEL*dt; pos += vel*dt (+ a
+## random Magnus / wobble term that averages out). Every tier solves that same integration for its launch direction.
+const BALL_SPEED_SCALE: float = 0.68 # the literal in spawn_paintball (test_ffa_bots checks a real ball against it)
+const BALLISTIC_ITERS: int = 6
+const BALLISTIC_MAX_T: float = 3.0
+const MAX_LAUNCH_PITCH: float = deg_to_rad(40.0)
 
 # --- identity / setup
 var bot_name: String = "Bot"
 var callsign: String = "Bot"
 var team: String = "FFA" # "ALPHA" / "BRAVO" for team modes, "FFA" = everyone is hostile
+## v0.7 Solo FFA is ALL BOTS vs YOU (Tyler): bots target only the human player, never each other, and a stray bot ball
+## never eliminates another bot.
+var hunt_player_only: bool = false
+var bot_friendly_hits_ignored: int = 0
 var ffa: bool = true
 var role: String = BunkerGraphScript.ROLE_MID
 var bot_index: int = 0
@@ -134,6 +146,8 @@ var suppress_shots: int = 0
 var shots_blocked_no_los: int = 0
 var shots_waited_for_turn: int = 0 # frames a ready shot was held because the body wasn't on target yet
 var bursts_dropped_unaligned: int = 0
+var last_shot_impact: Vector3 = Vector3.ZERO # where the solver aimed the ball to land (aim error + lead included)
+var last_shot_flight_t: float = 0.0
 var last_shot_dir: Vector3 = Vector3.ZERO # actual ball direction (spread included)
 var last_shot_aim_dir: Vector3 = Vector3.ZERO # intended direction (muzzle -> aim point)
 var last_shot_body_fwd: Vector3 = Vector3.ZERO # body/aim forward (yaw + pitch) when the ball left
@@ -155,6 +169,7 @@ func configure(p: Dictionary) -> void:
 	name = "Bot_" + callsign.validate_node_name()
 	team = String(p.get("team", team))
 	ffa = bool(p.get("ffa", team == "FFA"))
+	hunt_player_only = bool(p.get("hunt_player_only", hunt_player_only))
 	role = String(p.get("role", role))
 	bot_index = int(p.get("index", bot_index))
 	var d: Variant = p.get("difficulty", null)
@@ -436,10 +451,16 @@ static func team_of(n: Node) -> String:
 func _is_hostile(n: Node) -> bool:
 	if n == self or n == null:
 		return false
+	if hunt_player_only:
+		return is_human(n)
 	if ffa:
 		return true
 	var t := team_of(n)
 	return t != team or t == "FFA"
+
+## The human player (local PlayerController3D), not a bot of any kind.
+static func is_human(n: Node) -> bool:
+	return n != null and is_instance_valid(n) and not ("bot_name" in n) and n.has_method("award_kill_bonus_pod")
 
 static func _is_alive(n: Node) -> bool:
 	if n == null or not is_instance_valid(n) or not (n as Node3D).is_inside_tree():
@@ -597,7 +618,7 @@ func _facing_point() -> Variant:
 	if burst_left > 0:
 		if burst_kind == "snap" and (current_target == null or not is_instance_valid(current_target)):
 			return null
-		return _aim_point() + aim_offset
+		return _burst_facing_point()
 	if current_target != null and is_instance_valid(current_target) and (state == State.PEEK or state == State.HOLD):
 		var pts := aim_points_of(current_target)
 		return pts[pts.size() - 1] if pts.size() > 1 else pts[0]
@@ -614,6 +635,85 @@ static func ease_angle(cur: float, want: float, rate: float, delta: float) -> fl
 	if absf(step) >= absf(diff):
 		return want
 	return cur + step
+
+## Real launch speed of this bot's balls (m/s), the same formula as PaintBallistics.spawn_paintball (minus its +/-5.5
+## fps chrono variance).
+func ball_speed_mps() -> float:
+	return muzzle_fps * PaintBallisticsScript.FPS_TO_MPS * BALL_SPEED_SCALE
+
+## Physics step the balls actually integrate with (scaled by Engine.time_scale like every _physics_process delta).
+static func ball_dt() -> float:
+	return Engine.time_scale / float(maxi(1, Engine.physics_ticks_per_second))
+
+## Integrates a ball exactly like PaintBallistics._physics_process (deterministic part) until it has covered
+## `horiz_dist` metres along `flat_dir`. Returns {"pos": Vector3 (interpolated), "t": float flight time}.
+static func simulate_ball(origin: Vector3, dir: Vector3, speed: float, flat_dir: Vector3, horiz_dist: float, dt: float) -> Dictionary:
+	var pos := origin
+	var vel := dir.normalized() * speed
+	var t := 0.0
+	while t < BALLISTIC_MAX_T:
+		var prev := pos
+		vel.y -= PaintBallisticsScript.GRAVITY * dt
+		vel *= maxf(0.0, 1.0 - PaintBallisticsScript.AIR_DRAG * dt)
+		vel += PaintBallisticsScript.STADIUM_WIND_ACCEL * dt
+		pos += vel * dt
+		t += dt
+		var prog := (pos - origin).dot(flat_dir)
+		if prog >= horiz_dist:
+			var prev_prog := (prev - origin).dot(flat_dir)
+			var f := clampf((horiz_dist - prev_prog) / maxf(prog - prev_prog, 0.0001), 0.0, 1.0)
+			return {"pos": prev.lerp(pos, f), "t": t - dt * (1.0 - f)}
+	return {"pos": pos, "t": t}
+
+## Launch direction from `origin` whose (drag + gravity + wind) path passes through `target`: shoot at the target, see
+## where the ball is when it gets that far downrange, move the aim point by the miss, repeat. {"dir", "t", "aim_point"}.
+static func ballistic_aim_dir(origin: Vector3, target: Vector3, speed: float, dt: float = -1.0) -> Dictionary:
+	if dt <= 0.0:
+		dt = ball_dt()
+	var to := target - origin
+	var flat := Vector3(to.x, 0.0, to.z)
+	var hd := flat.length()
+	if hd < 0.5 or speed <= 0.1:
+		return {"dir": to.normalized() if to.length() > 0.001 else Vector3.FORWARD, "t": to.length() / maxf(speed, 0.1), "aim_point": target}
+	var fdir := flat / hd
+	var aim := target
+	var t := hd / speed
+	for i in BALLISTIC_ITERS:
+		var r := simulate_ball(origin, (aim - origin).normalized(), speed, fdir, hd, dt)
+		t = float(r["t"])
+		var miss: Vector3 = target - (r["pos"] as Vector3)
+		aim += miss
+		# never loft past MAX_LAUNCH_PITCH (beyond the marker's useful range)
+		var a := aim - origin
+		var ah := Vector3(a.x, 0.0, a.z).length()
+		if a.y > ah * tan(MAX_LAUNCH_PITCH):
+			aim.y = origin.y + ah * tan(MAX_LAUNCH_PITCH)
+		if miss.length() < 0.005:
+			break
+	return {"dir": (aim - origin).normalized(), "t": t, "aim_point": aim}
+
+## Where this bot wants the ball to land: the burst's aim point + its aim error, plus (snap at a moving target) the
+## target's ground velocity x flight time x the tier's lead_factor. Then the launch solution from `origin`.
+func shot_solution(origin: Vector3) -> Dictionary:
+	var impact := _aim_point() + aim_offset
+	var spd := ball_speed_mps()
+	var sol := ballistic_aim_dir(origin, impact, spd)
+	var lead := float(difficulty.get("lead_factor")) if difficulty != null and difficulty.get("lead_factor") != null else 1.0
+	if burst_kind == "snap" and lead > 0.0 and current_target is CharacterBody3D and is_instance_valid(current_target):
+		var tv: Vector3 = (current_target as CharacterBody3D).velocity
+		tv.y = 0.0
+		if tv.length() > 0.2:
+			impact += tv * float(sol["t"]) * lead
+			sol = ballistic_aim_dir(origin, impact, spd)
+	sol["impact"] = impact
+	return sol
+
+## Point the body / marker should face during a burst: along the launch direction solved from the MUZZLE (not the
+## eye), so the body is parallel to the ball line even at 2 m, where eye-vs-muzzle parallax would be 10-20 deg.
+func _burst_facing_point() -> Vector3:
+	var eye := eye_position()
+	var sol := shot_solution(_muzzle(aim_forward()))
+	return eye + (sol["dir"] as Vector3) * maxf(2.0, eye.distance_to(sol["impact"]))
 
 ## Angle (deg) between the bot's current aim forward and the direction from its eye to `p`.
 func aim_error_deg_to(p: Vector3) -> float:
@@ -648,7 +748,7 @@ func _tick_fire(delta: float) -> void:
 	if burst_kind == "snap" and (current_target == null or not _is_alive(current_target)):
 		burst_left = 0
 		return
-	var aim := _aim_point() + aim_offset
+	var aim := _burst_facing_point() # drop-compensated (and led) launch line, not the raw target
 	# face first: the body / marker must be on the shot before a ball leaves (no shots out of the back or the side)
 	# (and the visible marker must have come up from the pocket carry onto the aim line)
 	if aim_error_deg_to(aim) > FIRE_CONE_DEG or (pro_rig != null and _aim_pose_w < 0.9):
@@ -669,8 +769,11 @@ func _tick_fire(delta: float) -> void:
 		burst_left = 0
 		burst_pause = 0.3
 		return
-	var origin := _muzzle((aim - eye_position()).normalized())
-	var dir := (aim - origin).normalized()
+	var origin := _muzzle(aim_forward())
+	var sol := shot_solution(origin)
+	var dir: Vector3 = sol["dir"]
+	last_shot_impact = sol["impact"]
+	last_shot_flight_t = float(sol["t"])
 	var right := dir.cross(Vector3.UP).normalized()
 	if right.length() < 0.1:
 		right = Vector3.RIGHT
@@ -687,7 +790,7 @@ func _tick_fire(delta: float) -> void:
 		snap_shots += 1
 	else:
 		suppress_shots += 1
-	shot_fired.emit(self, origin, aim, burst_kind)
+	shot_fired.emit(self, origin, last_shot_impact, burst_kind)
 	burst_left -= 1
 	shot_cd = difficulty.shot_interval(max_bps)
 	if burst_left <= 0:
@@ -891,6 +994,9 @@ func resolve_hit_subzone(world_hit_pos: Vector3) -> Dictionary:
 func on_paintball_break(hit_pos: Vector3, shooter: Node) -> void:
 	if is_eliminated or _respawn_flash_timer > 0.2 or GameManager.match_ended:
 		return
+	if hunt_player_only and shooter != null and is_instance_valid(shooter) and "bot_name" in shooter:
+		bot_friendly_hits_ignored += 1
+		return # all bots vs you: another bot's ball is paint on the jersey, not an elimination
 	var zone := String(resolve_hit_subzone(hit_pos).get("zone", "TORSO / JERSEY"))
 	var by := "?"
 	if shooter != null and is_instance_valid(shooter):

@@ -118,7 +118,7 @@ func _test_difficulty_tiers() -> void:
 	var p: Resource = BotDifficultyScript.make("pro")
 	var l: Resource = BotDifficultyScript.make("legend")
 	_check(is_equal_approx(r.reaction_s, 0.65) and is_equal_approx(a.reaction_s, 0.45), "reaction 650 / 450 ms")
-	_check(is_equal_approx(r.aim_error_at(20.0), 1.2) and is_equal_approx(a.aim_error_at(20.0), 0.7), "aim error at 20 m: 1.2 / 0.7 m")
+	_check(is_equal_approx(r.aim_error_at(20.0), 0.8) and is_equal_approx(a.aim_error_at(20.0), 0.7), "aim error at 20 m: 0.8 / 0.7 m (Rookie trimmed in v0.7: drop is compensated, the miss is a small cone)")
 	_check(r.aim_error_at(40.0) > r.aim_error_at(20.0), "aim error grows with range")
 	_check(is_equal_approx(r.shot_interval(10.5), 2.0 * a.shot_interval(10.5)), "Rookie bursts at half rate")
 	_check(not r.suppresses and a.suppresses, "Amateur suppresses, Rookie does not")

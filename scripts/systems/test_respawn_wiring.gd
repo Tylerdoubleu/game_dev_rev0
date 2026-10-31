@@ -162,23 +162,34 @@ func _run() -> void:
 	var fb: Array = names.call(arena.call("filter_dots_to_half", cands, "BRAVO", "ctf"))
 	_check(fb == ["a_in_bravo_half", "b_home"], "BRAVO: everyone on z<0 only %s" % str(fb))
 	_check((arena.call("filter_dots_to_half", cands, "ALPHA", "deathmatch") as Array).is_empty(), "deathmatch: no dots")
-	print("[8] live refresh while open (offline bots)")
+	print("[7b] bot dots: shown anywhere in a bot match (any mode), half-filtered otherwise")
+	var bcands := [{"team": "BRAVO", "pos": Vector3(0, 0, -30), "name": "far_bot", "bot": true}, {"team": "BRAVO", "pos": Vector3(0, 0, -20), "name": "far_human"},
+		{"team": "BRAVO", "pos": Vector3(0, 0, 12), "name": "near_human"}]
+	_check(names.call(arena.call("respawn_dots_for", bcands, "ALPHA", "deathmatch", true)) == ["far_bot"], "bot match + deathmatch: humans none, every bot kept")
+	_check(names.call(arena.call("respawn_dots_for", bcands, "ALPHA", "practice", true)) == ["near_human", "far_bot"], "bot match + team mode: humans on my half + every bot")
+	_check(names.call(arena.call("respawn_dots_for", bcands, "ALPHA", "ctf", false)) == ["near_human"], "no bot match: v0.6.3 half rule for everyone")
+	print("[8] live refresh while open (offline practice = a bot match: every live bot, anywhere, orange)")
 	rs = await _open("ALPHA", "Viper")
-	_check(arena.get("respawn_map_dots").is_empty(), "OpFor bots all on the Bravo half -> no dots for ALPHA")
+	await create_timer(0.4).timeout
+	var nbots := (arena.call("get_opfor_bots") as Array).filter(func(b) -> bool: return not bool(b.get("is_eliminated")) and (b as Node3D).visible).size()
+	var dots0: Array = arena.get("respawn_map_dots")
+	_check(bool(arena.call("is_bot_match")), "offline practice range counts as a bot match")
+	_check(nbots > 0 and dots0.size() == nbots, "every live OpFor bot is sent though they all stand on the Bravo half (%d of %d)" % [dots0.size(), nbots])
+	_check(dots0.all(func(d) -> bool: return bool(d.get("bot", false))), "every bot dot carries \"bot\": true")
+	_check(bool(arena.get("respawn_map_show_all")), "set_players(dots, true) - show_all on in a bot match")
+	_check(rs._dots.size() == nbots, "Ren's screen keeps all %d bot dots (show_all skips its half filter): %d" % [nbots, rs._dots.size()])
 	bot.global_position = Vector3(-4.0, 0.0, 14.0)
 	await create_timer(0.4).timeout
 	var live: Array = arena.get("respawn_map_dots")
-	_check(live.size() == 1 and String(live[0]["name"]) == "OpFor Center-Aztec" and not bool(live[0]["teammate"]), "bot pushed into our half shows up within 0.25s: %s" % str(live))
-	_check(rs._dots.size() == 1 and (rs._dots[0]["pos"] as Vector3).is_equal_approx(Vector3(-4.0, 0.0, 14.0)), "...and reaches RespawnScreen.set_players")
+	var aztec := live.filter(func(d) -> bool: return String(d["name"]) == "OpFor Center-Aztec")
+	_check(aztec.size() == 1 and (aztec[0]["pos"] as Vector3).is_equal_approx(Vector3(-4.0, 0.0, 14.0)) and not bool(aztec[0]["teammate"]), "moved bot's dot follows it within 0.25s: %s" % str(aztec))
 	arena.set("respawn_map_mode_override", "deathmatch")
 	await create_timer(0.4).timeout
-	_check(arena.get("respawn_map_dots").is_empty() and rs._dots.is_empty(), "deathmatch: same bot on our half -> no dots sent")
+	_check((arena.get("respawn_map_dots") as Array).size() == nbots and rs._dots.size() == nbots and bool(arena.get("respawn_map_show_all")), "deathmatch mode in a bot match: bots NOT stripped (%d)" % rs._dots.size())
 	arena.set("respawn_map_mode_override", "")
-	await create_timer(0.4).timeout
-	_check(rs._dots.size() == 1, "back to a team mode -> dot again")
 	bot.global_position = Vector3(-4.0, 0.0, -14.0)
 	await create_timer(0.4).timeout
-	_check(arena.get("respawn_map_dots").is_empty() and rs._dots.is_empty(), "and drops off once it is back on its half")
+	_check(rs._dots.size() == nbots, "bot back on its own half: still shown (%d)" % rs._dots.size())
 	arena.call("_on_respawn_zone_selected", 2)
 
 	print("=== [%s] v0.6.3 respawn wiring ===" % ("PASS" if failures.is_empty() else "FAIL " + str(failures)))

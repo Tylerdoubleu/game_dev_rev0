@@ -1,6 +1,8 @@
 extends Node
 ## v0.7 solo FFA deathmatch (plan: "Deathmatch = free-for-all vs bots"): the local player vs N BotPlayers (default 4),
-## first to KILLS_TO_WIN eliminations wins. No teams: every bot targets the nearest visible player or bot.
+## first to KILLS_TO_WIN eliminations wins. v0.7 (Tyler): ALL BOTS vs YOU - every bot hunts only the human player, never
+## another bot (hunt_player_only), and a bot ball never eliminates a bot. You win at KILLS_TO_WIN; the match ends (a bot
+## wins) as soon as any one bot reaches KILLS_TO_WIN eliminations on you.
 ## Offline only. Started from the arena menu ("SOLO FFA DEATHMATCH") or the web link ?solo=ffa[&tier=rookie|amateur]
 ## [&ffa_bots=N]. Keeps the practice range / snap_target_bot untouched (they are just switched off for this mode).
 
@@ -94,7 +96,7 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 		b.set_script(BotPlayerScript)
 		var role_i: String = ROLES[i % ROLES.size()]
 		b.call("configure", {
-			"callsign": cs, "bot_name": cs, "team": "FFA", "ffa": true, "role": role_i, "index": i,
+			"callsign": cs, "bot_name": cs, "team": "FFA", "ffa": true, "hunt_player_only": true, "role": role_i, "index": i,
 			"difficulty": BotDifficultyScript.make(tier), "graph": graph, "match": self,
 			"paint_color": PAINT_COLORS[i % PAINT_COLORS.size()], "rig_team": "ALPHA" if i % 2 == 1 else "BRAVO",
 			"spawn": sp["pos"], "spawn_yaw": sp["yaw"], "assigned_node": _break_bunker(role_i, sp["pos"]),
@@ -166,6 +168,8 @@ func _name_of(n: Node) -> String:
 func on_bot_eliminated(bot: Node, shooter: Node, zone: String = "") -> void:
 	if not active:
 		return
+	if shooter != bot and is_bot(shooter):
+		return # all bots vs you: bots never score on each other (the bot already ignores these balls)
 	var victim := _name_of(bot)
 	if scores.has(victim):
 		scores[victim]["deaths"] += 1

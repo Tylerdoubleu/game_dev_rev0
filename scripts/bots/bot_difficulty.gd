@@ -14,7 +14,7 @@ const TIER_LEGEND := "legend"
 ## Seconds from first seeing a target (perception tick) to the first shot.
 @export var reaction_s: float = 0.65
 ## Aim error (radius, metres) at 20 m; scales linearly with range. Sampled once per burst.
-@export var aim_error_at_20m: float = 1.2
+@export var aim_error_at_20m: float = 0.8 # v0.7: was 1.2 (3.4 deg); drop is now compensated, the miss is a small cone
 ## 1.0 = the bracket's max BPS inside a burst; Rookie fires its bursts at half rate.
 @export var fire_rate_scale: float = 0.5
 @export var burst_min: int = 2
@@ -38,6 +38,9 @@ const TIER_LEGEND := "legend"
 ## Aim turn rate (deg/s, yaw and pitch) when swinging onto a target. A bot only fires once its body / marker is within
 ## BotPlayer.FIRE_CONE_DEG of the shot, so a slower turn = a later first ball (Rookie is visibly slower to swing).
 @export var turn_rate_deg: float = 300.0
+## Every tier compensates for ball drop (BotPlayer.ballistic_aim_dir). Lead on a moving target = its velocity x the
+## ball's flight time x lead_factor: Rookie only partly leads, Amateur and above lead fully.
+@export var lead_factor: float = 0.35
 
 static func make(tier_id: String) -> Resource:
 	var script: GDScript = load("res://scripts/bots/bot_difficulty.gd")
@@ -45,6 +48,7 @@ static func make(tier_id: String) -> Resource:
 	match tier_id.to_lower():
 		TIER_AMATEUR:
 			d.tier = TIER_AMATEUR
+			d.lead_factor = 1.0
 			d.turn_rate_deg = 480.0
 			d.display_name = "Amateur"
 			d.reaction_s = 0.45
@@ -66,6 +70,7 @@ static func make(tier_id: String) -> Resource:
 			d.tuck_time_max = 1.6
 		TIER_PRO:
 			d.tier = TIER_PRO
+			d.lead_factor = 1.0
 			d.turn_rate_deg = 660.0
 			d.display_name = "Pro"
 			d.reaction_s = 0.30
@@ -88,6 +93,7 @@ static func make(tier_id: String) -> Resource:
 			d.tuck_time_max = 1.4
 		TIER_LEGEND:
 			d.tier = TIER_LEGEND
+			d.lead_factor = 1.0
 			d.turn_rate_deg = 840.0
 			d.display_name = "Legend"
 			d.reaction_s = 0.20
