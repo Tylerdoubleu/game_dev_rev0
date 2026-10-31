@@ -30,6 +30,9 @@ var local_kills: int = 0
 var local_deaths: int = 0
 var npc_deaths: int = 0
 var match_ended: bool = false
+## v0.7 (Bluey): modes with their own win rule (solo FFA deathmatch: first to 10 eliminations) switch the 10-death
+## limit off and end the match through end_match().
+var death_limit_enabled: bool = true
 
 func _ready() -> void:
 	_setup_input_map()
@@ -161,7 +164,7 @@ func record_local_death(killer_label: String = "Enemy") -> void:
 		return
 	local_deaths += 1
 	_emit_scoreboard()
-	if local_deaths >= MAX_DEATHS_TO_LOSE:
+	if death_limit_enabled and local_deaths >= MAX_DEATHS_TO_LOSE:
 		match_ended = true
 		round_active = false
 		match_over.emit(NetworkLobby.local_callsign, killer_label)
@@ -173,11 +176,20 @@ func notify_enemy_eliminated() -> void:
 	remaining_enemies = max(0, remaining_enemies - 1)
 	round_updated.emit(current_round, remaining_enemies, round_time_left)
 	_emit_scoreboard()
-	if npc_deaths >= MAX_DEATHS_TO_LOSE and round_active:
+	if death_limit_enabled and npc_deaths >= MAX_DEATHS_TO_LOSE and round_active:
 		match_ended = true
 		round_active = false
 		round_won.emit(current_round)
 		match_over.emit("OpFor NPC Squad (10 Deaths)", NetworkLobby.local_callsign)
+
+## v0.7: end the match from a mode's own win rule (FFA first-to-N). Same signals as the death limit.
+func end_match(loser_label: String, winner_label: String) -> void:
+	if match_ended:
+		return
+	match_ended = true
+	round_active = false
+	_emit_scoreboard()
+	match_over.emit(loser_label, winner_label)
 
 func get_scoreboard_snapshot() -> Dictionary:
 	return {
