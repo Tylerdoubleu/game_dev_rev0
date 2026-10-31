@@ -34,5 +34,14 @@ func _initialize() -> void:
 	_check(rs.label_pos(Vector2(-30, 5), 80.0).x >= 4.0, "shooter label never clipped on the left")
 	_check(rs.label_pos(Vector2(430, 600), 80.0).x + 80.0 <= RespawnScreen.MAP_SIZE.x and rs.label_pos(Vector2(430, 600), 80.0).y <= RespawnScreen.MAP_SIZE.y, "label never clipped right/bottom")
 	_check(RespawnScreen.is_woods("woodsball_crash") and not RespawnScreen.is_woods("speedball"), "woods map gets its own layout")
+	rs.set_players([{"team": "BOT", "bot": true, "pos": Vector3(0, 0, -30)}, {"team": "BRAVO", "pos": Vector3(0, 0, -20)}], true)
+	_check(rs._dots.size() == 2, "show_all: bots drawn anywhere on the field")
+	rs.open("Bot", "ALPHA", [{"pos": Vector3(-44, 0, 0)}, {"pos": Vector3(44, 0, 0)}, {"pos": Vector3(0, 0, 45.5)}, {"pos": Vector3(-31, 0, 41)}, {"pos": Vector3(31, 0, -41)}])
+	var inside := true
+	for i in 5:
+		var c: Vector2 = rs.spot_center(i)
+		inside = inside and c.x - 23.0 >= 0.0 and c.x + 23.0 <= RespawnScreen.MAP_SIZE.x
+	_check(inside, "side-of-the-50 spots fully inside the map")
+	_check(rs._index_for_slot(0) == 0 and rs._index_for_slot(4) == 1, "FFA spots numbered left to right on screen")
 	print("=== [%s] v0.6 respawn screen ===" % ("PASS" if fails.is_empty() else "FAIL " + str(fails)))
 	quit(0 if fails.is_empty() else 1)

@@ -14,6 +14,9 @@ signal zone_picked(index: int)
 const DEFAULT_ZONE := 2
 const RED := Color(0.86, 0.2, 0.17)
 const BLUE := Color(0.2, 0.45, 0.95)
+const BOT := Color(1.0, 0.55, 0.1)
+## Spot centers stay this far inside the map edge, so side-of-the-50 spawns (x = +/-44 in solo FFA) aren't cut off.
+const SPOT_MARGIN := 28.0
 ## Your half of the Speedball field (speedball_arena_builder.gd positions, |z| from the 50 line): x, z, size x, size z.
 const HALF_BUNKERS := [
 	[0, 48, 3.6, 1.2], [0, 38, 3.2, 1.4], [-2.6, 41.8, 1.5, 1.5], [-1.8, 36.2, 1.5, 1.5], [-0.3, 35, 1.0, 3.4],
@@ -72,6 +75,7 @@ func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deat
 		_build()
 	_team = team
 	_zones = zones
+	_slot_order = []
 	_killer = short_name(killer)
 	_map_id = map_id if map_id != "" else _current_map()
 	_shooter_pos = shooter_pos
@@ -88,8 +92,10 @@ func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deat
 
 ## Live player dots: [{"team": "ALPHA"/"BRAVO", "pos": Vector3}, ...]. Call as often as you like while open.
 ## Only players standing on YOUR half are drawn (Tyler 10/31: no calling out enemies on the far half).
-func set_players(dots: Array) -> void:
-	_dots = dots.filter(func(d) -> bool: return d.has("pos") and on_my_half(d["pos"]))
+## show_all = true (any match against bots, incl. solo FFA): draw every dot anywhere on the field, no half filter.
+## A dot with "bot": true (or a team other than ALPHA/BRAVO) is drawn as an orange bot dot.
+func set_players(dots: Array, show_all: bool = false) -> void:
+	_dots = dots.filter(func(d) -> bool: return d.has("pos") and _has(d["pos"]) and (show_all or on_my_half(d["pos"])))
 	if _map != null:
 		_map.queue_redraw()
 
@@ -127,11 +133,31 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 
 ## Numbers always run 1-5 left to right as you see the map (BRAVO's view is mirrored, so its zones count backwards).
+## Numbers follow the spots as you see them: left to right, then top to bottom (works for team zones and FFA spots).
+var _slot_order: Array = []
+
 func _index_for_slot(slot: int) -> int:
-	return slot if _team == "ALPHA" else _zones.size() - 1 - slot
+	_ensure_order()
+	return int(_slot_order[slot]) if slot < _slot_order.size() else -1
 
 func _slot_for_index(index: int) -> int:
-	return _index_for_slot(index)
+	_ensure_order()
+	return _slot_order.find(index)
+
+func _ensure_order() -> void:
+	if _slot_order.size() == _zones.size():
+		return
+	_slot_order = range(_zones.size())
+	_slot_order.sort_custom(func(a, b) -> bool:
+		var pa := spot_center(a)
+		var pb := spot_center(b)
+		return pa.x < pb.x - 1.0 or (absf(pa.x - pb.x) <= 1.0 and pa.y < pb.y))
+
+## Where spot i sits on the map, clamped inside the edges.
+func spot_center(i: int) -> Vector2:
+	var p: Vector3 = _zones[i]["pos"]
+	var m := _to_map(p.x, p.z)
+	return Vector2(clampf(m.x, SPOT_MARGIN, MAP_SIZE.x - SPOT_MARGIN), clampf(m.y, SPOT_MARGIN, MAP_SIZE.y - SPOT_MARGIN))
 
 func _team_color() -> Color:
 	return RED if _team == "ALPHA" else BLUE
@@ -239,8 +265,7 @@ func _layout_spots() -> void:
 		b.visible = i < _zones.size()
 		if not b.visible:
 			continue
-		var p: Vector3 = _zones[i]["pos"]
-		b.position = _to_map(p.x, p.z) - Vector2(SPOT_HIT, SPOT_HIT) * 0.5
+		b.position = spot_center(i) - Vector2(SPOT_HIT, SPOT_HIT) * 0.5
 		b.tooltip_text = ""
 
 func _draw_map() -> void:
@@ -281,7 +306,8 @@ func _draw_map() -> void:
 	# live players on your half only
 	for d in _dots:
 		var pp: Vector3 = d["pos"]
-		var dc := RED if String(d.get("team", "")) == "ALPHA" else BLUE
+		var dt := String(d.get("team", ""))
+		var dc := BOT if bool(d.get("bot", false)) or not (dt in ["ALPHA", "BRAVO"]) else (RED if dt == "ALPHA" else BLUE)
 		var mp := _to_map(pp.x, pp.z)
 		_map.draw_circle(mp, 6.5, Color.BLACK)
 		_map.draw_circle(mp, 5.0, dc.lightened(0.15))
