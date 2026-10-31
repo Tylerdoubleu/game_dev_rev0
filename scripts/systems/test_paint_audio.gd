@@ -31,7 +31,7 @@ func _process(_d: float) -> bool:
 		print("  counts: ", c)
 		_check(int(c.get("fire", 0)) == 2, "two marker pops")
 		_check(int(c.get("vinyl", 0)) >= 1, "vinyl splat on inflatable")
-		_check(int(c.get("bounce", 0)) >= 1, "grazing shot plays bounce thock")
+		_check(int(c.get("bounce", 0)) == 0, "grazing shot is silent (Tyler 10/31: bounce thock removed)")
 		lobby.call("select_map", "woodsball_crash")
 	if f == 130:
 		var w := arena.get_node("WoodsballCrashSiteRoot")

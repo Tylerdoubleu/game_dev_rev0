@@ -39,7 +39,7 @@ const OWN_SHOT_RADIUS := 3.0
 const FAR_FIRE_EXTRA_DB := -5.0
 const FAR_FIRE_UNIT_SIZE := 4.0
 const FAR_FIRE_FILTER_HZ := 6000.0
-const MUTED_KINDS := ["whiz"]
+const MUTED_KINDS := ["whiz", "bounce"]  # Tyler 10/31: no near-miss whiz, no glancing-bounce thock
 const POOL_SIZE: int = 24
 const POOL_NAME: String = "PaintImpactAudioPool"
 
