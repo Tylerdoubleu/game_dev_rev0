@@ -14,6 +14,51 @@ func _initialize() -> void:
 	root.add_child(arena)
 	current_scene = arena
 
+## v0.6.4 title screen entry: deep links skip it, a bare start shows it (stub script), missing script -> fallback.
+func _test_title_entry(flow: Node, L: Node) -> void:
+	print("--- title screen entry ---")
+	var E: Script = flow.get_script()
+	var deep := ["?room=lobby_03", "?server=wss://test.jeetball.com/ws", "?ws=wss://h/ws", "?quickjoin=1", "?quickjoin",
+		"?solo=ffa", "?solo=ffa&tier=rookie", "?tier=amateur", "?lobby=lobby_02", "?team=bravo", "?map=woodsball&room=x"]
+	for q in deep:
+		_check(E.is_deep_link(q, []) and E.entry_action(q, [], false, true) != "title", "deep link %s skips the title" % q)
+	for flag in ["--room=lobby_02", "--ws=ws://127.0.0.1:8910/ws", "--server=wss://h/ws"]:
+		_check(E.entry_action("", [flag], false, true) != "title", "flag %s skips the title" % flag)
+	_check(not E.is_deep_link("?map=woodsball&name=Tyler&bots=1", ["--name=Tyler"]) and not E.is_deep_link("?room=", []), "map/name/bots or an empty ?room= are not deep links")
+	_check(E.entry_action("", [], false, true) == "title" and E.entry_action("?map=speedball", [], false, true, true) == "title", "no deep link -> title (desktop and web)")
+	_check(E.entry_action("", [], false, false, true) == "browser" and E.entry_action("", [], false, false, false) == "none", "no title script -> today's fallback (web browser / desktop menu)")
+	_check(E.entry_action("?room=lobby_01", [], false, true, false, true) == "room_link" and E.entry_action("?solo=ffa", [], false, true, true) == "browser" and E.entry_action("?solo=ffa", [], false, true) == "none", "deep links keep today's behavior")
+	_check(E.entry_action("", [], true, true) == "none" and E.entry_action("?room=x", [], true, true, true) == "none", "dedicated server shows nothing")
+	# run_entry with a stub TitleScreen script (Ren's file isn't on test yet).
+	var stub := GDScript.new()
+	stub.source_code = "extends Control\nvar made := true\n"
+	stub.reload()
+	ResourceSaver.save(stub, "user://title_screen_stub.gd")
+	flow.title_screen_path = "user://title_screen_stub.gd"
+	var opened_before: bool = flow.is_open()
+	_check(flow.run_entry("?room=lobby_05", [], true) != "title" and flow.title_screen == null, "run_entry: deep link never instances the title")
+	var act: String = flow.run_entry("", [], true)
+	_check(act == "title" and flow.title_screen is Control and bool(flow.title_screen.get("made")), "run_entry: no link instances the TitleScreen script (%s)" % act)
+	_check(flow.title_layer is CanvasLayer and flow.title_layer.layer >= 60 and flow.title_screen.get_parent() == flow.title_layer, "title on a CanvasLayer at layer >= 60")
+	_check(flow.is_open() == opened_before, "title path does not also open the browser")
+	_check(flow.run_entry("", [], false) != "title", "allow_title=false (headless) skips it")
+	flow.title_layer.queue_free()
+	flow.title_screen = null
+	flow.title_layer = null
+	flow.title_screen_path = "res://scripts/ui/__missing_title_screen.gd"
+	var old_bos: bool = L.show_lobby_browser_on_start
+	L.show_lobby_browser_on_start = true
+	_check(flow.run_entry("", [], true) == "browser" and flow.is_open() and flow.title_screen == null, "missing title script -> falls back to open_browser()")
+	flow.close_browser()
+	L.show_lobby_browser_on_start = old_bos
+	var was_ded: bool = L.is_dedicated_server
+	L.is_dedicated_server = true
+	flow.title_screen_path = "user://title_screen_stub.gd"
+	_check(flow.run_entry("", [], true) == "none" and flow.title_screen == null and not flow.is_open(), "dedicated server: run_entry shows nothing")
+	L.is_dedicated_server = was_ded
+	flow.title_screen_path = flow.TITLE_SCREEN_PATH
+	DirAccess.remove_absolute(ProjectSettings.globalize_path("user://title_screen_stub.gd"))
+
 func _process(_d: float) -> bool:
 	f += 1
 	if f < 5:
@@ -22,6 +67,8 @@ func _process(_d: float) -> bool:
 	var L := root.get_node("NetworkLobby")
 	print("--- LobbyEntryFlow ---")
 	_check(not L.show_lobby_browser_on_start and not flow.is_open(), "desktop/headless start does not force the browser")
+	_check(flow.last_entry_action == "none" and flow.title_screen == null, "headless start: no title screen, no browser (%s)" % flow.last_entry_action)
+	_test_title_entry(flow, L)
 	# URL parsing: bare link vs ?room= link.
 	L.room_from_url = false
 	L.server_from_url = false

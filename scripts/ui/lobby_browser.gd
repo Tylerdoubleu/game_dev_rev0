@@ -167,20 +167,25 @@ func set_solo_difficulty(d: String) -> void:
 func start_single_player(difficulty: String = "") -> void:
 	var d := difficulty.to_lower() if difficulty.to_lower() in SOLO_DIFFICULTIES else solo_difficulty
 	single_player_requested.emit(d)
-	var launcher = _solo_launcher()
+	last_solo_route = launch_single_player(self, d)
+
+## v0.6.4 shared SINGLE PLAYER path (LobbyBrowser button + TitleScreen): SoloLauncher.start_ffa(difficulty) when it
+## exists (autoload /root/SoloLauncher first, else the global class's static), else on the web reload with
+## ?solo=ffa&tier=<difficulty>. Returns the route taken: "solo_launcher", "web_link" or "signal_only".
+static func launch_single_player(from: Node, difficulty: String = "amateur") -> String:
+	var d := difficulty.to_lower() if difficulty.to_lower() in SOLO_DIFFICULTIES else "amateur"
+	var launcher = solo_launcher(from)
 	if launcher != null:
-		last_solo_route = "solo_launcher"
 		launcher.call("start_ffa", d)
-		return
+		return "solo_launcher"
 	if OS.has_feature("web"):
-		last_solo_route = "web_link"
 		JavaScriptBridge.eval("(function(){var u=new URL(window.location.href);u.searchParams.set('solo','ffa');u.searchParams.set('tier',%s);window.location.href=u.toString();})()" % JSON.stringify(d))
-		return
-	last_solo_route = "signal_only"
+		return "web_link"
+	return "signal_only"
 
 ## SoloLauncher with start_ffa: the autoload node, else the global class script (static func), else null.
-func _solo_launcher() -> Object:
-	var n := get_node_or_null("/root/SoloLauncher") if is_inside_tree() else null
+static func solo_launcher(from: Node) -> Object:
+	var n := from.get_node_or_null("/root/SoloLauncher") if from != null and from.is_inside_tree() else null
 	if n != null and n.has_method("start_ffa"):
 		return n
 	for g in ProjectSettings.get_global_class_list():
@@ -189,6 +194,9 @@ func _solo_launcher() -> Object:
 			if sc is Script and sc.has_method("start_ffa"):
 				return sc
 	return null
+
+func _solo_launcher() -> Object:
+	return solo_launcher(self)
 
 # ---------------------------------------------------------------- UI ----------
 
