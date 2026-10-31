@@ -39,6 +39,7 @@ const OWN_SHOT_RADIUS := 3.0
 const FAR_FIRE_EXTRA_DB := -5.0
 const FAR_FIRE_UNIT_SIZE := 4.0
 const FAR_FIRE_FILTER_HZ := 6000.0
+const MUTED_KINDS := ["whiz"]
 const POOL_SIZE: int = 24
 const POOL_NAME: String = "PaintImpactAudioPool"
 
@@ -63,6 +64,9 @@ static func classify_surface(collider: Object) -> String:
 	return "vinyl"
 
 static func play(scene_root: Node, kind: String, pos: Vector3, pitch_jitter: float = 0.12) -> void:
+	## Tyler 10/31: near-miss whiz removed (the synthesized whoosh made bot fire sound like a different gun).
+	if kind in MUTED_KINDS:
+		return
 	play_counts[kind] = int(play_counts.get(kind, 0)) + 1
 	if scene_root == null or not STREAMS.has(kind):
 		return
