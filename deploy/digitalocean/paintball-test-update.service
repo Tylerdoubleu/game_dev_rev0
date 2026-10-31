@@ -1,0 +1,8 @@
+[Unit]
+Description=Pull origin/test for the paintball TEST server and restart it if test moved
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/paintball-test/update.sh

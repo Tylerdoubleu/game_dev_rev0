@@ -1,0 +1,40 @@
+[Unit]
+Description=First-Person Paintball TEST server (test branch; Node gateway :8081 + headless Godot :9081)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=paintball
+Group=paintball
+WorkingDirectory=/opt/paintball-test/app
+Environment=HOME=/opt/paintball-test
+Environment=PORT=8081
+Environment=WS_PORT=9081
+Environment=LOBBY_STATE_FILE=/opt/paintball-test/lobbies.json
+# Godot room router runs this many permanent lobbies (network_lobby.gd, 58c3a4f).
+Environment=LOBBY_COUNT=2
+Environment=PAINTBALL_ENV=test
+# /api/lobbies join_url links point at the test page + test websocket (server/lobby_api.js).
+Environment=GAME_CLIENT_URL=https://test.jeetball.com/
+Environment=CORS_ORIGINS=https://test.jeetball.com
+# Same web root GitHub Pages serves (export_web.sh copies build/web/index.* to docs/).
+Environment=WEB_ROOT=/opt/paintball-test/app/docs
+Environment=PUBLIC_WS_URL=wss://test.jeetball.com/ws
+Environment=AUTO_START_GODOT=1
+Environment=DEDICATED_SERVER=1
+Environment=NODE_ENV=production
+# Import assets (fast when the .godot cache is warm); failure is non-fatal.
+ExecStartPre=-/usr/local/bin/godot --headless --path /opt/paintball-test/app --import
+ExecStart=/usr/bin/node /opt/paintball-test/app/server/server.js
+Restart=always
+RestartSec=3
+TimeoutStartSec=900
+KillMode=control-group
+LimitNOFILE=65536
+# Keep the test server from starving live if a test build misbehaves.
+MemoryMax=700M
+CPUWeight=50
+
+[Install]
+WantedBy=multi-user.target

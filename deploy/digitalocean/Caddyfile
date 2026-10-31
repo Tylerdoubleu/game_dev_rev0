@@ -26,3 +26,42 @@
 	# goes to the Node gateway (server/server.js), which pipes WS to Godot.
 	reverse_proxy 127.0.0.1:8080
 }
+
+# TEST environment: the `test` branch, checked out at /opt/paintball-test/app and run by
+# paintball-test-server (Node :8081 -> headless Godot :9081). Auto-pulled by
+# paintball-test-update.timer. Unlike live, this host also serves the web client itself
+# (the test checkout's committed docs/, same as Pages), so the page and its /ws share one origin.
+{$PAINTBALL_TEST_HOST:test.jeetball.com} {
+	@api_preflight {
+		method OPTIONS
+		path /api/*
+	}
+	handle @api_preflight {
+		header Access-Control-Allow-Origin "*"
+		header Access-Control-Allow-Methods "GET, OPTIONS"
+		header Access-Control-Allow-Headers "Content-Type"
+		header Access-Control-Max-Age "86400"
+		respond 204
+	}
+	header /api/* {
+		defer
+		Access-Control-Allow-Origin "*"
+		Access-Control-Allow-Methods "GET, OPTIONS"
+	}
+
+	@server path /ws /ws/* /api/* /healthz
+	handle @server {
+		reverse_proxy 127.0.0.1:8081
+	}
+
+	# Static web client. Threads are off in the export, so no COOP/COEP is needed
+	# (same as GitHub Pages). no-cache = browsers revalidate, so new test builds show up at once.
+	handle {
+		root * /opt/paintball-test/app/docs
+		header Cache-Control "no-cache"
+		@pck path *.pck
+		header @pck Content-Type "application/octet-stream"
+		encode gzip
+		file_server
+	}
+}
