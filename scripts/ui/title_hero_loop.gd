@@ -2,8 +2,8 @@ extends Node3D
 ## v0.6.4 title-screen hero loop (Bluey). A self-contained live backdrop: one player (the same ProPaintballRig3D the bots
 ## use) waits in the pocket behind a vinyl can, peeks out the side, brings the marker up on the camera, fires a 2-3 ball
 ## burst at the lens, and tucks back. The balls splat on an invisible plane just in front of the lens and fade out.
-## Crouched in a red ALPHA jersey round a yellow can (Ren's title still). The peek side alternates every loop;
-## stand_peeks adds a standing peek every other pair of loops.
+## Crouched in the red ALPHA jersey round the yellow MidCan, framed like Ren's title still (mask on HERO_FOCUS).
+## Loops alternate a full peek with a tighter shoulder peek; alternate_sides / stand_peeks add side and height flips.
 ##
 ## Cheap and safe for a menu: visual-only balls (no physics bodies, no PaintBallistics projectiles), no bot AI or
 ## perception, no NetworkLobby / match state, no arena. The timeline is deterministic: advance(dt) drives everything.
@@ -37,11 +37,16 @@ const PaintImpactAudioScript = preload("res://scripts/systems/paint_impact_audio
 @export var autoplay: bool = true
 ## Off: every peek is crouched (matches the title still). On: loops 2-3, 6-7, ... peek standing.
 @export var stand_peeks: bool = false
-## Flat team-colour jersey (like the title still) instead of the in-game printed jersey texture.
-@export var solid_team_jersey: bool = true
+## Off (default): always peeks the screen-left edge like the still, alternating a full peek with a tighter shoulder
+## peek. On: the side flips every loop (the right-side peek lands near the button board, so it is off for the title).
+@export var alternate_sides: bool = false
+## Flat team-colour jersey instead of the in-game printed jersey (the still uses the printed red one, so off).
+@export var solid_team_jersey: bool = false
 @export var play_sound: bool = false
 ## Own WorldEnvironment + sun (turn off if the title screen supplies lighting).
 @export var use_own_environment: bool = true
+## Near-black backdrop behind the set, like the title still (off: the arena's overcast sky).
+@export var night_backdrop: bool = true
 @export var show_ground: bool = true
 @export var background_props: bool = true
 ## Loop timing (seconds). Peek / aim / burst / tuck fit in the first ~2.8 s; the rest is the pause.
@@ -54,15 +59,16 @@ const PaintImpactAudioScript = preload("res://scripts/systems/paint_impact_audio
 @export var lens_splat_distance: float = 0.6
 @export var splat_fade_s: float = 1.5
 @export var max_splats: int = 6
-## Own camera placement: chest height, this far from the can (8-12 m), the can framed centre-left.
+## Own camera placement: low, this far from the can (8-12 m), on a long lens so the crouched player fills the frame
+## like Ren's still. The camera is aimed so the player's mask at full peek lands on frame_focus (0..1 of the frame).
 @export var camera_distance: float = 8.0
-@export var camera_height: float = 1.25
+@export var camera_height: float = 0.95
+## Ren's TitleScreen.HERO_FOCUS: where the mask sits in the still; the title and board are laid out around it.
+@export var frame_focus: Vector2 = Vector2(0.36, 0.39)
 ## How far the body steps sideways out of the pocket (0 = auto: just enough for the mask, hopper and marker to clear
 ## the can edge while most of the body stays covered, i.e. a real corner peek rather than BunkerGraph's full step-out spot).
 @export var peek_out_m: float = 0.0
-@export var camera_fov: float = 20.0
-## Positive turns the camera right, so the player sits centre-left and the right third stays clear for the button board.
-@export var camera_frame_offset_deg: float = 4.0
+@export var camera_fov: float = 15.0
 
 const BUNKER_SIZE := Vector3(2.0, 2.3, 2.0) # the arena's yellow MidCan (SpeedballArenaBuilder MidCan_L/R); a capsule via decorate_bunker_mesh
 const BUNKER_COLOR := Color(0.84, 0.70, 0.16) # the arena's yellow vinyl
@@ -107,6 +113,7 @@ var _splat_tex: Texture2D
 var _bunker_radius: float = 0.9
 var _pocket_pos := Vector3.ZERO
 var _peek_lateral: float = 1.4
+var _peek_scale: float = 1.0
 var _built := false
 
 ## Deterministic burst sizes and lens hit offsets (x, y in metres on the lens plane), so every loop looks intentional.
@@ -135,7 +142,16 @@ func _build() -> void:
 	if use_own_environment:
 		var env := WorldEnvironment.new()
 		env.name = "WorldEnvironment"
-		env.environment = GrittyArtThemeScript.create_overcast_stadium_environment()
+		var e := GrittyArtThemeScript.create_overcast_stadium_environment()
+		if night_backdrop:
+			e = e.duplicate() as Environment
+			e.background_mode = Environment.BG_COLOR
+			e.background_color = Color(0.025, 0.03, 0.045)
+			e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+			e.ambient_light_color = Color(0.5, 0.52, 0.56)
+			e.ambient_light_energy = 0.7
+			e.fog_enabled = false
+		env.environment = e
 		add_child(env)
 		var sun := DirectionalLight3D.new()
 		sun.name = "Sun"
@@ -172,15 +188,15 @@ func _build() -> void:
 	bunker = _make_bunker("Bunker_HeroCan", Vector3.ZERO, BUNKER_SIZE, BUNKER_COLOR)
 	_bunker_radius = minf(BUNKER_SIZE.x, BUNKER_SIZE.z) * 0.48
 	if background_props:
-		_make_bunker("Bunker_Bg_Dorito", Vector3(-3.6, 0.0, -9.0), Vector3(2.5, 2.1, 2.5), Color(0.22, 0.36, 0.64))
-		_make_bunker("Bunker_Bg_Brick", Vector3(-5.0, 0.0, -19.0), Vector3(2.6, 2.0, 1.6), Color(0.42, 0.43, 0.45))
-		_make_bunker("Bunker_Bg_Temple", Vector3(-1.5, 0.0, -24.0), Vector3(2.8, 2.3, 1.8), Color(0.72, 0.22, 0.20))
+		_make_bunker("Bunker_Bg_Dorito", Vector3(-8.0, 0.0, -27.0), Vector3(2.5, 2.1, 2.5), Color(0.22, 0.36, 0.64))
+		_make_bunker("Bunker_Bg_Brick", Vector3(-3.2, 0.0, -18.0), Vector3(2.6, 2.0, 1.6), Color(0.42, 0.43, 0.45))
+		_make_bunker("Bunker_Bg_Temple", Vector3(-13.0, 0.0, -34.0), Vector3(2.8, 2.3, 1.8), Color(0.72, 0.22, 0.20))
 
 	# Pocket: straight behind the can from the camera, POCKET_GAP behind its back face (BunkerGraph's pocket rule).
 	# Peek: out to the side by the can's half width + the bot's AGENT_RADIUS, then BotPlayer's lean (+-1) on top.
 	var depth := BUNKER_SIZE.z * 0.5
 	_pocket_pos = Vector3(0.0, 0.0, -(depth + BunkerGraphScript.POCKET_GAP))
-	_peek_lateral = peek_out_m if peek_out_m > 0.0 else _bunker_radius * 0.78
+	_peek_lateral = peek_out_m if peek_out_m > 0.0 else _bunker_radius * 0.86
 
 	rig = ProRigScript.new()
 	rig.name = "HeroRig"
@@ -194,7 +210,7 @@ func _build() -> void:
 	camera.fov = camera_fov
 	camera.position = Vector3(0.0, camera_height, camera_distance)
 	add_child(camera)
-	camera.rotation = Vector3(deg_to_rad(-3.0), deg_to_rad(-camera_frame_offset_deg), 0.0) # turn right: bunker sits centre-left
+	_aim_camera()
 	_apply_camera_mode()
 
 	lens_root = Node3D.new()
@@ -256,6 +272,27 @@ static func _mipmapped(tex: Texture2D) -> Texture2D:
 	_mip_cache[tex] = out
 	return out
 
+## Where the mask is at full peek (screen-left side), relative to the pocket: the step out plus the rig's crouched lean
+## (measured off ProPaintballRig3D: the head sits ~0.38 m further out, 0.85 m up and 0.33 m camera-ward).
+func peek_focus_point() -> Vector3:
+	var lat := _lateral_axis(Vector3(0.0, camera_height, camera_distance))
+	return _pocket_pos + lat * (_peek_lateral + 0.38) + Vector3(0.0, 0.85, 0.33)
+
+## Turn the camera (yaw + pitch, no roll) so peek_focus_point() projects onto frame_focus on a 16:9 frame.
+func _aim_camera() -> void:
+	var focus := peek_focus_point()
+	var d := (focus - camera.position).normalized()
+	var t := tan(deg_to_rad(camera.fov * 0.5))
+	var ndc := Vector2(frame_focus.x * 2.0 - 1.0, 1.0 - frame_focus.y * 2.0)
+	var r := Vector3(ndc.x * (16.0 / 9.0) * t, ndc.y * t, -1.0).normalized()
+	var yaw := atan2(-d.x, -d.z)
+	var pitch := asin(d.y)
+	for i in 16:
+		var w := Basis.from_euler(Vector3(pitch, yaw, 0.0)) * r
+		yaw += wrapf(atan2(-d.x, -d.z) - atan2(-w.x, -w.z), -PI, PI)
+		pitch += asin(clampf(d.y, -1.0, 1.0)) - asin(clampf(w.y, -1.0, 1.0))
+	camera.rotation = Vector3(pitch, yaw, 0.0)
+
 func _apply_camera_mode() -> void:
 	if camera == null:
 		return
@@ -307,7 +344,8 @@ func _start_loop(i: int) -> void:
 	loop_index = i
 	time_in_loop = 0.0
 	shots_this_loop = 0
-	peek_side = 1 if i % 2 == 0 else -1 # side flips every loop
+	peek_side = (1 if i % 2 == 0 else -1) if alternate_sides else 1 # +1 = the rig's right = screen-left edge of the can
+	_peek_scale = 1.0 if alternate_sides or i % 2 == 0 else 0.93 # full peek, then a tighter shoulder peek
 	# crouched like Ren's still; with stand_peeks on, every other pair of loops peeks standing instead
 	peek_stance = PEEK_STANCE_STAND if stand_peeks and (i / 2) % 2 == 1 else PEEK_STANCE_CROUCH
 	_shots_planned = BURST_SIZES[i % BURST_SIZES.size()]
@@ -354,7 +392,7 @@ func _pose_rig(dt: float) -> void:
 	var cam := target_camera()
 	var cam_local := to_local(cam.global_position) if cam != null else Vector3(0.0, camera_height, camera_distance)
 	# step out sideways from the pocket (BotPlayer moves the body to the peek spot, then leans)
-	rig.position = _pocket_pos + _lateral_axis(cam_local) * float(peek_side) * _peek_lateral * out_alpha
+	rig.position = _pocket_pos + _lateral_axis(cam_local) * float(peek_side) * _peek_lateral * _peek_scale * out_alpha
 	# face the camera (yaw only), like a bot squaring up to its target; the rig's forward is -Z
 	var face := cam_local - rig.position
 	if Vector2(face.x, face.z).length() > 0.01:

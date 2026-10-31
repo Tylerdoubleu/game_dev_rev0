@@ -105,7 +105,7 @@ func _process(_d: float) -> bool:
 			sides.append(int(e["side"]))
 			if int(e["stance"]) != 1: crouched = false
 		_check(shots_ok, "every peek fires a 2-3 ball burst (%s)" % str(log.map(func(e): return e["shots"])))
-		_check(sides.size() >= 2 and sides[0] != sides[1] and sides[1] != sides[2], "peek side alternates each loop (%s)" % str(sides))
+		_check(sides.size() >= 2 and sides.all(func(v): return v == 1), "default: always peeks the screen-left edge like the still (%s)" % str(sides))
 		_check(crouched, "every peek is crouched by default (matches the title still)")
 		var si := float(hero.get("shot_interval"))
 		_check(si >= 0.12 and si <= 0.15, "shots %.3f s apart" % si)
@@ -132,6 +132,17 @@ func _process(_d: float) -> bool:
 				if str(log[i]) != str(l2[i]): same = false
 		_check(same, "deterministic: a second instance replays the same peeks")
 		h2.queue_free()
+
+		# alternate_sides: the side flips each loop, still 2-3 shots, still hidden when tucked
+		var h4 := (load(SCENE) as PackedScene).instantiate()
+		h4.set("autoplay", false)
+		h4.set("alternate_sides", true)
+		vp.add_child(h4)
+		var r4 := _run_loops(h4, 3)
+		var s4: Array = (h4.get("peek_log") as Array).map(func(e): return int(e["side"]))
+		_check(s4.size() >= 3 and s4[0] != s4[1] and s4[1] != s4[2], "alternate_sides: side flips each loop (%s)" % str(s4))
+		_check(r4["fire_head"] == r4["fire_frames"] and r4["hidden_leaks"] == 0, "alternate_sides: out while firing, hidden when tucked")
+		h4.queue_free()
 
 		# play_sound on still creates no buses (pooled 3D players on the default bus)
 		var h3 := (load(SCENE) as PackedScene).instantiate()
