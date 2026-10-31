@@ -33,6 +33,20 @@ func _process(_d: float) -> bool:
 		_check(joined == ["lobby_01"], "quick-join emits lobby_01")
 		b.set_lobbies([], "SERVER OFFLINE")
 		_check(b.find_children("Row_*", "", true, false).size() <= 4, "offline clears list")
+		var single := b.find_child("SinglePlayerButton", true, false) as Button
+		_check(single != null and b.find_child("Difficulty_rookie", true, false) != null and b.find_child("Difficulty_amateur", true, false) != null, "SINGLE PLAYER button with ROOKIE / AMATEUR pick")
+		var asked := []
+		b.single_player_requested.connect(func(d): asked.append(d))
+		_check(b.solo_difficulty == "amateur" and (b.find_child("Difficulty_amateur", true, false) as Button).button_pressed, "defaults to AMATEUR")
+		(b.find_child("Difficulty_rookie", true, false) as Button).pressed.emit()
+		_check(b.solo_difficulty == "rookie" and not (b.find_child("Difficulty_amateur", true, false) as Button).button_pressed, "ROOKIE pick toggles")
+		single.pressed.emit()
+		_check(asked == ["rookie"], "SINGLE PLAYER emits single_player_requested(rookie)")
+		_check(b.last_solo_route == ("solo_launcher" if b._solo_launcher() != null else "signal_only"), "no SoloLauncher -> no crash, signal only (route %s)" % b.last_solo_route)
+		b.start_single_player("AMATEUR")
+		_check(asked == ["rookie", "amateur"], "explicit difficulty passes through")
+		var need: Vector2 = b.find_child("Board", true, false).get_combined_minimum_size()
+		_check(need.x <= 1280 and need.y <= 720, "browser fits 1280x720 (%s)" % need)
 		print("=== [PASS] v0.5 lobby browser ===" if fails.is_empty() else "=== [FAIL] %s" % [fails])
 		quit(0 if fails.is_empty() else 1)
 	return false

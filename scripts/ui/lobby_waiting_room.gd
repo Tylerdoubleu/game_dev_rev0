@@ -5,9 +5,22 @@ extends Control
 ## is waiting), your own gun class, then START MATCH. LEAVE drops back to the lobby list.
 ## Talks only to NetworkLobby's public API: select_map / select_mode / update_local_player_choices /
 ## request_start_match / disconnect_from_lobby and the lobby_state_changed / connection_status_changed signals.
+##
+## v0.6.4 team colors: a row of swatches under each team roster. You pick only for YOUR team, only while the room is
+## waiting; the other team's color is crossed out (no two teams share a color). Headers + names take the team color.
+## A pick shows at once (optimistic) and reverts if the server says no. Palette + names come from Tim's TeamColors
+## (scripts/systems/team_colors.gd, color_of(name)); a small private fallback is used until that file exists.
+## NetworkLobby seam (all optional, checked with has_method / has_signal, so nothing breaks before Tim's side lands):
+##   lobby state  "team_colors": {"ALPHA": "red", "BRAVO": "blue"}   -> apply_team_colors()
+##   nl.request_team_color(color_name)                                <- your own team only
+##   signal team_colors_changed(team_colors: Dictionary)              -> apply_team_colors()
+##   signal team_color_rejected(reason: String)  round_active | taken | invalid | rate_limited -> revert + LED note
+## Tests / other callers: team_color_requested(team, color_name) fires on every pick; call apply_team_colors(dict)
+## and on_team_color_rejected(reason) directly.
 
 signal leave_requested
 signal start_requested
+signal team_color_requested(team: String, color_name: String)
 
 const MAPS := [["speedball", "NPPL SPEEDBALL"], ["woodsball_crash", "WOODSBALL HELI CRASH"]]
 const MODES := [["deathmatch", "10-KILL DEATHMATCH"], ["ctf", "1-LIFE CTF  BO5"], ["bots_test", "TEST VS BOTS"]]
@@ -15,6 +28,14 @@ const GUNS := [["speedball", "SPEEDBALL ELECTRO"], ["woodsball", "WOODSBALL A-5"
 const NEON := LobbyBrowser.NEON
 const RED_TEAM := LobbyBrowser.RED_TEAM
 const BLUE_TEAM := LobbyBrowser.BLUE_TEAM
+const TEAM_COLORS_PATH := "res://scripts/systems/team_colors.gd"  # Tim's TeamColors (shared palette)
+const DEFAULT_TEAM_COLORS := {"ALPHA": "red", "BRAVO": "blue"}
+## Only used until Tim's TeamColors is on the branch; names are lowercase like his.
+const _FALLBACK_PALETTE := {"red": Color(0.86, 0.2, 0.17), "blue": Color(0.2, 0.45, 0.95), "yellow": Color(0.95, 1.0, 0.15),
+	"pink": Color(1.0, 0.28, 0.62), "orange": Color(1.0, 0.55, 0.1), "purple": Color(0.58, 0.3, 0.9),
+	"cyan": Color(0.1, 0.8, 0.85), "green": Color(0.16, 0.5, 0.2)}
+const REJECT_TEXT := {"round_active": "MATCH IS LIVE - COLORS LOCKED", "taken": "TAKEN BY THE OTHER TEAM",
+	"invalid": "NOT A TEAM COLOR", "rate_limited": "SLOW DOWN - TRY AGAIN"}
 
 var lobby_name: String = "LOBBY"
 var state: Dictionary = {}
@@ -32,10 +53,44 @@ var _gun_btns := {}
 var _start_btn: Button
 var _lock_note: Label
 var _online := false
+var _red_count := 0
+var _blue_count := 0
 var _ready_btn: Button
 var _countdown: Label
 var counting_down: bool = false
 var countdown_left: int = 0
+## Server-confirmed colors per team (lowercase names). _optimistic holds your pick until the server answers.
+var team_colors: Dictionary = DEFAULT_TEAM_COLORS.duplicate()
+var _optimistic: Dictionary = {}
+var _red_panel: PanelContainer
+var _blue_panel: PanelContainer
+var _swatches := {"ALPHA": {}, "BRAVO": {}}  # team -> name -> Swatch
+var _color_note := {}  # team -> Label
+
+## A paint-chip color swatch: ringed when it is that team's color, crossed out when the other team holds it.
+class Swatch extends Button:
+	var chip := Color.WHITE
+	var ringed := false
+	var crossed := false
+	func _init(c: Color) -> void:
+		chip = c
+		custom_minimum_size = Vector2(30, 30)
+		focus_mode = Control.FOCUS_NONE
+		flat = true
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	func _draw() -> void:
+		var r := Rect2(Vector2(4, 4), size - Vector2(8, 8))
+		var dim := 0.45 if disabled and not ringed else 1.0
+		draw_rect(r.grow(2), Color(0, 0, 0, 0.85))
+		draw_rect(r, Color(chip, dim))
+		draw_rect(Rect2(r.position, Vector2(r.size.x, r.size.y * 0.3)), Color(1, 1, 1, 0.14 * dim))  # vinyl shine
+		if ringed:
+			draw_rect(Rect2(Vector2.ONE, size - Vector2(2, 2)), TournamentSkin.NEON, false, 3.0)
+		if crossed:
+			draw_line(r.position, r.end, Color(0, 0, 0, 0.95), 5.0)
+			draw_line(Vector2(r.end.x, r.position.y), Vector2(r.position.x, r.end.y), Color(0, 0, 0, 0.95), 5.0)
+			draw_line(r.position, r.end, TournamentSkin.CHALK, 2.0)
+			draw_line(Vector2(r.end.x, r.position.y), Vector2(r.position.x, r.end.y), TournamentSkin.CHALK, 2.0)
 
 func _ready() -> void:
 	_build_ui()
@@ -47,6 +102,10 @@ func _ready() -> void:
 			nl.match_countdown.connect(_on_countdown)
 		if nl.has_signal("room_event"):
 			nl.room_event.connect(_on_room_event)
+		if nl.has_signal("team_colors_changed"):
+			nl.team_colors_changed.connect(apply_team_colors)
+		if nl.has_signal("team_color_rejected"):
+			nl.team_color_rejected.connect(on_team_color_rejected)
 		_online = nl.is_online_client()
 		apply_state(nl.get_lobby_state_snapshot())
 
@@ -110,7 +169,7 @@ func apply_state(s: Dictionary) -> void:
 			_bench_list.add_child(TournamentSkin.marker(line, 17, Color(0.8, 0.81, 0.76)))
 			bench += 1
 			continue
-		var l := TournamentSkin.marker(line, 18, (RED_TEAM if is_red else BLUE_TEAM).lightened(0.45))
+		var l := TournamentSkin.marker(line, 18, team_color("ALPHA" if is_red else "BRAVO").lightened(0.45))
 		if is_red:
 			_red_list.add_child(l); red += 1
 		else:
@@ -118,10 +177,143 @@ func apply_state(s: Dictionary) -> void:
 	_red_head.text = "RED  %d / 5" % red
 	_blue_head.text = "BLUE  %d / 5" % blue
 	_bench_head.text = "NOT READY  %d" % bench
+	_red_count = red
+	_blue_count = blue
+	if s.get("team_colors") is Dictionary:
+		apply_team_colors(s["team_colors"])
+	else:
+		_refresh_colors()
 	_highlight(_map_btns, String(s.get("selected_map", s.get("map", ""))))
 	_highlight(_mode_btns, String(s.get("mode", "")))
 	_highlight(_gun_btns, String(s.get("bracket", "")))
 	_refresh_controls()
+
+# ------------------------------------------------------- team colors ----------
+
+static func _team_colors_script() -> Script:
+	return load(TEAM_COLORS_PATH) if ResourceLoader.exists(TEAM_COLORS_PATH) else null
+
+## The palette's color names in display order (TeamColors' list when present, else the private fallback).
+static func color_names() -> Array:
+	var tc := _team_colors_script()
+	if tc != null:
+		for m in ["names", "color_names", "all_names"]:
+			if tc.has_method(m):
+				var a = tc.call(m)
+				if a is Array and not a.is_empty():
+					return a
+		var consts: Dictionary = tc.get_script_constant_map()
+		for k in ["NAMES", "COLOR_NAMES", "ORDER", "PALETTE", "COLORS"]:
+			var v = consts.get(k)
+			if v is Array and not v.is_empty():
+				return v
+			if v is Dictionary and not v.is_empty():
+				return v.keys()
+	return _FALLBACK_PALETTE.keys()
+
+## Color for a lowercase name, through TeamColors.color_of() when it exists.
+static func color_of_name(color_name: String) -> Color:
+	var n := color_name.to_lower()
+	var tc := _team_colors_script()
+	if tc != null:
+		for m in ["color_of", "color"]:
+			if tc.has_method(m):
+				var c = tc.call(m, n)
+				if c is Color:
+					return c
+	return _FALLBACK_PALETTE.get(n, _FALLBACK_PALETTE["red"])
+
+static func _team_key(t: String) -> String:
+	return "BRAVO" if t.to_upper() in ["BRAVO", "BLUE"] else "ALPHA"
+
+## The color name a team shows right now (your pending pick first, then the server's).
+func shown_color(team: String) -> String:
+	var t := _team_key(team)
+	return String(_optimistic.get(t, team_colors.get(t, DEFAULT_TEAM_COLORS[t]))).to_lower()
+
+func team_color(team: String) -> Color:
+	return color_of_name(shown_color(team))
+
+## Your team: your row in the room state, else NetworkLobby.local_team, else ALPHA.
+func my_team() -> String:
+	var players: Dictionary = state.get("players", {})
+	var me := _my_id()
+	for pid in players:
+		if int(pid) == me and players[pid] is Dictionary and players[pid].has("team"):
+			return _team_key(String(players[pid]["team"]))
+	var nl := _nl()
+	if nl != null and nl.get("local_team") != null:
+		return _team_key(String(nl.get("local_team")))
+	return "ALPHA"
+
+func can_pick_color(team: String, color_name: String) -> bool:
+	var t := _team_key(team)
+	var other := "BRAVO" if t == "ALPHA" else "ALPHA"
+	return not is_locked() and t == my_team() and color_name.to_lower() in color_names() \
+		and color_name.to_lower() != shown_color(other)
+
+## A swatch click: shows it now, asks the server (nl.request_team_color), reverts on team_color_rejected.
+func pick_team_color(color_name: String) -> bool:
+	var t := my_team()
+	var n := color_name.to_lower()
+	if not can_pick_color(t, n) or n == shown_color(t):
+		return false
+	_optimistic[t] = n
+	_set_note(t, "", TournamentSkin.MUTED)
+	_refresh_colors()
+	team_color_requested.emit(t, n)
+	var nl := _nl()
+	if nl != null and nl.has_method("request_team_color"):
+		nl.call("request_team_color", n)
+	return true
+
+## Server-confirmed colors, e.g. {"ALPHA": "red", "BRAVO": "blue"} (from lobby state or team_colors_changed).
+func apply_team_colors(colors: Dictionary) -> void:
+	for k in colors:
+		team_colors[_team_key(String(k))] = String(colors[k]).to_lower()
+	for t in _optimistic.keys():
+		if team_colors.get(t) == _optimistic[t]:
+			_optimistic.erase(t)
+			_set_note(t, "", TournamentSkin.MUTED)
+	_refresh_colors()
+
+## The server refused your pick: back to the confirmed color and say why.
+func on_team_color_rejected(reason: String) -> void:
+	var t := my_team()
+	_optimistic.erase(t)
+	_set_note(t, REJECT_TEXT.get(reason, "COLOR REFUSED (%s)" % reason.to_upper()), Color(1.0, 0.45, 0.3))
+	_refresh_colors()
+
+func _set_note(team: String, text: String, c: Color) -> void:
+	var l: Label = _color_note.get(team)
+	if l != null:
+		l.text = text
+		l.add_theme_color_override("font_color", c)
+
+func _refresh_colors() -> void:
+	if _red_head == null:
+		return
+	var mine := my_team()
+	for t in ["ALPHA", "BRAVO"]:
+		var other := "BRAVO" if t == "ALPHA" else "ALPHA"
+		var c := team_color(t)
+		var head: Label = _red_head if t == "ALPHA" else _blue_head
+		head.text = "%s  %d / 5" % [shown_color(t).to_upper(), _red_count if t == "ALPHA" else _blue_count]
+		head.add_theme_color_override("font_color", c.lightened(0.2))
+		var list: VBoxContainer = _red_list if t == "ALPHA" else _blue_list
+		for l in list.get_children():
+			if l is Label:
+				l.add_theme_color_override("font_color", c.lightened(0.45))
+		var panel: PanelContainer = _red_panel if t == "ALPHA" else _blue_panel
+		panel.add_theme_stylebox_override("panel", TournamentSkin.card(c.darkened(0.62).lerp(Color(0.25, 0.25, 0.23), 0.35), 14, 10))
+		for n in _swatches[t]:
+			var sw: Swatch = _swatches[t][n]
+			sw.ringed = n == shown_color(t)
+			sw.crossed = n == shown_color(other)
+			sw.disabled = t != mine or is_locked() or sw.crossed
+			sw.mouse_default_cursor_shape = Control.CURSOR_ARROW if sw.disabled else Control.CURSOR_POINTING_HAND
+			sw.tooltip_text = n.to_upper()
+			sw.queue_redraw()
 
 func is_locked() -> bool:
 	var m: Dictionary = state.get("match", {})
@@ -131,6 +323,7 @@ func _refresh_controls() -> void:
 	var locked := is_locked()
 	for k in _map_btns: _map_btns[k].disabled = locked
 	for k in _mode_btns: _mode_btns[k].disabled = locked
+	_refresh_colors()
 	var can_cancel := counting_down and _nl() != null and _nl().has_method("cancel_start")
 	_start_btn.disabled = (locked and not can_cancel) or not _online or (counting_down and not can_cancel)
 	if counting_down:
@@ -261,11 +454,29 @@ func _build_ui() -> void:
 		var h := TournamentSkin.label("", 24, side[0].lightened(0.2), TournamentSkin.STENCIL, 5)
 		v.add_child(h)
 		var list := VBoxContainer.new()
+		list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		v.add_child(list)
+		if side[1] != 1:
+			var team := "ALPHA" if side[1] == 0 else "BRAVO"
+			var row := HBoxContainer.new()
+			row.name = "Swatches_" + team
+			row.add_theme_constant_override("separation", 2)
+			v.add_child(row)
+			for n in color_names():
+				var sw := Swatch.new(color_of_name(String(n)))
+				sw.name = "Swatch_" + String(n)
+				sw.pressed.connect(pick_team_color.bind(String(n)))
+				row.add_child(sw)
+				_swatches[team][String(n)] = sw
+			var note := TournamentSkin.led("", 14, Color(1.0, 0.45, 0.3))
+			note.name = "ColorNote"
+			note.custom_minimum_size.y = 18
+			v.add_child(note)
+			_color_note[team] = note
 		match side[1]:
-			0: _red_head = h; _red_list = list
+			0: _red_head = h; _red_list = list; _red_panel = p
 			1: _bench_head = h; _bench_list = list
-			2: _blue_head = h; _blue_list = list
+			2: _blue_head = h; _blue_list = list; _blue_panel = p
 	col.add_child(_label("PRESS READY TO TAKE YOUR SPOT. TEAMS ARE PICKED FOR YOU AND STAY EVEN.", 13, Color(0.55, 0.56, 0.5)))
 
 	_picker_row(col, "FIELD", MAPS, _map_btns, _pick_map)

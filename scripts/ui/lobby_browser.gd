@@ -4,9 +4,14 @@ extends Control
 ## GET /api/lobbies ({"lobbies":[{id,name,map,mode?,players:{red,blue},max_per_team,status,bots,join_url}]}),
 ## with per-row JOIN, a QUICK-JOIN (fullest "waiting" lobby that still has room) and a SOLO TEST VS BOTS button.
 ## Standalone: emits signals, and on the web build JOIN navigates to the lobby's join_url.
+## v0.6.4 (Ren): SINGLE PLAYER button with a ROOKIE / AMATEUR pick -> start_single_player(difficulty):
+## emits single_player_requested(difficulty), then calls SoloLauncher.start_ffa(difficulty) when that exists
+## (autoload /root/SoloLauncher first, else the global class's static), else on the web reloads with
+## ?solo=ffa&tier=<difficulty> (Bluey's arena auto-start link). Difficulty is "rookie" or "amateur".
 
 signal lobby_join_requested(entry: Dictionary)
 signal solo_requested
+signal single_player_requested(difficulty: String)
 signal lobbies_updated(count: int)
 
 const REFRESH_SECONDS: float = 4.0
@@ -16,6 +21,7 @@ const MAP_LABELS := {"speedball": "NPPL SPEEDBALL", "woodsball_crash": "WOODSBAL
 const MODE_LABELS := {"deathmatch": "10-KILL DEATHMATCH", "deathmatch_10": "10-KILL DEATHMATCH", "ctf": "1-LIFE CTF  BO5", "ctf_bo5": "1-LIFE CTF  BO5", "bots_test": "TEST VS BOTS", "bot_test": "TEST VS BOTS", "test": "TEST VS BOTS"}
 const STATUS_COLORS := {"waiting": Color(0.45, 0.95, 0.35), "in_match": Color(1.0, 0.72, 0.2), "full": Color(1.0, 0.3, 0.25)}
 const NEON := Color(0.95, 1.0, 0.15)
+const SOLO_DIFFICULTIES := ["rookie", "amateur"]
 const RED_TEAM := Color(1.0, 0.32, 0.25)
 const BLUE_TEAM := Color(0.3, 0.6, 1.0)
 
@@ -29,6 +35,11 @@ var _rows: VBoxContainer
 var _status_label: Label
 var _quick_btn: Button
 var _refresh_timer: Timer
+## The SINGLE PLAYER difficulty ("rookie" / "amateur").
+var solo_difficulty: String = "amateur"
+var _diff_btns: Dictionary = {}
+## How the last start_single_player went: "solo_launcher", "web_link" or "signal_only" (tests / logs).
+var last_solo_route: String = ""
 
 func _ready() -> void:
 	_build_ui()
@@ -131,6 +142,38 @@ func quick_join() -> void:
 	if not e.is_empty():
 		join(e)
 
+func set_solo_difficulty(d: String) -> void:
+	if d.to_lower() in SOLO_DIFFICULTIES:
+		solo_difficulty = d.to_lower()
+	for k in _diff_btns:
+		_diff_btns[k].set_pressed_no_signal(k == solo_difficulty)
+
+func start_single_player(difficulty: String = "") -> void:
+	var d := difficulty.to_lower() if difficulty.to_lower() in SOLO_DIFFICULTIES else solo_difficulty
+	single_player_requested.emit(d)
+	var launcher = _solo_launcher()
+	if launcher != null:
+		last_solo_route = "solo_launcher"
+		launcher.call("start_ffa", d)
+		return
+	if OS.has_feature("web"):
+		last_solo_route = "web_link"
+		JavaScriptBridge.eval("(function(){var u=new URL(window.location.href);u.searchParams.set('solo','ffa');u.searchParams.set('tier',%s);window.location.href=u.toString();})()" % JSON.stringify(d))
+		return
+	last_solo_route = "signal_only"
+
+## SoloLauncher with start_ffa: the autoload node, else the global class script (static func), else null.
+func _solo_launcher() -> Object:
+	var n := get_node_or_null("/root/SoloLauncher") if is_inside_tree() else null
+	if n != null and n.has_method("start_ffa"):
+		return n
+	for g in ProjectSettings.get_global_class_list():
+		if String(g.get("class", "")) == "SoloLauncher":
+			var sc = load(String(g.get("path", "")))
+			if sc is Script and sc.has_method("start_ffa"):
+				return sc
+	return null
+
 # ---------------------------------------------------------------- UI ----------
 
 func _panel_style(bg: Color, _border: Color = Color.BLACK, _bw: int = 2) -> StyleBox:
@@ -178,7 +221,7 @@ func _build_ui() -> void:
 	col.add_child(cols)
 
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(0, 500)
+	scroll.custom_minimum_size = Vector2(0, 470)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	col.add_child(scroll)
 	_rows = VBoxContainer.new()
@@ -190,22 +233,41 @@ func _build_ui() -> void:
 	footer.add_theme_constant_override("separation", 12)
 	col.add_child(footer)
 	_quick_btn = _button("QUICK-JOIN", NEON)
-	_quick_btn.custom_minimum_size = Vector2(260, 56)
+	_quick_btn.custom_minimum_size = Vector2(220, 56)
 	_quick_btn.add_theme_font_size_override("font_size", 22)
 	_quick_btn.pressed.connect(quick_join)
 	footer.add_child(_quick_btn)
 	var solo := _button("SOLO TEST VS BOTS", Color(0.62, 0.7, 0.55))
-	solo.custom_minimum_size = Vector2(260, 56)
+	solo.custom_minimum_size = Vector2(230, 56)
 	solo.pressed.connect(func(): solo_requested.emit())
 	footer.add_child(solo)
+	var single := _button("SINGLE PLAYER", TournamentSkin.PINK)
+	single.name = "SinglePlayerButton"
+	single.custom_minimum_size = Vector2(210, 56)
+	single.pressed.connect(func(): start_single_player())
+	footer.add_child(single)
+	var diff := VBoxContainer.new()
+	diff.add_theme_constant_override("separation", 2)
+	footer.add_child(diff)
+	for d in SOLO_DIFFICULTIES:
+		var t := Button.new()
+		t.name = "Difficulty_" + d
+		t.text = d.to_upper()
+		t.toggle_mode = true
+		TournamentSkin.style_toggle(t, 13)
+		t.custom_minimum_size = Vector2(104, 27)
+		t.pressed.connect(set_solo_difficulty.bind(d))
+		diff.add_child(t)
+		_diff_btns[d] = t
+	set_solo_difficulty(solo_difficulty)
 	var spacer := Control.new()
 	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	footer.add_child(spacer)
 	var refresh_btn := _button("REFRESH", Color(0.55, 0.56, 0.52))
-	refresh_btn.custom_minimum_size = Vector2(150, 56)
+	refresh_btn.custom_minimum_size = Vector2(130, 56)
 	refresh_btn.pressed.connect(refresh)
 	footer.add_child(refresh_btn)
-	TournamentSkin.dress_board(self, board, [[Vector2(0.555, 0.08), 120.0, Color(TournamentSkin.PINK, 0.9), 20.0], [Vector2(0.62, 0.92), 110.0, Color(TournamentSkin.NEON, 0.65), -40.0]])
+	TournamentSkin.dress_board(self, board, [[Vector2(0.555, 0.08), 120.0, Color(TournamentSkin.PINK, 0.9), 20.0], [Vector2(0.785, 0.93), 90.0, Color(TournamentSkin.NEON, 0.65), -40.0]])
 
 func _make_row(e: Dictionary) -> Control:
 	var status := String(e.get("status", "waiting"))

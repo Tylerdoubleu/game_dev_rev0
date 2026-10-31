@@ -8,6 +8,10 @@ extends CanvasLayer
 ##   rs.zone_picked.connect(func(i): ...)
 ##   rs.open("Viper", "ALPHA", arena._get_team_respawn_zones("ALPHA"), deaths, max_deaths, shooter_pos, death_pos)
 ##   (shooter_pos / death_pos are world positions; pass NO_POS or leave them out to hide them)
+## v0.6.4 team colors: field halves and player dots use each team's lobby color (Tim's TeamColors names via
+## LobbyWaitingRoom.color_of_name). It reads NetworkLobby's lobby state "team_colors" on open and listens to
+## team_colors_changed when those exist; set_team_colors({"ALPHA": "pink", "BRAVO": "cyan"}) sets them directly.
+## No colors known -> the old RED / BLUE.
 
 signal zone_picked(index: int)
 
@@ -60,6 +64,8 @@ var _killer := ""
 var _dots: Array = []
 var _map_id := "speedball"
 var _root: Control
+## Lowercase color names per team, e.g. {"ALPHA": "red", "BRAVO": "blue"}.
+var team_colors: Dictionary = {}
 
 func _init() -> void:
 	name = "RespawnScreen"
@@ -68,6 +74,36 @@ func _init() -> void:
 
 func _ready() -> void:
 	_build()
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl != null and nl.has_signal("team_colors_changed"):
+		nl.team_colors_changed.connect(set_team_colors)
+
+func set_team_colors(colors: Dictionary) -> void:
+	for k in colors:
+		team_colors["BRAVO" if String(k).to_upper() in ["BRAVO", "BLUE"] else "ALPHA"] = String(colors[k]).to_lower()
+	if _map != null:
+		_map.queue_redraw()
+
+## The team's lobby color, or the old RED / BLUE when none is known.
+func color_for(team: String) -> Color:
+	var t := team.to_upper()
+	var tc := LobbyWaitingRoom._team_colors_script()
+	if tc != null and tc.has_method("for_team"):
+		var c = tc.call("for_team", t, team_colors)
+		if c is Color:
+			return c
+	if team_colors.has(t):
+		return LobbyWaitingRoom.color_of_name(String(team_colors[t]))
+	return RED if t == "ALPHA" else BLUE
+
+func _pull_team_colors() -> void:
+	if not is_inside_tree():
+		return
+	var nl := get_node_or_null("/root/NetworkLobby")
+	if nl != null and nl.has_method("get_lobby_state_snapshot"):
+		var st = nl.call("get_lobby_state_snapshot")
+		if st is Dictionary and st.get("team_colors") is Dictionary:
+			set_team_colors(st["team_colors"])
 
 func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deaths: int = -1,
 		shooter_pos: Vector3 = NO_POS, death_pos: Vector3 = NO_POS, map_id: String = "") -> void:
@@ -75,6 +111,7 @@ func open(killer: String, team: String, zones: Array, deaths: int = -1, max_deat
 		_build()
 	_team = team
 	_zones = zones
+	_pull_team_colors()
 	_slot_order = []
 	_killer = short_name(killer)
 	_map_id = map_id if map_id != "" else _current_map()
@@ -160,7 +197,7 @@ func spot_center(i: int) -> Vector2:
 	return Vector2(clampf(m.x, SPOT_MARGIN, MAP_SIZE.x - SPOT_MARGIN), clampf(m.y, SPOT_MARGIN, MAP_SIZE.y - SPOT_MARGIN))
 
 func _team_color() -> Color:
-	return RED if _team == "ALPHA" else BLUE
+	return color_for(_team)
 
 ## Map coordinates: you look toward the enemy, so your base is at the bottom and theirs at the top.
 ## ALPHA's base is +Z and it faces -Z (+X on the right); BRAVO's base is -Z and it faces +Z, so its view is mirrored.
@@ -270,7 +307,7 @@ func _layout_spots() -> void:
 
 func _draw_map() -> void:
 	var tc := _team_color()
-	var ec := BLUE if _team == "ALPHA" else RED
+	var ec := color_for("BRAVO" if _team == "ALPHA" else "ALPHA")
 	var font: Font = TournamentSkin.STENCIL
 	var mfont: Font = TournamentSkin.MARKER
 	_map.draw_rect(Rect2(Vector2.ZERO, MAP_SIZE), Color(0.09, 0.13, 0.08, 0.97))
@@ -307,7 +344,7 @@ func _draw_map() -> void:
 	for d in _dots:
 		var pp: Vector3 = d["pos"]
 		var dt := String(d.get("team", ""))
-		var dc := BOT if bool(d.get("bot", false)) or not (dt in ["ALPHA", "BRAVO"]) else (RED if dt == "ALPHA" else BLUE)
+		var dc := BOT if bool(d.get("bot", false)) or not (dt in ["ALPHA", "BRAVO"]) else color_for(dt)
 		var mp := _to_map(pp.x, pp.z)
 		_map.draw_circle(mp, 6.5, Color.BLACK)
 		_map.draw_circle(mp, 5.0, dc.lightened(0.15))
