@@ -33,11 +33,12 @@ static var _last_variant: Dictionary = {}
 
 const VOLUME_DB := {"vinyl": -4.0, "wood": -4.0, "metal": -6.0, "turf": -9.0, "body": -2.0, "bounce": -5.0, "fire": -14.0, "whiz": -7.0}
 ## Other players' / bots' shots: anything firing further than this from the local player is not your own marker,
-## so it plays quieter, falls off faster and gets muffled with distance (Tyler: bot test mode was a constant roar).
+## so it plays a bit quieter and falls off a bit faster (Tyler: bot test mode was a constant roar), with the same tone as
+## your own shot (Tyler 10/31: the muffled 2.2 kHz version made bot shots sound too different).
 const OWN_SHOT_RADIUS := 3.0
-const FAR_FIRE_EXTRA_DB := -7.0
-const FAR_FIRE_UNIT_SIZE := 2.5
-const FAR_FIRE_FILTER_HZ := 2200.0
+const FAR_FIRE_EXTRA_DB := -5.0
+const FAR_FIRE_UNIT_SIZE := 4.0
+const FAR_FIRE_FILTER_HZ := 6000.0
 const POOL_SIZE: int = 24
 const POOL_NAME: String = "PaintImpactAudioPool"
 
