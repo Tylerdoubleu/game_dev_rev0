@@ -3,31 +3,9 @@
 # (e.g. 134-199-181-82.sslip.io). Caddy gets/renews TLS automatically
 # (Let's Encrypt, falling back to ZeroSSL).
 {$PAINTBALL_HOST} {
-	# CORS for the GitHub Pages client calling /api/* (/api/lobbies, /api/profile*).
-	# Preflight is answered here (never proxied), so Node never sees OPTIONS.
-	@api_preflight {
-		method OPTIONS
-		path /api/*
-	}
-	handle @api_preflight {
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, POST, PUT, OPTIONS"
-		header Access-Control-Allow-Headers "Authorization, Content-Type"
-		header Access-Control-Max-Age "600"
-		respond 204
-	}
-	# "defer" replaces any value server.js sets, so there is exactly one header.
-	# Not applied to OPTIONS, so it can't overwrite the preflight's Allow-Methods above.
-	@api_cors {
-		path /api/*
-		not method OPTIONS
-	}
-	header @api_cors {
-		defer
-		Access-Control-Allow-Origin "*"
-		Access-Control-Allow-Methods "GET, OPTIONS"
-	}
-
+	# No CORS here: server/server.js sets Access-Control-* itself (from CORS_ORIGINS)
+	# and answers OPTIONS preflight, so /api/*, /ws and OPTIONS all proxy straight to Node.
+	# Adding CORS headers here too would duplicate them and browsers would block the call.
 	# Everything else (/, /healthz, /api/*, and the /ws WebSocket upgrade)
 	# goes to the Node gateway (server/server.js), which pipes WS to Godot.
 	reverse_proxy 127.0.0.1:8080
@@ -38,27 +16,7 @@
 # paintball-test-update.timer. Unlike live, this host also serves the web client itself
 # (the test checkout's committed docs/, same as Pages), so the page and its /ws share one origin.
 {$PAINTBALL_TEST_HOST:test.jeetball.com} {
-	@api_preflight {
-		method OPTIONS
-		path /api/*
-	}
-	handle @api_preflight {
-		header Access-Control-Allow-Origin "*"
-		header Access-Control-Allow-Methods "GET, POST, PUT, OPTIONS"
-		header Access-Control-Allow-Headers "Authorization, Content-Type"
-		header Access-Control-Max-Age "600"
-		respond 204
-	}
-	@api_cors {
-		path /api/*
-		not method OPTIONS
-	}
-	header @api_cors {
-		defer
-		Access-Control-Allow-Origin "*"
-		Access-Control-Allow-Methods "GET, OPTIONS"
-	}
-
+	# No CORS here either: server.js (CORS_ORIGINS=https://test.jeetball.com) handles it.
 	@server path /ws /ws/* /api/* /healthz
 	handle @server {
 		reverse_proxy 127.0.0.1:8081
