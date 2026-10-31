@@ -233,6 +233,17 @@ profile has been awarded (`solo_awards`, server-side only) and applies `SOLO_CLO
 
 Client: `ProfileApi.solo_award(kind, id)`.
 
+### ProfileApi client behaviour (scripts/systems/profile_api.gd)
+
+- **API base** = the server NetworkLobby plays on: `current_ws_url` when it came from `?server=` / `LOBBY_WS_URL` /
+  `--server`, else `default_ws_url` (stamped SERVER_URL; on the web the page's own host `/ws` unless github.io/itch;
+  else live), converted `wss://h/ws` -> `https://h`. An unstamped page on test.jeetball.com therefore saves to test.
+- **No token**: `set_callsign`, `save_career`, `solo_award` create a profile first (`completed("create", 201, ...)`
+  fires as usual; concurrent calls share one create), then continue. If the create fails, the action itself
+  completes with the create's status (0 = offline).
+- **401**: the saved token is forgotten (memory + `user://profile.cfg`). For those three actions the client creates a
+  fresh profile once and retries once; a second 401 is reported to the caller. `get` just reports the 401.
+
 ### Clout by source
 
 Every award is recorded by source: `clout` is the total and `clout_by_source = {online, solo}` splits it (online =
