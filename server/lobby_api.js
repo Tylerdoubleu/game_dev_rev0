@@ -34,8 +34,8 @@ function apiCorsHeaders(origin, env = process.env) {
   const list = corsOrigins(env);
   if (origin && (list.includes(origin) || list.includes("*"))) {
     h["Access-Control-Allow-Origin"] = origin;
-    h["Access-Control-Allow-Methods"] = "GET, OPTIONS";
-    h["Access-Control-Allow-Headers"] = "Content-Type";
+    h["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS";
+    h["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
     h["Access-Control-Max-Age"] = "600";
   }
   return h;

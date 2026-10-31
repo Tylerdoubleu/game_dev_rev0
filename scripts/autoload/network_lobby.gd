@@ -113,6 +113,18 @@ var peer_room: Dictionary = {}
 ## Client: last public room state from the server (status, settings, match summary).
 var room_state: Dictionary = {}
 
+## v0.7 profiles: the client's private profile token (user://profile.cfg, written by ProfileApi). It is sent to the
+## server ONLY with srv_set_profile_token and kept server-side in _peer_profile_tokens (peer_id -> token), never in
+## rooms[...]["players"], rosters, snapshots, room events or the lobby state file.
+const PROFILE_CFG_PATH := "user://profile.cfg"
+var profile_token: String = ""
+var _peer_profile_tokens: Dictionary = {}
+## Server: where to POST match results (PROFILE_API_URL + INTERNAL_KEY, both set by server.js when it spawns us).
+var profile_api_url: String = ""
+var profile_internal_key: String = ""
+var last_match_result_payload: Dictionary = {}
+var match_result_posts: int = 0
+
 ## Counters for diagnostics / headless tests.
 var received_remote_shots: int = 0
 var received_room_events: Array = []
@@ -126,6 +138,8 @@ func _ready() -> void:
 	_connect_multiplayer_signals()
 	_parse_runtime_environment_and_url()
 
+	if not is_dedicated_server and profile_token.is_empty():
+		profile_token = load_saved_profile_token()
 	if is_dedicated_server:
 		var port := _resolve_dedicated_ws_port()
 		start_dedicated_server(port)
@@ -331,6 +345,9 @@ func start_dedicated_server(port: int = DEFAULT_WS_PORT) -> int:
 	players.clear()
 	peer_room.clear()
 	rooms.clear()
+	_peer_profile_tokens.clear()
+	profile_api_url = OS.get_environment("PROFILE_API_URL").strip_edges().trim_suffix("/")
+	profile_internal_key = OS.get_environment("INTERNAL_KEY").strip_edges()
 	rejected_shots.clear()
 	rejected_hits.clear()
 	_ensure_permanent_rooms()
@@ -478,6 +495,7 @@ func _on_connected_to_server() -> void:
 	print("[NetworkLobby] Connected to lobby server as peer %d, joining room '%s'" % [my_id, active_room])
 	connection_status_changed.emit("LIVE IN LOBBY ROOM [%s] (Peer #%d)" % [active_room.to_upper(), my_id], true)
 	_send_registration()
+	_send_profile_token()
 
 func _send_registration() -> void:
 	register_player_info.rpc_id(1, local_callsign, local_team, local_bracket, local_ready, active_room, selected_map, selected_mode)
@@ -573,6 +591,47 @@ func srv_flag_event(event_type: String, player_name: String, team: String, world
 	if rid.is_empty():
 		return
 	_send_room(rid, &"rpc_broadcast_flag_event", [event_type.substr(0, 12), player_name.substr(0, 20), team, world_pos, rid], sid)
+
+## v0.7: hand the server our private profile token so it can award clout at match end. Client -> server only.
+static func is_valid_profile_token(t: String) -> bool:
+	if t.length() != 64:
+		return false
+	for ch in t:
+		if "0123456789abcdef".find(ch) == -1:
+			return false
+	return true
+
+static func load_saved_profile_token() -> String:
+	var cfg := ConfigFile.new()
+	if cfg.load(PROFILE_CFG_PATH) != OK:
+		return ""
+	var t := String(cfg.get_value("profile", "token", "")).strip_edges().to_lower()
+	return t if is_valid_profile_token(t) else ""
+
+func set_profile_token(token: String) -> void:
+	var t := token.strip_edges().to_lower()
+	profile_token = t if is_valid_profile_token(t) else ""
+	if is_online_client():
+		_send_profile_token()
+
+func _send_profile_token() -> void:
+	if not profile_token.is_empty():
+		srv_set_profile_token.rpc_id(1, profile_token)
+
+@rpc("any_peer", "call_remote", "reliable")
+func srv_set_profile_token(token: String) -> void:
+	if not is_dedicated_server:
+		return
+	_server_set_profile_token(multiplayer.get_remote_sender_id(), token)
+
+func _server_set_profile_token(pid: int, token: String) -> void:
+	if pid <= 1:
+		return
+	var t := token.strip_edges().to_lower()
+	if is_valid_profile_token(t):
+		_peer_profile_tokens[pid] = t
+	else:
+		_peer_profile_tokens.erase(pid)
 
 ## v0.6 bunker callout ping ("1 in Snake 2"): goes to your own team only. callout = bunker name, count = 0..5 enemies.
 func ping_callout(callout: String, world_pos: Vector3, count: int = 1) -> void:
@@ -1176,6 +1235,7 @@ func _server_remove_peer(pid: int) -> void:
 	var rid := String(peer_room.get(pid, ""))
 	peer_room.erase(pid)
 	players.erase(pid)
+	_peer_profile_tokens.erase(pid)
 	remote_move_lock_state.erase(pid)
 	if rid.is_empty() or not rooms.has(rid):
 		return
@@ -1750,6 +1810,7 @@ func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
 	var rid := String(room["id"])
 	var mode := String(m["mode"])
 	var score: Dictionary = m["score"] if mode == "ctf" else m["kills"]
+	_report_match_result(room, winner, mode)
 	_send_room_event(rid, "match_ended", {
 		"winner": winner, "winner_color": team_label(winner) if winner in TEAMS else "", "reason": reason,
 		"mode": mode, "score": _team_dict_to_colors(score), "kills": _team_dict_to_colors(m["kills"]),
@@ -1766,6 +1827,47 @@ func _end_room_match(room: Dictionary, winner: String, reason: String) -> void:
 		room["players"][pid]["ready"] = false # READY resets after each match
 	_rebalance_room_teams(room)
 	_broadcast_room_state(rid)
+
+## v0.7 clout hook: one row per human in the room who sent a profile token. bots_test matches earn nothing.
+## server.js (POST /internal/match_result) resolves tokens, clamps values and applies the CLOUT table.
+func build_match_result_payload(room: Dictionary, winner: String, mode: String) -> Dictionary:
+	if mode == "bots_test" or not (mode in ["deathmatch", "ctf"]):
+		return {}
+	var m: Dictionary = room.get("match", {})
+	var rows: Array = []
+	for pid in room["players"].keys():
+		var tok := String(_peer_profile_tokens.get(int(pid), ""))
+		if tok.is_empty():
+			continue
+		var info: Dictionary = room["players"][pid]
+		var team := String(info.get("team", "ALPHA"))
+		rows.append({
+			"token": tok, "won": winner in TEAMS and team == winner,
+			"eliminations": int(info.get("kills", 0)), "flags": int(info.get("captures", 0)),
+			"rounds_won": int(m.get("score", {}).get(team, 0)) if mode == "ctf" else 0,
+		})
+	if rows.is_empty():
+		return {}
+	return {"room": String(room["id"]), "mode": mode, "match_id": "%s_%d_%d" % [String(room["id"]), int(Time.get_unix_time_from_system() * 1000.0), randi()], "results": rows}
+
+func _report_match_result(room: Dictionary, winner: String, mode: String) -> void:
+	var payload := build_match_result_payload(room, winner, mode)
+	last_match_result_payload = payload
+	if payload.is_empty() or profile_api_url.is_empty() or profile_internal_key.is_empty() or not is_inside_tree():
+		return
+	var http := HTTPRequest.new()
+	http.timeout = 10.0
+	add_child(http)
+	http.request_completed.connect(func(_r: int, code: int, _h: PackedStringArray, _b: PackedByteArray) -> void:
+		if code != 200:
+			push_warning("[NetworkLobby] match_result POST failed (HTTP %d) for room %s" % [code, payload["room"]])
+		http.queue_free())
+	var err := http.request(profile_api_url + "/internal/match_result",
+		["Content-Type: application/json", "X-Internal-Key: " + profile_internal_key], HTTPClient.METHOD_POST, JSON.stringify(payload))
+	if err != OK:
+		http.queue_free()
+		return
+	match_result_posts += 1
 
 func _tick_room_match(room: Dictionary, _delta: float) -> void:
 	var now := _rules_now()

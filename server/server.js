@@ -14,6 +14,7 @@ const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
 const lobbyApi = require("./lobby_api");
+const profiles = require("./profile_store");
 
 const HTTP_PORT = parseInt(
   process.env.ARBITRIUM_PORT_HTTP_INTERNAL ||
@@ -46,6 +47,25 @@ const MIME_TYPES = {
   ".json": "application/json; charset=utf-8",
 };
 
+// v0.7 profiles + clout: JSON store under DATA_DIR (outside the checkout). INTERNAL_KEY guards
+// POST /internal/match_result; if unset, a random one is generated and handed to the spawned Godot server.
+const DATA_DIR = profiles.defaultDataDir();
+const INTERNAL_KEY = (process.env.INTERNAL_KEY || "").trim() || require("crypto").randomBytes(24).toString("hex");
+const profileStore = new profiles.ProfileStore({ dataDir: DATA_DIR });
+const profileLimiter = new profiles.RateLimiter(
+  parseInt(process.env.PROFILE_CREATE_LIMIT_PER_HOUR || "", 10) || profiles.CREATE_LIMIT_PER_HOUR
+);
+function flushProfilesAndExit() {
+  try {
+    profileStore.flush();
+  } catch (e) {
+    console.error("[Profiles] flush failed:", e.message);
+  }
+  process.exit(0);
+}
+process.on("SIGTERM", flushProfilesAndExit);
+process.on("SIGINT", flushProfilesAndExit);
+
 let godotProc = null;
 function startGodotServerIfRequested() {
   if (process.env.AUTO_START_GODOT !== "1") return;
@@ -61,7 +81,14 @@ function startGodotServerIfRequested() {
   console.log(`[Supervisor] Starting headless Godot server: ${cmd} ${args.join(" ")}`);
   godotProc = spawn(cmd, args, {
     stdio: "inherit",
-    env: { ...process.env, DEDICATED_SERVER: "1", WS_PORT: String(GODOT_WS_PORT), LOBBY_STATE_FILE },
+    env: {
+      ...process.env,
+      DEDICATED_SERVER: "1",
+      WS_PORT: String(GODOT_WS_PORT),
+      LOBBY_STATE_FILE,
+      INTERNAL_KEY,
+      PROFILE_API_URL: `http://127.0.0.1:${HTTP_PORT}`,
+    },
   });
   godotProc.on("exit", (code, sig) => {
     console.warn(`[Supervisor] Headless Godot exited (code=${code}, sig=${sig}). Restarting in 2s...`);
@@ -131,6 +158,17 @@ const server = http.createServer((req, res) => {
   const earlyUrl = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   if (earlyUrl.pathname === "/api/lobbies" || earlyUrl.pathname === "/api/quickjoin") {
     handleApi(req, res, earlyUrl);
+    return;
+  }
+  if (
+    profiles.handleProfileRequest(req, res, earlyUrl, {
+      store: profileStore,
+      internalKey: INTERNAL_KEY,
+      limiter: profileLimiter,
+      cors: lobbyApi.apiCorsHeaders(req.headers.origin),
+      sendJson,
+    })
+  ) {
     return;
   }
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -241,4 +279,5 @@ server.listen(HTTP_PORT, "0.0.0.0", () => {
     `[Server] 2000s Pro Paintball HTTP + WS Gateway listening on 0.0.0.0:${HTTP_PORT} -> Godot WS 127.0.0.1:${GODOT_WS_PORT}`
   );
   console.log(`[Server] Serving HTML5 WebGL2 build from ${WEB_ROOT}`);
+  console.log(`[Server] v0.7 profiles stored in ${DATA_DIR}${process.env.INTERNAL_KEY ? "" : " (INTERNAL_KEY generated for this run)"}`);
 });

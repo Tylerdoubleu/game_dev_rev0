@@ -142,3 +142,73 @@ Hit (`srv_report_hit`) rejections, in order:
 - The CTF round clock (`round_ms_left`) starts at the horn, not at `round_started`.
 - Client API: `NetworkLobby.ping_callout(callout: String, world_pos: Vector3, count := 1)`. Alive players only, with a 1.2 s cooldown per player. Extra pings are dropped silently.
 - Tests set `NetworkLobby.break_countdown_ms = 0` to skip the break.
+
+## v0.7 profile API (anonymous profiles, callsigns, clout)
+
+Code: `server/profile_store.js` (store + HTTP handlers, mounted by `server/server.js`), client helper
+`scripts/systems/profile_api.gd` (`ProfileApi`), server hook in `scripts/autoload/network_lobby.gd`.
+Tests: `cd server && node --test test` (`test/profile_api.test.js`) and
+`godot --headless --path . -s res://scripts/systems/test_profile_hook.gd`.
+
+No sign-up: the client creates a profile once and keeps the private token in `user://profile.cfg`
+(browser storage on the web build; clearing site data loses the profile). All bodies are JSON. CORS is the same
+allow-list as `/api/lobbies` (`CORS_ORIGINS`); preflight allows `GET, POST, PUT, OPTIONS` and
+`Content-Type, Authorization`. Authenticated calls send `Authorization: Bearer <token>`.
+
+| Request | Success | Errors |
+|---|---|---|
+| `POST /api/profile` (no body) | `201 {profile_id, token, callsign:null, clout:0, career:null}`. `token` = 64 hex chars, shown only here. | `429 {error:"rate_limited"}` after 10 creates per IP per hour |
+| `GET /api/profile` | `200 {profile_id, callsign, clout, stats:{matches,wins,eliminations,flags,rounds_won}, career, created_at}` | `401 {error:"unauthorized"}` |
+| `PUT /api/profile/callsign` `{callsign}` | `200` same shape as GET. Display case is kept; uniqueness is case-insensitive; the old name is released. | `400 {error:"invalid_callsign"}` unless 3-16 of `A-Z a-z 0-9 _ -`; `409 {error:"callsign_taken"}`; `401` |
+| `PUT /api/profile/career` `{career:<object or null>}` | `200` same shape as GET. Opaque blob for career mode. | `413 {error:"career_too_large"}` if `JSON.stringify(career)` > 32 KB (any body > 64 KB is `413 {error:"too_large"}`); `400 {error:"invalid_career"}` if not an object; `401` |
+| `GET /api/profile/public/<callsign>` (case-insensitive) | `200 {callsign, clout, stats}` (never id/token) | `404 {error:"not_found"}` |
+
+Clout is **never client-writable** (there is no clout endpoint; extra fields in bodies are ignored).
+
+### Server-awarded clout
+
+At match end (deathmatch / ctf only; `bots_test` earns nothing) the headless Godot server POSTs
+`http://127.0.0.1:<PORT>/internal/match_result` with header `X-Internal-Key: <INTERNAL_KEY>`:
+
+```json
+{"room":"lobby_03","mode":"ctf","match_id":"lobby_03_1793462400000_123",
+ "results":[{"token":"<64 hex>","won":true,"eliminations":3,"flags":1,"rounds_won":3}]}
+```
+
+A row may use `profile_id` instead of `token`. Rejected with `403` unless the TCP peer is loopback, there is no
+`X-Forwarded-For` / `Forwarded` / `X-Forwarded-Host` header (so nothing through Caddy is accepted), and the key
+matches. `400` for a body without `results`. Response `200 {awarded:[{profile_id, clout}], ignored, duplicate}`.
+Unknown tokens/ids are ignored, each profile counts once per report, a repeated `match_id` is ignored
+(`duplicate:true`), at most 10 rows are read. Per match each player is clamped to eliminations <= 50,
+flags <= 5, rounds_won <= 5. Values (`CLOUT` in `server/profile_store.js`, the one place to change them):
+
+| Online, server-awarded | Clout |
+|---|---|
+| elimination | +5 |
+| flag hang (capture) | +25 |
+| CTF round won by your team | +25 |
+| match win | +75 |
+
+There is no "match played" bonus. `rounds_won` is your team's CTF round score (0 in deathmatch);
+`eliminations` / `flags` are your room `kills` / `captures`.
+
+**Token handling in the game socket:** the client sends its token only with `srv_set_profile_token(token)`
+(client -> server, after `register_player_info`, or when `NetworkLobby.set_profile_token()` is called while
+online). The server keeps it in `_peer_profile_tokens` (peer -> token), drops it on disconnect, and never puts it in
+`rooms[...]["players"]`, rosters, `sync_lobby_state`, room events or the lobby state file.
+
+### Env vars (server.js)
+
+- `DATA_DIR`: folder for `profiles.json`. Default `os.tmpdir()/paintball_data`. Must be outside the checkout
+  (the update script resets it) and different per instance (test vs live).
+- `INTERNAL_KEY`: shared secret for `/internal/match_result`. If unset, server.js generates one per run and passes it
+  (with `PROFILE_API_URL=http://127.0.0.1:<PORT>`) to the Godot server it spawns with `AUTO_START_GODOT=1`. Set it
+  explicitly only if Godot is started some other way (then also set `PROFILE_API_URL` for Godot).
+- `PROFILE_CREATE_LIMIT_PER_HOUR`: optional, default 10. Behind Caddy the rate-limit IP is the right-most
+  `X-Forwarded-For` entry.
+
+### TODO (needs a separate decision)
+
+Solo rewards (stars, challenges, tiers vs bots) are **not** part of this API. They would be client-reported, so they
+cannot be trusted like online clout; decide whether they stay in the career blob only or get their own capped,
+clearly-separate counter.
