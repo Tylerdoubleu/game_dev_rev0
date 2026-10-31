@@ -437,7 +437,21 @@ func _client_set_team_colors(colors: Dictionary) -> void:
 	if next == team_colors:
 		return
 	team_colors = next
+	_retint_nametags()
 	team_colors_changed.emit(team_colors.duplicate())
+
+## v0.6.4: remote callsign tags take the room's team color (TeamColors.for_team), lightened a bit to stay readable.
+func nametag_color(team: String) -> Color:
+	return TeamColorsScript.for_team(team, team_colors).lightened(0.3)
+
+func _retint_nametags() -> void:
+	for pid in remote_player_nodes:
+		var node: Node = remote_player_nodes[pid]
+		if not is_instance_valid(node):
+			continue
+		var tag := node.get_node_or_null("CallsignTag3D") as Label3D
+		if tag != null and tag.has_meta("team"):
+			tag.modulate = nametag_color(String(tag.get_meta("team")))
 
 ## v0.5: leave the current room cleanly and go back to the lobby list. Disconnects (the server drops the peer from
 ## its room on disconnect), clears room state, strips ?room= from the page URL and emits left_room.
@@ -2361,7 +2375,8 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 	var tag := avatar.get_node_or_null("CallsignTag3D") as Label3D
 	if tag != null:
 		tag.text = "[%s] %s" % [team, callsign]
-		tag.modulate = Color(0.35, 0.85, 1.0) if team == "ALPHA" else Color(1.0, 0.42, 0.42)
+		tag.set_meta("team", team)
+		tag.modulate = nametag_color(team)
 
 func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) -> StaticBody3D:
 	var body := StaticBody3D.new()
@@ -2399,7 +2414,8 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 	tag.pixel_size = 0.0045
 	tag.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	tag.position = Vector3(0, 1.92, 0)
-	tag.modulate = Color(0.35, 0.85, 1.0) if team == "ALPHA" else Color(1.0, 0.42, 0.42)
+	tag.set_meta("team", team)
+	tag.modulate = nametag_color(team)
 	body.add_child(tag)
 
 	body.set_script(load("res://scripts/player/remote_player_avatar.gd"))

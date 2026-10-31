@@ -30,6 +30,15 @@ func _process(_d: float) -> bool:
 	_check(changed.size() == 2 and changed[1]["BRAVO"] == "cyan", "room event team_colors_changed -> signal")
 	L.cl_room_event("team_color_rejected", {"reason": "taken", "color": "pink", "team_colors": {"ALPHA": "pink", "BRAVO": "cyan"}})
 	_check(rejected == ["taken"] and changed.size() == 2, "room event team_color_rejected -> team_color_rejected(reason)")
+	# nametags: built with the room color, re-tinted on team_colors_changed
+	var body: Node3D = L._create_remote_player_avatar(9001, "BRAVO", "Tagger")
+	L.remote_player_nodes[9001] = body
+	var tag := body.get_node("CallsignTag3D") as Label3D
+	_check(tag.modulate.is_equal_approx(TeamColors.color_of("cyan").lightened(0.3)), "nametag uses BRAVO's cyan (%s)" % [tag.modulate])
+	L.cl_room_event("team_colors_changed", {"team_colors": {"ALPHA": "pink", "BRAVO": "orange"}})
+	_check(tag.modulate.is_equal_approx(TeamColors.color_of("orange").lightened(0.3)), "nametag re-tinted on team_colors_changed")
+	L.remote_player_nodes.erase(9001)
+	body.free()
 	# offline: no server to confirm -> nothing emitted (Ren's waiting room keeps the optimistic pick)
 	var n_changed := changed.size()
 	var n_rej := rejected.size()
