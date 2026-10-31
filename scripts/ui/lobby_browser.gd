@@ -125,6 +125,7 @@ func set_lobbies(list: Array, error_text: String = "") -> void:
 	if _rows == null:
 		return
 	for c in _rows.get_children():
+		_rows.remove_child(c)  # free the Row_<id> name now so rebuilt rows keep it
 		c.queue_free()
 	for e in list:
 		if typeof(e) == TYPE_DICTIONARY:
