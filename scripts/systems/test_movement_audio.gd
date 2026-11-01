@@ -6,6 +6,7 @@ extends SceneTree
 var arena: Node
 var f := 0
 var failures: Array[String] = []
+var title: Node
 func _initialize() -> void:
 	arena = (load("res://scenes/maps/speedball_arena_01/speedball_arena_01.tscn") as PackedScene).instantiate()
 	root.add_child(arena)
@@ -89,7 +90,51 @@ func _process(_d: float) -> bool:
 		root.get_node("MovementAudioDirector").debug_menu_open = false
 	if f == 170:
 		_check(not root.get_node("MovementAudioDirector").music.playing, "menu music fades out and stops once the menu closes")
+	# Tyler 11-01: no menu music on the TitleScreen (only the LobbyEntryFlow browser counted as a menu).
 	if f == 172:
+		var dir: Node = root.get_node("MovementAudioDirector")
+		dir.debug_menu_open = null
+		_check(not dir.is_menu_open(), "in the arena with no menu up, is_menu_open() is false")
+		var flow: Node = root.get_node("LobbyEntryFlow")
+		title = flow.call("show_title_screen")
+		_check(title != null and title.is_in_group("menu_screens"), "the real TitleScreen (LobbyEntryFlow.show_title_screen) joins menu_screens")
+		_check(not bool(flow.call("is_open")), "LobbyEntryFlow.is_open() alone doesn't see the title (the bug)")
+	if f == 174:
+		_check(root.get_node("MovementAudioDirector").is_menu_open(), "TitleScreen up -> counts as a menu")
+	if f == 230:
+		var m: AudioStreamPlayer = root.get_node("MovementAudioDirector").music
+		_check(m.playing and m.volume_db > -60.0, "menu music plays and fades in on the TitleScreen (%.1f dB)" % m.volume_db)
+		title.call("dismiss")  # SINGLE PLAYER / MULTIPLAYER path
+	if f == 231:
+		_check(not root.get_node("MovementAudioDirector").is_menu_open(), "a dismissed (queue_freed) title no longer counts")
+		var dir: Node = root.get_node("MovementAudioDirector")
+		var layer := CanvasLayer.new()
+		root.add_child(layer)
+		var wr := LobbyWaitingRoom.new()
+		layer.add_child(wr)
+		var cs := CareerScreen.new()
+		layer.add_child(cs)
+		var ce := CallsignEntry.new()
+		layer.add_child(ce)
+		_check(wr.is_in_group("menu_screens") and cs.is_in_group("menu_screens") and ce.is_in_group("menu_screens"), "waiting room, career screen and callsign entry join menu_screens")
+		cs.visible = false
+		wr.visible = false
+		_check(not dir.is_menu_open(), "hidden screens (CallsignEntry starts hidden) are not a menu")
+		ce.call("open", "Viper")
+		_check(dir.is_menu_open(), "an open CallsignEntry counts as a menu")
+		ce.call("close")
+		cs.visible = true
+		_check(dir.is_menu_open(), "a visible CareerScreen counts as a menu")
+		cs.visible = false
+		wr.visible = true
+		_check(dir.is_menu_open(), "a visible LobbyWaitingRoom counts as a menu")
+		layer.visible = false
+		_check(not dir.is_menu_open(), "a screen on a hidden CanvasLayer is not a menu")
+		layer.queue_free()
+	if f == 380:
+		_check(not root.get_node("MovementAudioDirector").music.playing, "music fades out and stops once the title is gone (match starts)")
+		_check(AudioServer.bus_count == 1, "still no runtime audio buses")
+	if f == 382:
 		print("=== [%s] v0.6 movement foley + break horn ===" % ("PASS" if failures.is_empty() else "FAIL"))
 		quit(0 if failures.is_empty() else 1)
 	return false

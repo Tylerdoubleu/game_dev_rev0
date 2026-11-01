@@ -147,11 +147,36 @@ func _on_local_player_eliminated(_killer_name: String = "") -> void:
 	var my_id := int(nl.call("_my_peer_id")) if nl != null and nl.has_method("_my_peer_id") else 0
 	play_player_hit({"victim": my_id})
 
+## Ren's menu screens (TitleScreen, LobbyWaitingRoom, CareerScreen, CallsignEntry) add themselves to this group.
+const MENU_GROUP := "menu_screens"
+
+## Menu music plays while the lobby browser / waiting room (LobbyEntryFlow) or any visible menu screen is up.
+## v0.6.4 (Tyler 11-01: no music on the title): the TitleScreen sits on its own layer outside LobbyEntryFlow.is_open().
 func is_menu_open() -> bool:
 	if debug_menu_open != null:
 		return bool(debug_menu_open)
 	var flow := get_node_or_null("/root/LobbyEntryFlow")
-	return flow != null and flow.has_method("is_open") and bool(flow.call("is_open"))
+	if flow != null and flow.has_method("is_open") and bool(flow.call("is_open")):
+		return true
+	if not is_inside_tree():
+		return false
+	for n in get_tree().get_nodes_in_group(MENU_GROUP):
+		if is_menu_screen_showing(n):
+			return true
+	return false
+
+## Visible all the way up, including through hidden CanvasLayers, and not on its way out (dismiss() = queue_free).
+static func is_menu_screen_showing(n: Node) -> bool:
+	if not (n is CanvasItem) or not is_instance_valid(n) or n.is_queued_for_deletion() or not n.is_inside_tree():
+		return false
+	if not (n as CanvasItem).is_visible_in_tree():
+		return false
+	var p := n.get_parent()
+	while p != null:
+		if p is CanvasLayer and not (p as CanvasLayer).visible:
+			return false
+		p = p.get_parent()
+	return true
 
 func _process(delta: float) -> void:
 	if music == null:

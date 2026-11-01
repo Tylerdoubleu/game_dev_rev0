@@ -93,6 +93,7 @@ class Padlock extends Control:
 		draw_rect(Rect2(9.5, 16, 3, 5), Color(0.1, 0.1, 0.09))
 
 func _ready() -> void:
+	add_to_group("menu_screens")  # MovementAudioDirector plays the menu music while one is visible
 	_build_ui()
 	if api == null:
 		api = ProfileApi.new()

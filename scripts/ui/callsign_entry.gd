@@ -45,6 +45,7 @@ var _board: PanelContainer
 var _retry: Timer
 
 func _ready() -> void:
+	add_to_group("menu_screens")  # MovementAudioDirector plays the menu music while one is visible
 	_build_ui()
 	if api == null:
 		var a := ProfileApi.new()

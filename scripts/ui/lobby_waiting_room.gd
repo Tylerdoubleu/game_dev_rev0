@@ -86,6 +86,7 @@ class Swatch extends Button:
 			draw_line(Vector2(r.end.x, r.position.y), Vector2(r.position.x, r.end.y), TournamentSkin.CHALK, 2.0)
 
 func _ready() -> void:
+	add_to_group("menu_screens")  # MovementAudioDirector plays the menu music while one is visible
 	_build_ui()
 	if get_node_or_null("/root/NetworkLobby") != null:
 		var nl := get_node("/root/NetworkLobby")

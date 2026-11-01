@@ -80,6 +80,7 @@ func _init() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 
 func _ready() -> void:
+	add_to_group("menu_screens")  # MovementAudioDirector plays the menu music while one is visible
 	_build_ui()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_spot_timer = Timer.new()
