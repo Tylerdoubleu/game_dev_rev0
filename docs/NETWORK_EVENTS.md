@@ -225,7 +225,7 @@ Allow-list: `CORS_ORIGINS` (comma-separated), else the defaults `https://tylerdo
 | `GET /api/profile` | `200 {profile_id, callsign, clout, clout_by_source:{online,solo}, stats:{matches,wins,eliminations,flags,rounds_won}, career, created_at}` | `401 {error:"unauthorized"}` |
 | `PUT /api/profile/callsign` `{callsign}` | `200` same shape as GET. Display case is kept; uniqueness is case-insensitive; the old name is released. | `400 {error:"invalid_callsign"}` unless 3-16 of `A-Z a-z 0-9 _ -`; `409 {error:"callsign_taken"}`; `401` |
 | `PUT /api/profile/career` `{career:<object or null>}` | `200` same shape as GET. Opaque blob for career mode. | `413 {error:"career_too_large"}` if `JSON.stringify(career)` > 32 KB (any body > 64 KB is `413 {error:"too_large"}`); `400 {error:"invalid_career"}` if not an object; `401` |
-| `POST /api/profile/solo_award` `{kind, id}` | `200 {awarded, clout, clout_by_source}` (see Solo clout below) | `400 invalid_kind/invalid_id`; `401`; `429` past 60/min per profile |
+| `POST /api/profile/solo_award` `{kind, id}` | `200 {kind, id, awarded, clout, clout_by_source}` (kind/id echoed, also on 0-clout repeats) (see Solo clout below) | `400 invalid_kind/invalid_id`; `401`; `429` past 60/min per profile |
 | `GET /api/profile/public/<callsign>` (case-insensitive) | `200 {callsign, clout, clout_by_source, stats}` (never id/token) | `404 {error:"not_found"}` |
 
 Clout can't be set directly (there is no clout endpoint; extra fields in bodies are ignored). Online clout is

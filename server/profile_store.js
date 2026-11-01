@@ -359,7 +359,8 @@ function handleProfileRequest(req, res, url, ctx) {
     if (p === "/api/profile/solo_award") {
       const r = ctx.store.soloAward(prof, body.kind, body.id);
       if (r.error) return send(400, { error: r.error });
-      return send(200, { awarded: r.awarded, clout: prof.clout, clout_by_source: { ...prof.clout_by_source } });
+      // kind/id echo the request so a client with several awards in flight can match each reply (repeats too).
+      return send(200, { kind: body.kind, id: body.id, awarded: r.awarded, clout: prof.clout, clout_by_source: { ...prof.clout_by_source } });
     }
     if (p === "/api/profile/callsign") {
       const r = ctx.store.setCallsign(prof, body.callsign);
