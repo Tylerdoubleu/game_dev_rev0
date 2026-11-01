@@ -558,7 +558,7 @@ func _build_ui() -> void:
 	single_btn.custom_minimum_size = Vector2(0, 86)
 	single_btn.pressed.connect(func(): start_single_player())
 	menu.add_child(single_btn)
-	menu.add_child(TournamentSkin.led("FREE-FOR-ALL  //  ALL BOTS VS YOU  //  FIRST TO 10", 15, TournamentSkin.CHALK))
+	menu.add_child(TournamentSkin.led("TEAM DEATHMATCH  //  YOU VS BOTS  //  FIRST TO 10", 15, TournamentSkin.CHALK))
 	var diff := HBoxContainer.new()
 	diff.add_theme_constant_override("separation", 8)
 	diff.add_child(TournamentSkin.label("BOTS", 16, TournamentSkin.MUTED, TournamentSkin.STENCIL, 2))
