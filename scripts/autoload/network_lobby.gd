@@ -61,6 +61,7 @@ const PERMANENT_LOBBY_COUNT: int = 10
 static var permanent_lobby_count: int = PERMANENT_LOBBY_COUNT
 const BuildInfo = preload("res://scripts/systems/build_info.gd")
 const TeamColorsScript = preload("res://scripts/systems/team_colors.gd") # v0.6.4 shared palette (not an autoload)
+const SnapshotInterpolatorScript = preload("res://scripts/systems/snapshot_interpolator.gd") # v0.7 (not an autoload)
 const MAX_PER_TEAM: int = 5
 const DEFAULT_ROOM: String = "alpha"
 const MAPS: Array[String] = ["speedball", "woodsball_crash"]
@@ -186,6 +187,8 @@ func _process(delta: float) -> void:
 			connection_status_changed.emit("OFFLINE — Server unreachable, Solo + Bots Ready", false)
 	if is_dedicated_server:
 		_server_tick(delta)
+	else:
+		_client_tick_remote_snapshots(delta)
 
 func _generate_default_callsign() -> void:
 	var rng := RandomNumberGenerator.new()
@@ -913,6 +916,7 @@ func cl_net_ping(server_ms: int) -> void:
 		return
 	srv_net_pong.rpc_id(1, server_ms)
 
+## v0.7: no longer sent by the server (replaced by cl_snapshot); kept so direct callers and the RPC table stay put.
 @rpc("authority", "call_remote", "unreliable_ordered")
 func rpc_sync_player_state(peer_id: int, pos: Vector3, body_yaw: float, head_pitch: float, lean: float, stance_idx: int, team: String, callsign: String, eliminated: bool) -> void:
 	if is_dedicated_server:
@@ -920,6 +924,52 @@ func rpc_sync_player_state(peer_id: int, pos: Vector3, body_yaw: float, head_pit
 	if peer_id <= 1 or peer_id == _my_peer_id():
 		return
 	_update_or_spawn_remote_player(peer_id, pos, body_yaw, head_pitch, lean, stance_idx, team, callsign, eliminated)
+
+## v0.7: the server's 20 Hz batched snapshot of every player in the room (see SNAPSHOT_* and docs/NETWORK_EVENTS.md).
+## ints: SNAP_INTS per entry [peer, age_ms, packed_stance, flags]; floats: SNAP_FLOATS per entry
+## [x, y, z, yaw, pitch, lean, vx, vy, vz]. Entry server time = server_ms - age_ms (when the server got that state).
+@rpc("authority", "call_remote", "unreliable_ordered")
+func cl_snapshot(tick: int, server_ms: int, ints: PackedInt32Array, floats: PackedFloat32Array) -> void:
+	if is_dedicated_server:
+		return
+	client_apply_snapshot(tick, server_ms, ints, floats, Time.get_ticks_msec())
+
+## Buffers one snapshot (headless tests call this with their own local clock).
+func client_apply_snapshot(tick: int, server_ms: int, ints: PackedInt32Array, floats: PackedFloat32Array, local_ms: int) -> void:
+	var n := ints.size() / SNAP_INTS
+	if floats.size() != n * SNAP_FLOATS:
+		return
+	snapshots_received += 1
+	last_snapshot_tick = tick
+	remote_snapshots.note_server_time(server_ms, local_ms)
+	var me := _my_peer_id()
+	for i in n:
+		var pid := ints[i * SNAP_INTS]
+		if pid <= 1 or pid == me:
+			continue
+		var stance := ints[i * SNAP_INTS + 2]
+		var o := i * SNAP_FLOATS
+		var sample := {
+			"pos": Vector3(floats[o], floats[o + 1], floats[o + 2]),
+			"yaw": floats[o + 3], "pitch": floats[o + 4], "lean": floats[o + 5],
+			"vel": Vector3(floats[o + 6], floats[o + 7], floats[o + 8]),
+			"stance": stance, "elim": (ints[i * SNAP_INTS + 3] & SNAP_FLAG_ELIMINATED) != 0,
+		}
+		if remote_snapshots.push(pid, server_ms - ints[i * SNAP_INTS + 1], sample):
+			_note_remote_stance_bits(pid, stance)
+
+## Every frame on a client: draw each buffered remote player at its interpolated pose.
+func _client_tick_remote_snapshots(delta: float) -> void:
+	if remote_snapshots.ids().is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	for pid in remote_snapshots.ids():
+		var s: Dictionary = remote_snapshots.sample(int(pid), now, delta)
+		if s.is_empty():
+			continue
+		var info: Dictionary = players.get(int(pid), {})
+		_apply_remote_pose(int(pid), s["pos"], float(s["yaw"]), float(s["pitch"]), float(s["lean"]), int(s["stance"]),
+			String(info.get("team", "ALPHA")), String(info.get("name", "")), bool(s["elim"]), s["vel"], delta)
 
 # v0.4.5: knee-slide / Superman-dive fire lock for other peers. v0.5: the server enforces it first (shots fired
 # under the lock are never relayed); every receiving client still validates against the shooter's latest
@@ -1399,11 +1449,61 @@ func _server_on_player_state(pid: int, pos: Vector3, body_yaw: float, head_pitch
 	info["state"] = {"pos": pos, "yaw": body_yaw, "pitch": head_pitch, "lean": lean, "stance": stance_idx, "eliminated": eliminated, "t": now}
 	info["history"] = append_hit_history(info.get("history", []), now, pos, stance_idx)
 	_on_player_moved(rooms[rid], pid, pos)
-	_server_relay_player_state(rid, pid, info)
+	# v0.7: no per-packet relay any more; the room's next 20 Hz snapshot (_tick_room_snapshot) carries this state.
 
-func _server_relay_player_state(rid: String, pid: int, info: Dictionary) -> void:
-	var s: Dictionary = info["state"]
-	_send_room(rid, &"rpc_sync_player_state", [pid, s["pos"], s["yaw"], s["pitch"], s["lean"], s["stance"], info.get("team", "ALPHA"), info.get("name", ""), s["eliminated"] or not bool(info.get("alive", true))], pid)
+## =============================================================================================================
+## v0.7 BATCHED SNAPSHOTS. Once per SNAPSHOT_INTERVAL_MS (20 Hz) per room, the server sends ONE cl_snapshot to that
+## room's peers only, holding every room player's latest state: position, yaw/pitch/lean, packed stance, velocity
+## (from the last two history samples), eliminated flag, and the server time the state was received (as an age
+## relative to the snapshot's server_ms). Clients render remote players REMOTE_INTERP_DELAY_MS behind that clock.
+## Rooms with fewer than 2 players, or nobody who has sent a state yet, get nothing.
+## =============================================================================================================
+const SNAPSHOT_INTERVAL_MS: int = 50
+const SNAP_INTS: int = 4
+const SNAP_FLOATS: int = 9
+const SNAP_FLAG_ELIMINATED: int = 1
+const SNAP_MAX_AGE_MS: int = 65535
+var snapshots_sent: int = 0
+var snapshots_received: int = 0
+var last_snapshot_tick: int = -1
+var remote_snapshots = SnapshotInterpolatorScript.new()
+
+static func history_velocity(hist: Array) -> Vector3:
+	if hist.size() < 2:
+		return Vector3.ZERO
+	var a: Array = hist[hist.size() - 2]
+	var b: Array = hist[hist.size() - 1]
+	var dt := int(b[0]) - int(a[0])
+	if dt <= 0 or dt > MAX_INTERP_GAP_MS:
+		return Vector3.ZERO
+	return (Vector3(b[1]) - Vector3(a[1])) / (float(dt) / 1000.0)
+
+func _tick_room_snapshot(room: Dictionary) -> void:
+	var now := _rules_now()
+	var due := int(room.get("snap_next_ms", 0))
+	if now < due:
+		return
+	room["snap_next_ms"] = due + SNAPSHOT_INTERVAL_MS if now - due < SNAPSHOT_INTERVAL_MS else now + SNAPSHOT_INTERVAL_MS
+	if room["players"].size() < 2:
+		return
+	var ints := PackedInt32Array()
+	var floats := PackedFloat32Array()
+	for pid in room["players"].keys():
+		var info: Dictionary = players.get(int(pid), {})
+		var s: Dictionary = info.get("state", {})
+		if s.is_empty():
+			continue
+		var p: Vector3 = s["pos"]
+		var v := history_velocity(info.get("history", []))
+		var elim: bool = bool(s["eliminated"]) or not bool(info.get("alive", true))
+		ints.append_array(PackedInt32Array([int(pid), clampi(now - int(s["t"]), 0, SNAP_MAX_AGE_MS), int(s["stance"]), SNAP_FLAG_ELIMINATED if elim else 0]))
+		floats.append_array(PackedFloat32Array([p.x, p.y, p.z, float(s["yaw"]), float(s["pitch"]), float(s["lean"]), v.x, v.y, v.z]))
+	if ints.is_empty():
+		return
+	var tick := int(room.get("snap_tick", 0)) + 1
+	room["snap_tick"] = tick
+	snapshots_sent += 1
+	_send_room(String(room["id"]), &"cl_snapshot", [tick, now, ints, floats])
 
 func _server_on_fire(pid: int, origin: Vector3, dir: Vector3, speed: float) -> void:
 	var rid := String(peer_room.get(pid, ""))
@@ -1633,6 +1733,7 @@ func _server_tick(delta: float) -> void:
 		if room["players"].is_empty():
 			continue
 		_tick_room_match(room, delta)
+		_tick_room_snapshot(room)
 	_tick_net_pings()
 	_tick_lobby_state_file(delta)
 
@@ -2255,9 +2356,10 @@ const HIT_HISTORY_MS: int = 1200
 const HIT_HISTORY_MAX: int = 64
 const REWIND_CAP_MS: int = 250
 const REWIND_WINDOW_MS: int = 50 # jitter + the 20 Hz state interval
-## Remote avatars move 45% of the way to each 20 Hz state (NetworkLobby._update_or_spawn_remote_player): that
-## exponential smoothing trails the newest state by ~1.2 packets (~60 ms) plus ~half a tick of age -> ~75 ms.
-const REMOTE_INTERP_DELAY_MS: int = 75
+## v0.7: clients draw remote players exactly this far behind the server clock (cl_snapshot entries carry the
+## server time each state was received, the same stamp as the hit history), so the rewind is rtt + this.
+## Must equal SnapshotInterpolator.INTERP_DELAY_MS (test_snapshot_sync checks it).
+const REMOTE_INTERP_DELAY_MS: int = 100
 const DEFAULT_RTT_MS: int = 100 # until the first pong arrives
 const NET_PING_INTERVAL_MS: int = 1000
 const RTT_SMOOTHING: float = 0.25
@@ -2570,15 +2672,26 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 		return
 
 	_note_remote_stance_bits(peer_id, stance_idx)
+	var avatar := _ensure_remote_avatar(scene_root, peer_id, team, callsign)
+	var new_pos := avatar.global_position.lerp(pos, 0.45)
+	var est_vel := (new_pos - avatar.global_position) / 0.05
+	_apply_remote_pose(peer_id, new_pos, body_yaw, _head_pitch, lean, stance_idx, team, callsign, eliminated, est_vel, 0.05)
+
+func _ensure_remote_avatar(scene_root: Node3D, peer_id: int, team: String, callsign: String) -> StaticBody3D:
 	var avatar: StaticBody3D = remote_player_nodes.get(peer_id, null) as StaticBody3D
 	if avatar == null or not is_instance_valid(avatar):
 		avatar = _create_remote_player_avatar(peer_id, team, callsign)
 		scene_root.add_child(avatar)
 		remote_player_nodes[peer_id] = avatar
+	return avatar
 
-	var prev_pos := avatar.global_position
-	avatar.global_position = avatar.global_position.lerp(pos, 0.45)
-	var est_vel := (avatar.global_position - prev_pos) / 0.05
+## Places one remote avatar at an exact pose (v0.7 snapshot interpolation, or the legacy 45% lerp above).
+func _apply_remote_pose(peer_id: int, pos: Vector3, body_yaw: float, _head_pitch: float, lean: float, stance_idx: int, team: String, callsign: String, eliminated: bool, est_vel: Vector3, dt: float) -> void:
+	var scene_root := get_tree().current_scene as Node3D
+	if scene_root == null:
+		return
+	var avatar := _ensure_remote_avatar(scene_root, peer_id, team, callsign)
+	avatar.global_position = pos
 	avatar.rotation.y = body_yaw
 	avatar.rotation.z = 0.0
 	avatar.rotation.x = 0.0
@@ -2595,7 +2708,7 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 
 	var pro_rig := avatar.get_node_or_null("ProPaintballRig3D") as Node3D
 	if pro_rig != null and pro_rig.has_method("apply_pose"):
-		pro_rig.call("apply_pose", 0.05, {
+		pro_rig.call("apply_pose", dt, {
 			"velocity": est_vel,
 			"stance": base_stance,
 			"lean": lean,
@@ -2618,7 +2731,7 @@ func _update_or_spawn_remote_player(peer_id: int, pos: Vector3, body_yaw: float,
 				hopper_piv.global_transform = h_unit.global_transform
 
 	var tag := avatar.get_node_or_null("CallsignTag3D") as Label3D
-	if tag != null:
+	if tag != null and (tag.text != "[%s] %s" % [team, callsign] or String(tag.get_meta("team", "")) != team):
 		tag.text = "[%s] %s" % [team, callsign]
 		tag.set_meta("team", team)
 		tag.modulate = nametag_color(team)
@@ -2669,6 +2782,7 @@ func _create_remote_player_avatar(peer_id: int, team: String, callsign: String) 
 
 func _remove_remote_player_node(peer_id: int) -> void:
 	remote_move_lock_state.erase(peer_id)
+	remote_snapshots.erase(peer_id)
 	if remote_player_nodes.has(peer_id):
 		var node: Node = remote_player_nodes[peer_id]
 		if is_instance_valid(node):
@@ -2676,6 +2790,7 @@ func _remove_remote_player_node(peer_id: int) -> void:
 		remote_player_nodes.erase(peer_id)
 
 func _clear_all_remote_player_nodes() -> void:
+	remote_snapshots.clear()
 	for pid in remote_player_nodes.keys():
 		var node: Node = remote_player_nodes[pid]
 		if is_instance_valid(node):

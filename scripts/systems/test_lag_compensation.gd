@@ -92,7 +92,7 @@ func _test_rtt_measurement() -> void:
 	_check(int(L.players[1]["rtt_ms"]) == 140, "replayed pong stamp ignored")
 	_ping(1, 60)
 	_check(int(L.players[1]["rtt_ms"]) == 120, "EWMA smoothing 140 -> 120 after a 60 ms sample (%s)" % L.players[1]["rtt_ms"])
-	_check(int(L.rewind_window({"rtt_ms": 120})["rewind_ms"]) == 195, "rewind = rtt + 75 ms interp")
+	_check(L.REMOTE_INTERP_DELAY_MS == 100 and int(L.rewind_window({"rtt_ms": 120})["rewind_ms"]) == 220, "rewind = rtt + 100 ms interp (v0.7 snapshot delay)")
 	_check(int(L.rewind_window({"rtt_ms": 900})["rewind_ms"]) == L.REWIND_CAP_MS and L.REWIND_CAP_MS == 250, "rewind capped at 250 ms")
 
 func _test_history_buffer() -> void:
@@ -119,7 +119,7 @@ func _test_moving_target(rtt: int, room: String) -> void:
 	var t0 := clock_ms + 10
 	_run(v, t0)
 	var now := t0 + 1000
-	# The shooter's screen showed the victim rtt + 75 ms in the past; the client fires at that pose.
+	# The shooter's screen showed the victim rtt + REMOTE_INTERP_DELAY_MS (100) in the past; the client fires at that pose.
 	var seen := _pos_at(t0, now - rtt - L.REMOTE_INTERP_DELAY_MS)
 	var hit := seen + Vector3(0, 1.2, 0)
 	_check(not L.point_in_stance_box(hit, _pos_at(t0, now), 0), "hit is %.2f m behind the victim's latest pose (unrewound check would reject)" % (_pos_at(t0, now).x - seen.x))
@@ -127,7 +127,7 @@ func _test_moving_target(rtt: int, room: String) -> void:
 	L._server_on_fire(s, spos + Vector3(0, 1.4, 0), (hit - spos - Vector3(0, 1.4, 0)).normalized(), 290.0)
 	_set_clock(now)
 	var verdict: Dictionary = L._server_validate_hit(s, v, hit)
-	_check(bool(verdict.get("ok")) and int(verdict["rewind_ms"]) == rtt + 75 and verdict["los"] == "clear", "rewound hit accepted (%s)" % [verdict])
+	_check(bool(verdict.get("ok")) and int(verdict["rewind_ms"]) == rtt + L.REMOTE_INTERP_DELAY_MS and verdict["los"] == "clear", "rewound hit accepted (%s)" % [verdict])
 	(L.outbound_capture as Array).clear()
 	L._server_on_hit_report(s, v, hit)
 	_check(not _alive(v), "victim eliminated")
@@ -150,13 +150,13 @@ func _test_over_cap(room: String) -> void:
 	var t0 := clock_ms + 10
 	_run(v, t0)
 	var now := t0 + 1000
-	var hit := _pos_at(t0, now - 600 - 75) + Vector3(0, 1.2, 0)
+	var hit := _pos_at(t0, now - 600 - L.REMOTE_INTERP_DELAY_MS) + Vector3(0, 1.2, 0)
 	_set_clock(now - 40)
 	L._server_on_fire(s, spos + Vector3(0, 1.4, 0), (hit - spos - Vector3(0, 1.4, 0)).normalized(), 290.0)
 	_set_clock(now)
 	var before := _rej("outside_hitbox")
 	L._server_on_hit_report(s, v, hit)
-	_check(_alive(v) and _rej("outside_hitbox") == before + 1, "hit on the 675 ms-old pose rejected (outside_hitbox)")
+	_check(_alive(v) and _rej("outside_hitbox") == before + 1, "hit on the 700 ms-old pose rejected (outside_hitbox)")
 	# Inside the cap the same high-ping shooter still gets the full 250 ms.
 	var ok_hit := _pos_at(t0, now - 250) + Vector3(0, 1.2, 0)
 	L._server_on_fire(s, spos + Vector3(0, 1.4, 0), (ok_hit - spos - Vector3(0, 1.4, 0)).normalized(), 290.0)
