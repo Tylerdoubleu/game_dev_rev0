@@ -151,6 +151,7 @@ func _test_elimination() -> void:
 	_check(String(m.get("winner")) != "" and bool(m.call("player_won")), "3-1: you win")
 	_check(String(runner.get("state")) == "results", "results")
 	var r: Dictionary = runner.get("last_result")
+	_check(String(arena.get("round_label").text).contains("YOU 3 : 1 BOTS"), "HUD shows the final 3 : 1")
 	_check(int(r.get("rounds_won", 0)) == 3 and int(r.get("rounds_lost", 0)) == 1, "result rounds 3-1")
 	var out: Dictionary = runner.get("last_outcome")
 	_check(out.get("new_stars", []) == [1, 2], "stars 1 + 2 (%s)" % str(out.get("new_stars")))

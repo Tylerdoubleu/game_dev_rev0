@@ -1610,6 +1610,7 @@ func start_solo_ffa(opts: Dictionary = {}) -> Node:
 	add_child(ffa_match)
 	ffa_match.call("start", self, player, opts)
 	ffa_match.connect("standings_changed", _on_ffa_standings_changed)
+	ffa_match.connect("round_over", func(_w: bool, _rw: int, _rl: int): _refresh_ffa_round_label()) # elimination score line
 	_refresh_ffa_round_label()
 	if lobby_canvas != null:
 		_set_lobby_overlay_visible(false)
