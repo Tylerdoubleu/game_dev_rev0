@@ -11,6 +11,7 @@ const BunkerCalloutsScript = preload("res://scripts/systems/bunker_callouts.gd")
 const MouseCaptureGuardScript = preload("res://scripts/systems/mouse_capture_guard.gd")
 const BuildStampScript = preload("res://scripts/systems/build_stamp.gd")
 const SoloFfaMatchScript = preload("res://scripts/bots/solo_ffa_match.gd")
+const GauntletRunScript = preload("res://scripts/career/gauntlet_run.gd")
 
 var player: Node3D
 var hud_label: Label
@@ -115,7 +116,10 @@ func _ready() -> void:
 		if not url_opts.is_empty():
 			_start_ffa_when_lobby_ready.call_deferred(url_opts)
 		elif not ffa_rematch_opts.is_empty():
-			start_solo_ffa.call_deferred(ffa_rematch_opts)
+			if String(ffa_rematch_opts.get("kind", "")) == "gauntlet":
+				start_career_gauntlet.call_deferred(ffa_rematch_opts)
+			else:
+				start_solo_ffa.call_deferred(ffa_rematch_opts)
 
 func _build_environment_and_turf() -> void:
 	var env_node := WorldEnvironment.new()
@@ -429,7 +433,7 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 	if round_label == null:
 		return
 	if ffa_match != null:
-		round_label.text = ffa_round_text(ffa_match.call("standings"), int(ffa_match.get("kills_to_win")), time_left)
+		round_label.text = solo_hud_text(time_left)
 		return
 	var net_tag := "ONLINE [%s]" % NetworkLobby.active_room.to_upper() if NetworkLobby.is_online_client() else ("SOLO+NPCs" if NetworkLobby.fill_bots_enabled else "PVP ONLY")
 	var flag_hud_status := "AT 50"
@@ -470,7 +474,19 @@ func _on_ffa_standings_changed(_rows: Array) -> void:
 
 func _refresh_ffa_round_label() -> void:
 	if ffa_match != null and round_label != null:
-		round_label.text = ffa_round_text(ffa_match.call("standings"), int(ffa_match.get("kills_to_win")), GameManager.round_time_left)
+		round_label.text = solo_hud_text(GameManager.round_time_left)
+
+## v0.7 career: elimination / gauntlet matches bring their own first HUD line (hud_text); TDM keeps ffa_round_text.
+func solo_hud_text(time_left: float) -> String:
+	if ffa_match == null:
+		return ""
+	var own := String(ffa_match.call("hud_text")) if ffa_match.has_method("hud_text") else ""
+	if own.is_empty():
+		return ffa_round_text(ffa_match.call("standings"), int(ffa_match.get("kills_to_win")), time_left)
+	return (own + "\n" +
+		"Move: WASD + Shift Break Out | E Peek (Active Hand, X Swap) | Q Crouch (Shift+Q Slide) | C Prone (Shift+C Dive)\n" +
+		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
+		"R Pod Reload | F Callout Bunker | [M] Scoreboard | [TAB] Menu")
 
 func _on_status_banner(msg: String, color: Color) -> void:
 	if ffa_match != null and msg.contains("Go Get Center Flag"):
@@ -773,6 +789,18 @@ func _build_tournament_lobby_overlay() -> void:
 	ffa_tier_btn.pressed.connect(_cycle_ffa_tier)
 	row_ffa.add_child(ffa_tier_btn)
 	_cycle_ffa_tier(false)
+	# v0.7 solo career (Bluey): the career screen (tiers, stars, challenges).
+	var career_btn := Button.new()
+	career_btn.name = "CareerButton"
+	career_btn.text = "CAREER"
+	career_btn.custom_minimum_size = Vector2(150, 40)
+	career_btn.add_theme_font_size_override("font_size", 16)
+	career_btn.add_theme_color_override("font_color", Color(0.35, 1.0, 0.55))
+	career_btn.pressed.connect(func() -> void:
+		var cr := get_node_or_null("/root/CareerRunner")
+		if cr != null:
+			cr.call("open_career"))
+	row_ffa.add_child(career_btn)
 
 	_refresh_lobby_button_highlights()
 	_on_lobby_state_changed(NetworkLobby.get_lobby_state_snapshot())
@@ -1004,9 +1032,19 @@ func _on_match_over(loser_name: String, winner_label: String) -> void:
 		scoreboard_canvas.visible = true
 	_refresh_scoreboard_text()
 	if ffa_match != null:
-		_on_status_banner("MATCH OVER! %s (first to %d) — Press [T] for Rematch" % ["YOU WIN" if bool(ffa_match.call("player_won")) else "BOTS WIN", int(ffa_match.get("kills_to_win"))], Color(1.0, 0.88, 0.22))
+		_on_status_banner(solo_match_over_text(), Color(1.0, 0.88, 0.22))
 		return
 	_on_status_banner("MATCH OVER! %s hit 10 Deaths — %s WINS! Press [T] for Rematch" % [loser_name, winner_label], Color(1.0, 0.88, 0.22))
+
+func solo_match_over_text() -> String:
+	var won := bool(ffa_match.call("player_won"))
+	var o: Dictionary = ffa_match.get("start_opts") if "start_opts" in ffa_match else {}
+	var tail := " — CAREER RESULTS COMING UP" if o.has("career_challenge") else " — Press [T] for Rematch"
+	if ffa_match is GauntletRunScript:
+		return "RUN OVER! %s%s" % ["ALL %d POPPED" % int(ffa_match.get("pops_needed")) if won else "OUT OF TIME", tail]
+	if String(ffa_match.get("mode")) == SoloFfaMatchScript.MODE_ELIMINATION:
+		return "MATCH OVER! %s (%d-%d in rounds)%s" % ["YOU WIN" if won else "BOTS WIN", int(ffa_match.get("rounds_won")), int(ffa_match.get("rounds_lost")), tail]
+	return "MATCH OVER! %s (first to %d)%s" % ["YOU WIN" if won else "BOTS WIN", int(ffa_match.get("kills_to_win")), tail]
 
 func _refresh_scoreboard_text() -> void:
 	if scoreboard_body_label == null:
@@ -1372,6 +1410,8 @@ func _process(delta: float) -> void:
 
 ## Used by PlayerController3D: a live one-life CTF round (server state via the MatchHudClient) means no local respawn.
 func is_one_life_round_live() -> bool:
+	if ffa_match != null and ffa_match.has_method("is_one_life_round_live") and bool(ffa_match.call("is_one_life_round_live")):
+		return true # v0.7 career elimination: a hit means spectate until the next round
 	return match_client != null and bool(match_client.call("is_one_life_round_live"))
 
 ## v0.5: the legacy single Center-50 flag (and its local pickup/hang) only exists in offline non-CTF play. In CTF and
@@ -1573,10 +1613,58 @@ func start_solo_ffa(opts: Dictionary = {}) -> Node:
 	_refresh_ffa_round_label()
 	if lobby_canvas != null:
 		_set_lobby_overlay_visible(false)
+	if scoreboard_canvas != null:
+		scoreboard_canvas.visible = false # a [T] rematch / career retry must not keep the last match's board up
 	if has_method("clear_gameplay_input_blocks"):
 		call("clear_gameplay_input_blocks", "solo_ffa")
-	_on_status_banner("YOU vs BOTS — TEAM DEATHMATCH — you vs %d %s bots, first team to %d eliminations. Break on the horn!" % [
-		int(opts.get("bots", SoloFfaMatchScript.DEFAULT_BOTS)), String(opts.get("tier", ffa_tier)).to_upper(), int(opts.get("kills_to_win", SoloFfaMatchScript.KILLS_TO_WIN))], Color(1.0, 0.62, 0.2))
+	if String(opts.get("mode", "")) == SoloFfaMatchScript.MODE_ELIMINATION:
+		_on_status_banner("YOU vs BOTS — ELIMINATION — one life a round vs %d %s bots, first to %d rounds. Break on the horn!" % [
+			int(opts.get("bots", SoloFfaMatchScript.DEFAULT_BOTS)), String(opts.get("tier", ffa_tier)).to_upper(), int(opts.get("rounds_to_win", 3))], Color(1.0, 0.62, 0.2))
+	else:
+		_on_status_banner("YOU vs BOTS — TEAM DEATHMATCH — you vs %d %s bots, first team to %d eliminations. Break on the horn!" % [
+			int(opts.get("bots", SoloFfaMatchScript.DEFAULT_BOTS)), String(opts.get("tier", ffa_tier)).to_upper(), int(opts.get("kills_to_win", SoloFfaMatchScript.KILLS_TO_WIN))], Color(1.0, 0.62, 0.2))
+	_attach_career(opts)
+	return ffa_match
+
+## v0.7 career (Bluey): a career event (opts.career_challenge) hands its match to /root/CareerRunner to judge.
+func _attach_career(opts: Dictionary) -> void:
+	if String(opts.get("career_challenge", "")).is_empty():
+		return
+	var cr := get_node_or_null("/root/CareerRunner")
+	if cr != null and cr.has_method("attach_match"):
+		cr.call("attach_match", self, ffa_match, opts)
+
+## v0.7 career GAUNTLET ("Run the Snake"): pop N of the practice-range peekers on the clock. Offline only.
+## opts: pops (5), time_limit_s (180), career_challenge. Survives [T] like the solo match (ffa_rematch_opts).
+func start_career_gauntlet(opts: Dictionary = {}) -> Node:
+	if NetworkLobby.is_online_client() or NetworkLobby.is_dedicated_server:
+		_on_status_banner("CAREER is offline only — leave the room first", Color(1.0, 0.5, 0.3))
+		return null
+	stop_solo_ffa()
+	ffa_rematch_opts = opts.duplicate()
+	if woodsball_map_root != null and is_instance_valid(woodsball_map_root):
+		switch_arena_map("speedball")
+	NetworkLobby.local_team = SoloFfaMatchScript.PLAYER_TEAM
+	NetworkLobby.fill_bots_enabled = true # the practice peekers only pop up with fill bots on
+	if fill_bots_check != null:
+		fill_bots_check.button_pressed = true
+	_set_opfor_bots_enabled(true)
+	if player != null and player.has_method("respawn_at_team_gate"):
+		player.call("respawn_at_team_gate", NetworkLobby.local_team)
+	ffa_match = GauntletRunScript.new()
+	ffa_match.name = "CareerGauntlet"
+	add_child(ffa_match)
+	ffa_match.call("start", self, player, opts)
+	ffa_match.connect("standings_changed", _on_ffa_standings_changed)
+	_refresh_ffa_round_label()
+	if lobby_canvas != null:
+		_set_lobby_overlay_visible(false)
+	if scoreboard_canvas != null:
+		scoreboard_canvas.visible = false
+	if has_method("clear_gameplay_input_blocks"):
+		call("clear_gameplay_input_blocks", "career_gauntlet")
+	_on_status_banner("CAREER — RUN THE SNAKE — pop %d peekers before the clock runs out. Clock starts on the horn!" % int(opts.get("pops", 5)), Color(1.0, 0.62, 0.2))
+	_attach_career(opts)
 	return ffa_match
 
 func stop_solo_ffa() -> void:

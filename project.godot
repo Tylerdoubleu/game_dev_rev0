@@ -23,6 +23,7 @@ NetworkLobby="*res://scripts/autoload/network_lobby.gd"
 LobbyEntryFlow="*res://scripts/autoload/lobby_entry_flow.gd"
 MovementAudioDirector="*res://scripts/autoload/movement_audio_director.gd"
 SoloLauncher="*res://scripts/systems/solo_launcher.gd"
+CareerRunner="*res://scripts/career/career_runner.gd"
 
 [display]
 

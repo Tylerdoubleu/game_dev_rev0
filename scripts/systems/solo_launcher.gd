@@ -24,7 +24,13 @@ var _pending: Dictionary = {}
 
 ## Unknown tiers fall back to Amateur; bots are clamped to 1..7, kills_to_win to >= 1.
 func start_ffa(tier: String = DEFAULT_TIER, bots: int = DEFAULT_BOTS, kills_to_win: int = DEFAULT_KILLS_TO_WIN) -> void:
-	var opts := make_opts(tier, bots, kills_to_win)
+	start_event(make_opts(tier, bots, kills_to_win))
+
+## v0.7 career (Bluey): start any solo event. opts.kind "gauntlet" -> arena.start_career_gauntlet(opts); anything
+## else ("tdm" / "elimination") -> arena.start_solo_ffa(opts). Extra keys (mode, rounds_to_win, career_challenge,
+## pops, time_limit_s) pass through untouched; tier / bots / kills_to_win are sanitised like make_opts.
+func start_event(opts: Dictionary) -> void:
+	opts = event_opts(opts)
 	var flow := get_node_or_null("/root/LobbyEntryFlow")
 	if flow != null and flow.has_method("close_browser"):
 		flow.call("close_browser")
@@ -60,13 +66,22 @@ func _start_pending() -> void:
 	_pending = {}
 
 func _launch(arena: Node, opts: Dictionary) -> void:
-	last_match = arena.call("start_solo_ffa", opts)
+	if String(opts.get("kind", "")) == "gauntlet" and arena.has_method("start_career_gauntlet"):
+		last_match = arena.call("start_career_gauntlet", opts)
+	else:
+		last_match = arena.call("start_solo_ffa", opts)
 	ffa_started.emit(last_match)
 
 ## The opts dictionary speedball_arena_builder.start_solo_ffa() takes.
 static func make_opts(tier: String = DEFAULT_TIER, bots: int = DEFAULT_BOTS, kills_to_win: int = DEFAULT_KILLS_TO_WIN) -> Dictionary:
 	var t := tier.strip_edges().to_lower()
 	return {"tier": t if t in TIERS else DEFAULT_TIER, "bots": clampi(bots, 1, 7), "kills_to_win": maxi(kills_to_win, 1)}
+
+static func event_opts(opts: Dictionary) -> Dictionary:
+	var o := opts.duplicate()
+	var base := make_opts(String(opts.get("tier", DEFAULT_TIER)), int(opts.get("bots", DEFAULT_BOTS)), int(opts.get("kills_to_win", DEFAULT_KILLS_TO_WIN)))
+	o.merge(base, true)
+	return o
 
 ## The running arena: the current scene, else any root child with start_solo_ffa().
 func find_arena() -> Node:

@@ -15,6 +15,10 @@ const BunkerGraphScript = preload("res://scripts/bots/bunker_graph.gd")
 
 signal standings_changed(rows: Array)
 signal ffa_match_over(winner_name: String)
+## v0.7 career: every credited elimination ({"shooter", "victim", "zone", "feed", "by_player", "on_player"}).
+signal kill_logged(entry: Dictionary)
+## v0.7 career elimination mode: a one-life round ended.
+signal round_over(player_won_round: bool, rounds_won: int, rounds_lost: int)
 
 const DEFAULT_BOTS: int = 4
 const KILLS_TO_WIN: int = 10
@@ -68,6 +72,19 @@ var bot_team: String = BOT_TEAM
 ## Every credited elimination, oldest first: {"shooter", "victim", "zone", "feed"}. The kill feed line is built from
 ## the same shooter / victim names the standings credit, so the feed and the standings can never disagree.
 var kill_log: Array = []
+## v0.7 career modes. "tdm" (default: first team to kills_to_win) or "elimination": one life a round, bots stay down,
+## first to rounds_to_win rounds. The career runner reads these and the opts it was started with.
+const MODE_TDM := "tdm"
+const MODE_ELIMINATION := "elimination"
+const ROUND_INTERMISSION_S := 2.5
+var mode: String = MODE_TDM
+var rounds_to_win: int = 3
+var rounds_won: int = 0
+var rounds_lost: int = 0
+var round_no: int = 1
+var round_live: bool = false
+var start_opts: Dictionary = {}
+var _round_gen: int = 0
 
 func combatants() -> Array:
 	var out: Array = []
@@ -84,6 +101,13 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 	player = p_player
 	tier = String(opts.get("tier", tier))
 	kills_to_win = int(opts.get("kills_to_win", KILLS_TO_WIN))
+	start_opts = opts.duplicate()
+	start_opts.erase("graph")
+	mode = MODE_ELIMINATION if String(opts.get("mode", MODE_TDM)) == MODE_ELIMINATION else MODE_TDM
+	rounds_to_win = maxi(1, int(opts.get("rounds_to_win", 3)))
+	rounds_won = 0
+	rounds_lost = 0
+	round_no = 1
 	var count := clampi(int(opts.get("bots", DEFAULT_BOTS)), 1, 7)
 	player_team = String(opts.get("player_team", PLAYER_TEAM))
 	if not player_team in ["ALPHA", "BRAVO"]:
@@ -136,6 +160,7 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 		bots.append(b)
 		scores[cs] = {"kills": 0, "deaths": 0, "is_player": false}
 	active = true
+	round_live = true
 	GameManager.register_round_start(count)
 	_emit()
 
@@ -219,13 +244,21 @@ func on_bot_eliminated(bot: Node, shooter: Node, zone: String = "") -> void:
 		scores[killer]["kills"] += 1
 	_log_kill(killer, victim, zone)
 	_emit()
+	if mode == MODE_ELIMINATION:
+		bot.set("respawn_timer", INF) # stays down until the next round (reset_for_round)
+		if round_live and _live_bots() == 0:
+			_end_round(true)
+		return
 	_check_win(killer)
 
 ## Feed: SHOOTER SPLATTED VICTIM [zone] (same names as the standings rows).
 func _log_kill(killer: String, victim: String, zone: String) -> void:
 	var line := BotPlayerScript.kill_feed_line(killer if not killer.is_empty() else "?", victim, zone)
-	kill_log.append({"shooter": killer, "victim": victim, "zone": zone, "feed": line})
+	var entry := {"shooter": killer, "victim": victim, "zone": zone, "feed": line,
+		"by_player": killer == _player_name, "on_player": victim == _player_name}
+	kill_log.append(entry)
 	IntelBus.intel_feed_updated.emit(line)
+	kill_logged.emit(entry)
 
 func _on_player_eliminated(killer_label: String) -> void:
 	if not active:
@@ -243,7 +276,74 @@ func _on_player_eliminated(killer_label: String) -> void:
 		zone = killer_label.substr(lb + 1, killer_label.length() - lb - 2)
 	_log_kill(killer, _player_name, zone)
 	_emit()
+	if mode == MODE_ELIMINATION:
+		if round_live:
+			_end_round(false)
+		return
 	_check_win(killer)
+
+# ------------------------------------------------------------ v0.7 elimination rounds --------
+
+## The player controller asks the scene (arena.is_one_life_round_live) - while true a hit means spectate, not respawn.
+func is_one_life_round_live() -> bool:
+	return active and mode == MODE_ELIMINATION
+
+func _live_bots() -> int:
+	var n := 0
+	for b in bots:
+		if is_instance_valid(b) and not bool(b.get("is_eliminated")):
+			n += 1
+	return n
+
+func _end_round(player_won_round: bool) -> void:
+	round_live = false
+	if player_won_round:
+		rounds_won += 1
+	else:
+		rounds_lost += 1
+	round_over.emit(player_won_round, rounds_won, rounds_lost)
+	IntelBus.intel_feed_updated.emit("ROUND %d %s  -  YOU %d : %d BOTS" % [round_no, "WON" if player_won_round else "LOST", rounds_won, rounds_lost])
+	if rounds_won >= rounds_to_win or rounds_lost >= rounds_to_win:
+		winner = _player_name if rounds_won >= rounds_to_win else BOTS_WINNER
+		active = false
+		GameManager.end_match("Elimination", "%s (%d-%d)" % ["YOU" if winner == _player_name else "BOTS", maxi(rounds_won, rounds_lost), mini(rounds_won, rounds_lost)])
+		ffa_match_over.emit(winner)
+		return
+	# Freeze the field: no horn until the next round starts, everyone back to their own breakout.
+	GameManager.round_active = false
+	GameManager.breakout_horn_sounded = false
+	_reset_positions()
+	_round_gen += 1
+	var gen := _round_gen
+	if is_inside_tree():
+		get_tree().create_timer(ROUND_INTERMISSION_S).timeout.connect(_on_intermission_done.bind(gen))
+
+func _on_intermission_done(gen: int) -> void:
+	if gen == _round_gen:
+		start_next_round()
+
+## Bots back on their breakout spots (WAIT_HORN), the player back at the own gate.
+func _reset_positions() -> void:
+	var spawns := team_spawns(bot_team)
+	for i in bots.size():
+		var b: Node = bots[i]
+		if is_instance_valid(b):
+			var sp: Dictionary = spawns[i % spawns.size()]
+			b.call("reset_for_round", sp["pos"], float(sp["yaw"]))
+	if player != null and is_instance_valid(player):
+		if player.has_method("set_spectating"):
+			player.call("set_spectating", false)
+		if player.has_method("respawn_at_team_gate"):
+			player.call("respawn_at_team_gate", player_team)
+
+## Next one-life round (called by the intermission timer; tests call it directly).
+func start_next_round() -> void:
+	if not active or mode != MODE_ELIMINATION or round_live:
+		return
+	round_no += 1
+	round_live = true
+	GameManager.register_round_start(bots.size())
+	_emit()
 
 func _bot_named(n: String) -> Node:
 	for b in bots:
@@ -333,11 +433,22 @@ func player_respawn_zones() -> Array[Dictionary]:
 			break
 	return out
 
+## v0.7 career: HUD line for elimination (the arena keeps its TDM line when this is empty).
+func hud_text() -> String:
+	if mode != MODE_ELIMINATION:
+		return ""
+	return "YOU vs BOTS — ELIMINATION  |  ROUND %d  |  YOU %d : %d BOTS  |  FIRST TO %d  |  BOTS UP: %d / %d" % [
+		round_no, rounds_won, rounds_lost, rounds_to_win, _live_bots(), bots.size()]
+
 func scoreboard_lines() -> Array[String]:
 	var lines: Array[String] = []
 	var t := team_scores()
-	lines.append("YOU vs BOTS  —  TEAM DEATHMATCH  —  first team to %d eliminations  (%s bots)" % [kills_to_win, BotDifficultyScript.make(tier).display_name])
-	lines.append("YOU %d   —   BOTS %d" % [int(t["you"]), int(t["bots"])])
+	if mode == MODE_ELIMINATION:
+		lines.append("YOU vs BOTS  —  ELIMINATION  —  one life a round, first to %d rounds  (%s bots)" % [rounds_to_win, BotDifficultyScript.make(tier).display_name])
+		lines.append("ROUND %d   —   YOU %d : %d BOTS" % [round_no, rounds_won, rounds_lost])
+	else:
+		lines.append("YOU vs BOTS  —  TEAM DEATHMATCH  —  first team to %d eliminations  (%s bots)" % [kills_to_win, BotDifficultyScript.make(tier).display_name])
+		lines.append("YOU %d   —   BOTS %d" % [int(t["you"]), int(t["bots"])])
 	lines.append("----------------------------------------------------------------------")
 	lines.append("#   NAME                            KILLS     DEATHS")
 	var i := 1

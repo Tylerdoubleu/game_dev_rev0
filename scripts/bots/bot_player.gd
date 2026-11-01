@@ -1072,6 +1072,35 @@ func respawn() -> void:
 	bot_respawned.emit(self)
 	_start_break()
 
+## v0.7 career elimination rounds: stand back up at a breakout spot and wait for the next horn (no auto-respawn
+## while dead: the round controller parks dead bots with respawn_timer = INF and calls this between rounds).
+func reset_for_round(pos: Vector3, y: float) -> void:
+	is_eliminated = false
+	respawn_timer = 0.0
+	collision_layer = 1
+	collision_mask = 1
+	global_position = Vector3(pos.x, 0.05, pos.z)
+	velocity = Vector3.ZERO
+	ground_speed = 0.0
+	slide_timer = 0.0
+	dive_timer = 0.0
+	burst_left = 0
+	has_move_goal = false
+	yaw = y
+	rotation.y = y
+	aim_pitch = 0.0
+	_align_wait = 0.0
+	stance = MovementRules.STANCE_STANDING
+	current_target = null
+	visible_targets.clear()
+	last_seen_time = -1000.0
+	target_seen_since = -1.0
+	reached_assigned = false
+	_respawn_flash_timer = SPAWN_PROTECT_S
+	if graph != null:
+		assigned_node = _respawn_bunker()
+	_enter(State.WAIT_HORN)
+
 ## After a respawn: the closest bunker of this bot's role (FFA has no sides), else the closest bunker.
 func _respawn_bunker() -> int:
 	var best := -1
