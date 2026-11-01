@@ -172,6 +172,13 @@ func _run_move() -> void:
 		_finish()
 
 const NET_PEER := 4243
+var RECOVERY_MS := 100 # NetworkLobby.REMOTE_SLIDE_FIRE_RECOVERY_SEC, read from the script in _network_checks
+var recovery_cleared_ms := 0
+var recovery_done := false
+var recovery_rejects := 0
+
+func _recovery_elapsed_ms() -> int:
+	return Time.get_ticks_msec() - recovery_cleared_ms
 func _net_update(stance_bits: int) -> void:
 	lobby.call("_update_or_spawn_remote_player", NET_PEER, Vector3(4.0, 0.0, 12.0), 0.0, 0.0, 0.0, stance_bits, "BRAVO", "Cheaty_McSlide", false)
 
@@ -194,14 +201,37 @@ func _network_checks() -> void:
 		_check(not _net_fire(), "Network: shot right after the dive bit clears is rejected (recovery)")
 		_check(int(lobby.get("rejected_movement_lock_shots")) - rej0 == 3, "Network: 3 rejected shots counted")
 		_check(not bool(lobby.call("is_remote_fire_allowed", NET_PEER)), "Network: is_remote_fire_allowed false during recovery")
-	elif t == 10:
-		_check(_net_fire(), "Network: after the 0.10s remote recovery the peer can fire again")
-		_net_update(1 | 8 | 4)
-		_check(_net_fire(), "Network: crouched + tucked + left-handed bits do not block firing")
-		var before := _spawned()
-		lobby.call("rpc_fire_paintball", Vector3(4.0, 1.4, 12.0), Vector3(0, 0, -1), 280.0, 777777)
-		_check(_spawned() == before + 1, "Network: unknown peer (no state yet) is not blocked")
-		_finish()
+		recovery_cleared_ms = int((lobby.get("remote_move_lock_state") as Dictionary)[NET_PEER]["cleared_ms"])
+		recovery_rejects = 0
+		recovery_done = false
+		RECOVERY_MS = int(round(float(lobby.get_script().get_script_constant_map().get("REMOTE_SLIDE_FIRE_RECOVERY_SEC", 0.10)) * 1000.0))
+	elif t > 1 and not recovery_done:
+		# NetworkLobby times the remote recovery on the wall clock (Time.get_ticks_msec), not physics frames: a fixed
+		# 10-frame wait raced it (physics catch-up ticks can run 10 frames in < 100 ms). Poll the real clock instead and
+		# assert the lock holds on every frame inside the window (elapsed read AFTER the call, so no false alarm).
+		var allowed := bool(lobby.call("is_remote_fire_allowed", NET_PEER))
+		var elapsed := _recovery_elapsed_ms()
+		if allowed and elapsed < RECOVERY_MS:
+			_check(false, "Network: remote fire allowed only %d ms after the dive bit cleared (< %d ms)" % [elapsed, RECOVERY_MS])
+			_finish()
+		elif not allowed:
+			recovery_rejects += 1
+			if t > 2000:
+				_check(false, "Network: recovery window never elapsed")
+				_finish()
+		else:
+			recovery_done = true
+			_check(true, "Network: lock held on all %d polled frames, released at %d ms" % [recovery_rejects, elapsed])
+			_after_recovery()
+
+func _after_recovery() -> void:
+	_check(_net_fire(), "Network: after the 0.10s remote recovery the peer can fire again (%d ms)" % _recovery_elapsed_ms())
+	_net_update(1 | 8 | 4)
+	_check(_net_fire(), "Network: crouched + tucked + left-handed bits do not block firing")
+	var before := _spawned()
+	lobby.call("rpc_fire_paintball", Vector3(4.0, 1.4, 12.0), Vector3(0, 0, -1), 280.0, 777777)
+	_check(_spawned() == before + 1, "Network: unknown peer (no state yet) is not blocked")
+	_finish()
 
 func _finish() -> void:
 	if failures.is_empty():
