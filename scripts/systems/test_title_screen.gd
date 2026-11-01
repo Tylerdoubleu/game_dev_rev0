@@ -1,5 +1,5 @@
 extends SceneTree
-## v0.6.4 (Ren): TitleScreen - title over the hero backdrop (live loop or still), 2 caption-less prints, SINGLE PLAYER (shared LobbyBrowser.launch_single_player
+## v0.6.4 (Ren): TitleScreen (+ v0.7 CAREER -> CareerRunner.open_career, checked on a stub) - title over the hero backdrop (live loop or still), 2 caption-less prints, SINGLE PLAYER (shared LobbyBrowser.launch_single_player
 ## path, ROOKIE / AMATEUR) and MULTIPLAYER (LobbyEntryFlow.open_browser), fits 1280x720. Run after an import:
 ##   godot --headless --path . -s scripts/systems/test_title_screen.gd
 var f := 0
@@ -8,6 +8,7 @@ var ts: TitleScreen
 var asked: Array = []
 var multi := 0
 const TAG_CFG := "user://test_title_player_tag.cfg"
+var career_stub: CareerStub
 const TOKEN := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 ## ProfileApi with canned replies (Tim's reply handling as-is), no user:// I/O.
@@ -27,6 +28,13 @@ class FakeApi extends ProfileApi:
 				"set_callsign": r = [200, {"profile_id": "p_1", "callsign": body["callsign"]}]
 				_: r = [200, {"profile_id": "p_1", "callsign": null}]
 		_on_reply(action, r[0], r[1].duplicate())
+
+## Stands in for /root/CareerRunner: counts open_career() calls.
+class CareerStub extends Node:
+	var opened := 0
+	func open_career() -> Control:
+		opened += 1
+		return null
 
 func _new_title(api: ProfileApi = null) -> TitleScreen:
 	var t := TitleScreen.new()
@@ -102,7 +110,7 @@ func _process(_d: float) -> bool:
 		held.free()
 		DirAccess.remove_absolute(ProjectSettings.globalize_path("user://title_loop_probe.tscn"))
 		ts.hero_source = expect_src
-		_check(ts.single_btn.text == "SINGLE PLAYER" and ts.multi_btn.text == "MULTIPLAYER", "two big buttons")
+		_check(ts.single_btn.text == "SINGLE PLAYER" and ts.multi_btn.text == "MULTIPLAYER" and ts.career_btn.text == "CAREER", "three big buttons")
 		_check(ts.single_btn.size.y >= 80 and ts.multi_btn.size.y >= 80, "buttons are big (%s / %s)" % [ts.single_btn.size, ts.multi_btn.size])
 		var need := ts.get_combined_minimum_size()
 		for n in ["Board"]:
@@ -196,6 +204,52 @@ func _process(_d: float) -> bool:
 		(ts.find_child("TagField", true, false) as LineEdit).text = "Solo_Ace"
 		ts.start_single_player("rookie")
 		_check(_lobby_name() == "Solo_Ace", "SINGLE PLAYER plays under the typed tag")
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(TAG_CFG))
+		career_stub = CareerStub.new()
+		career_stub.name = "CareerStub"
+		root.add_child(career_stub)
+		ts = _new_title()
+	if f == 20:
+		# -------- v0.7 CAREER button (Bluey's CareerRunner.open_career)
+		var cb := ts.find_child("Career", true, false) as Button
+		_check(cb != null and cb == ts.career_btn and cb.text == "CAREER" and cb.is_visible_in_tree(), "CAREER button on the board")
+		_check(cb.size.y >= 80 and ts.single_btn.size.x == cb.size.x and cb.size.x == ts.multi_btn.size.x, "CAREER matches the other big buttons (%s)" % cb.size)
+		var s_r := ts.single_btn.get_global_rect()
+		var c_r := cb.get_global_rect()
+		var m_r := ts.multi_btn.get_global_rect()
+		_check(s_r.end.y <= c_r.position.y and c_r.end.y <= m_r.position.y, "stacked SINGLE PLAYER / CAREER / MULTIPLAYER, no overlap")
+		var vp := root.get_visible_rect().size
+		_check(m_r.end.y <= vp.y and ts.find_child("Board", true, false).get_global_rect().end.y <= vp.y, "board with three buttons stays on screen (%s)" % vp)
+		var clear := true
+		for pc in ts.photo_cards:
+			clear = clear and not pc.get_global_rect().intersects(ts.find_child("Board", true, false).get_global_rect())
+		_check(clear and not c_r.grow(40).has_point(ts.hero_focus_point()), "CAREER clear of the prints and the player")
+		var need := ts.get_combined_minimum_size().max(ts.find_child("Board", true, false).get_combined_minimum_size())
+		_check(need.x <= 1280 and need.y <= 720, "still fits 1280x720 with CAREER (min %s)" % need)
+		var sub_ok := false
+		var idx := cb.get_index()
+		var nxt := cb.get_parent().get_child(idx + 1) as Label
+		sub_ok = nxt != null and nxt.text == "TIER 1  //  LOCAL FIELD"
+		_check(sub_ok, "CAREER subtitle (%s)" % (nxt.text if nxt != null else "none"))
+		# missing autoload: nothing breaks, the title stays
+		ts.career_runner_path = "/root/NoCareerRunnerHere"
+		ts.open_career()
+		_check(ts.last_career_result == "no_runner" and ts.visible, "no CareerRunner: CAREER is a no-op, title stays")
+		# no tag needed
+		ts.career_runner_path = "/root/CareerStub"
+		var asked_c := [0]
+		ts.career_requested.connect(func(): asked_c[0] += 1)
+		cb.pressed.emit()
+		_check(career_stub.opened == 1 and asked_c[0] == 1 and ts.last_career_result == "opened", "CAREER calls CareerRunner.open_career() (%d)" % career_stub.opened)
+		_check(not ts.visible, "title goes away after CAREER")
+		_check(TitleScreen.load_saved_tag(TAG_CFG) == "", "CAREER without a tag saves nothing")
+		ts = _new_title()
+	if f == 23:
+		ts.career_runner_path = "/root/CareerStub"
+		(ts.find_child("TagField", true, false) as LineEdit).text = "Career_7"
+		ts.career_btn.pressed.emit()
+		_check(career_stub.opened == 2 and not ts.visible, "CAREER with a typed tag opens too")
+		_check(TitleScreen.load_saved_tag(TAG_CFG) == "Career_7" and _lobby_name() == "Career_7", "CAREER saves the typed tag (%s)" % TitleScreen.load_saved_tag(TAG_CFG))
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(TAG_CFG))
 	if f == 40:
 		print("=== [PASS] v0.6.4 title screen ===" if fails.is_empty() else "=== [FAIL] %s" % [fails])

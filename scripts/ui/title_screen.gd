@@ -6,6 +6,8 @@ extends Control
 ## pose). A vignette keeps the title / board readable without covering the player. Gritty 2000s TournamentSkin.
 ##   SINGLE PLAYER -> the same path as the lobby browser's button: LobbyBrowser.launch_single_player(self, tier)
 ##                    (SoloLauncher.start_ffa(tier), else ?solo=ffa&tier= on the web). Small ROOKIE / AMATEUR pick.
+##   CAREER        -> v0.7: /root/CareerRunner.open_career() (Bluey's career runner, Tier 1 Local Field). No tag needed;
+##                    a valid typed tag is saved / applied first, like SINGLE PLAYER.
 ##   MULTIPLAYER   -> /root/LobbyEntryFlow.open_browser() (the lobby browser the bare link used to open).
 ##   PLAYER TAG    -> a compact callsign field on the board (CallsignEntry's rule + states, Tim's ProfileApi reserves it).
 ##                    Prefilled from the profile's callsign, else the last tag used on this device. The tag becomes
@@ -18,6 +20,7 @@ extends Control
 
 signal single_player_requested(difficulty: String)
 signal multiplayer_requested
+signal career_requested
 ## The tag NetworkLobby now plays under.
 signal tag_applied(tag: String)
 
@@ -44,6 +47,7 @@ const TAG_EMPTY_TEXT := "SET YOUR TAG"
 const TAG_NEEDED_TEXT := "TAG NEEDED FOR ONLINE"
 ## MULTIPLAYER waits this long for the profile server before going on with the tag anyway (never blocks play).
 const TAG_SAVE_WAIT := 5.0
+const CAREER_RUNNER_PATH := "/root/CareerRunner"
 
 var solo_difficulty: String = "amateur"
 ## How the last SINGLE PLAYER went: "solo_launcher", "web_link" or "signal_only" (tests / logs).
@@ -53,6 +57,11 @@ var hero_source: String = ""
 var hero_node: Control
 var single_btn: Button
 var multi_btn: Button
+var career_btn: Button
+## Where CAREER looks for the runner (tests point this at a stub).
+var career_runner_path: String = CAREER_RUNNER_PATH
+## How the last CAREER press went: "opened" or "no_runner" (tests / logs).
+var last_career_result: String = ""
 var photo_cards: Array[Control] = []
 var _diff_btns := {}
 var _spot := 0
@@ -140,6 +149,21 @@ func request_multiplayer() -> void:
 	last_multi_result = "saving"
 	_go_multi = true
 	reserve_tag(t)
+
+## The CAREER button: no tag required (a valid typed one is saved), then CareerRunner.open_career().
+func open_career() -> void:
+	var t := current_tag()
+	if CallsignEntry.is_valid_callsign(t):
+		apply_tag(t)
+	var runner := get_node_or_null(career_runner_path) if is_inside_tree() and has_node(career_runner_path) else null
+	if runner == null or not runner.has_method("open_career"):
+		last_career_result = "no_runner"
+		push_warning("TitleScreen: CareerRunner autoload missing, CAREER does nothing")
+		return
+	last_career_result = "opened"
+	career_requested.emit()
+	runner.call("open_career")
+	dismiss()
 
 func open_multiplayer() -> void:
 	multiplayer_requested.emit()
@@ -573,6 +597,17 @@ func _build_ui() -> void:
 		_diff_btns[d] = b
 	menu.add_child(diff)
 	set_solo_difficulty(solo_difficulty)
+
+	var gap_c := Control.new()
+	gap_c.custom_minimum_size.y = 14
+	menu.add_child(gap_c)
+	career_btn = TournamentSkin.style_button(Button.new(), TournamentSkin.AMBER, 34)
+	career_btn.name = "Career"
+	career_btn.text = "CAREER"
+	career_btn.custom_minimum_size = Vector2(0, 86)
+	career_btn.pressed.connect(open_career)
+	menu.add_child(career_btn)
+	menu.add_child(TournamentSkin.led("TIER 1  //  LOCAL FIELD", 15, TournamentSkin.CHALK))
 
 	var gap := Control.new()
 	gap.custom_minimum_size.y = 14
