@@ -89,14 +89,14 @@ func _test_ren_button(launcher: Node) -> void:
 	_check(String(m.get("tier")) == "amateur", "AMATEUR pick -> amateur tier (%s)" % str(m.get("tier")))
 	_check(int(m.get("kills_to_win")) == 10, "first to 10")
 	for bot in m.get("bots"):
-		_check(bool(bot.get("ffa")) and bool(bot.get("hunt_player_only")), "%s: FFA bot hunting the player" % bot.get("bot_name"))
+		_check(not bool(bot.get("ffa")) and String(bot.get("team")) == "BRAVO" and bool(bot.get("hunt_player_only")), "%s: bot-team (BRAVO) bot hunting the player" % bot.get("bot_name"))
 	_check(String(arena.call("respawn_map_mode")) == "deathmatch", "respawn map in deathmatch mode")
 	_check(not bool(root.get_node("GameManager").get("death_limit_enabled")), "death limit off (FFA)")
 	var lc: Variant = arena.get("lobby_canvas")
 	_check(lc == null or not (lc as CanvasLayer).visible, "arena lobby overlay hidden")
 	arena.call("_on_round_updated", 1, 0, 200.0)
 	var rl: Label = arena.get("round_label")
-	_check(rl != null and rl.text.contains("YOUR ELIMS") and rl.text.contains("FIRST TO 10") and not rl.text.contains("FLAG:"), "HUD in FFA mode (%s)" % (rl.text.split("\n")[0] if rl != null else "no label"))
+	_check(rl != null and rl.text.contains("YOU vs BOTS") and rl.text.contains("FIRST TO 10") and not rl.text.contains("FLAG:") and not rl.text.contains("FFA"), "HUD in YOU vs BOTS mode (%s)" % (rl.text.split("\n")[0] if rl != null else "no label"))
 	# ROOKIE pick on Ren's button
 	b = flow.call("open_browser")
 	(b.find_child("Difficulty_rookie", true, false) as Button).pressed.emit()

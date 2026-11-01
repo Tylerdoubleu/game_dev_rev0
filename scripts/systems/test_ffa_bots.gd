@@ -197,7 +197,8 @@ func _test_ffa_match() -> void:
 		b.connect("shot_fired", _on_shot)
 		b.connect("bot_eliminated", _on_bot_elim)
 		_check(b.get("difficulty") != null and float(b.get("difficulty").get("turn_rate_deg")) > 0.0, "%s has a tier turn rate (%s deg/s)" % [b.get("bot_name"), str(b.get("difficulty").get("turn_rate_deg")) if b.get("difficulty") != null else "?"])
-		_check(bool(b.get("ffa")), "%s is FFA" % b.get("bot_name"))
+		_check(not bool(b.get("ffa")) and String(b.get("team")) == "BRAVO", "%s is on the bot team (BRAVO, not FFA)" % b.get("bot_name"))
+		_check(bool(m.call("in_team_breakout", "BRAVO", (b as Node3D).global_position)), "%s starts in the BRAVO breakout (%s)" % [b.get("bot_name"), str((b as Node3D).global_position)])
 		_check(bool(b.get("hunt_player_only")), "%s hunts only the player" % b.get("bot_name"))
 		if player != null:
 			_check(bool(b.call("_is_hostile", player)), "%s: the player is hostile" % b.get("bot_name"))
@@ -217,14 +218,17 @@ func _test_ffa_match() -> void:
 	if rl != null:
 		var hud := rl.text
 		_check(not hud.contains("FLAG:") and not hud.contains("DEATHS:") and not hud.contains("Flag Pull"), "FFA HUD hides CTF flag / death-limit text")
-		_check(hud.contains("YOUR ELIMS: 0") and hud.contains("LEADER:") and hud.contains("FIRST TO 10"), "FFA HUD shows your elims, leader, first to 10")
+		_check(hud.contains("YOU vs BOTS") and hud.contains("YOU: 0") and hud.contains("BOTS: 0") and hud.contains("FIRST TO 10") and not hud.contains("FFA"), "HUD shows YOU vs BOTS team score, first to 10, no 'FFA' (%s)" % hud.split("\n")[0])
 		arena.call("_on_status_banner", "BUZZER! CLEAN BREAKOUT! (+15% Sprint Burst for 1.5s — Go Get Center Flag!)", Color.WHITE)
 		var sl: Label = arena.get("status_label")
 		_check(sl == null or not sl.text.contains("Center Flag"), "FFA breakout banner drops 'Go Get Center Flag'")
 	var ft: String = ArenaScript.ffa_round_text([{"name": "Viper", "kills": 4, "deaths": 1, "is_player": false}, {"name": "Me", "kills": 2, "deaths": 3, "is_player": true}], 10, 90.0)
-	_check(ft.contains("YOUR ELIMS: 2") and ft.contains("LEADER: Viper (4)") and ft.contains("FIRST TO 10"), "ffa_round_text: elims 2, leader Viper (4), first to 10")
+	var ft2: String = ArenaScript.ffa_round_text([{"name": "Viper", "kills": 4, "deaths": 1, "is_player": false}, {"name": "Rook", "kills": 3, "deaths": 0, "is_player": false}, {"name": "Me", "kills": 2, "deaths": 7, "is_player": true}], 10, 90.0)
+	_check(ft.contains("YOU: 2") and ft.contains("BOTS: 4") and ft.contains("FIRST TO 10") and ft2.contains("BOTS: 7"), "ffa_round_text: team totals YOU 2 / BOTS 4 (two bots: 7), first to 10")
 	var zones: Array = m.call("player_respawn_zones")
-	_check(zones.size() >= 3, "player gets FFA respawn zones (%d)" % zones.size())
+	_check(zones.size() >= 3, "player gets respawn zones (%d)" % zones.size())
+	for z in zones:
+		_check(bool(m.call("in_team_breakout", "ALPHA", (z as Dictionary)["pos"])), "player respawn zone %s is in the ALPHA breakout" % String((z as Dictionary).get("title", "")))
 	var start_pos := {}
 	for b in bots:
 		start_pos[b] = (b as Node3D).global_position
@@ -324,7 +328,19 @@ func _test_first_to_n() -> void:
 			pl.emit_signal("player_eliminated", "%s [MASK / GOGGLES]" % a.get("bot_name"))
 			if i == 0:
 				_check(String(m.get("winner")) == "", "bot 1 kill on you: match continues")
-		_check(String(m.get("winner")) == String(a.get("bot_name")) and over[0] == String(a.get("bot_name")) and bool(GM.get("match_ended")), "%s reaches 2 on you: match over, bot wins" % a.get("bot_name"))
+		_check(String(m.get("winner")) == "BOTS" and over[0] == "BOTS" and bool(GM.get("match_ended")) and not bool(m.call("player_won")), "%s takes the bot team to 2: match over, BOTS win" % a.get("bot_name"))
+	arena.call("stop_solo_ffa")
+	await _frames(2)
+	GM.set("match_ended", false)
+	# team deathmatch: two different bots, one kill each = the bot team reaches 2
+	m = arena.call("start_solo_ffa", {"bots": 2, "tier": "amateur", "kills_to_win": 2})
+	bots = m.get("bots")
+	pl = m.get("player")
+	if pl != null and pl.has_signal("player_eliminated"):
+		for i in 2:
+			pl.set("last_shooter_name", String(bots[i].get("bot_name")))
+			pl.emit_signal("player_eliminated", "%s [MASK / GOGGLES]" % bots[i].get("bot_name"))
+		_check(String(m.get("winner")) == "BOTS" and bool(GM.get("match_ended")), "team total: 1 + 1 bot kills = bot team reaches 2, BOTS win")
 	arena.call("stop_solo_ffa")
 	await _frames(2)
 	GM.set("match_ended", false)

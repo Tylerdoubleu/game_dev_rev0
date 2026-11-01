@@ -1,10 +1,13 @@
 extends Node
-## v0.7 solo FFA deathmatch (plan: "Deathmatch = free-for-all vs bots"): the local player vs N BotPlayers (default 4),
-## first to KILLS_TO_WIN eliminations wins. v0.7 (Tyler): ALL BOTS vs YOU - every bot hunts only the human player, never
-## another bot (hunt_player_only), and a bot ball never eliminates a bot. You win at KILLS_TO_WIN; the match ends (a bot
-## wins) as soon as any one bot reaches KILLS_TO_WIN eliminations on you.
-## Offline only. Started from the arena menu ("SOLO FFA DEATHMATCH") or the web link ?solo=ffa[&tier=rookie|amateur]
-## [&ffa_bots=N]. Keeps the practice range / snap_target_bot untouched (they are just switched off for this mode).
+## v0.7 solo vs bots (offline). v0.6.5 (Tyler playtest): this is YOU vs A TEAM OF BOTS - a team deathmatch, not a
+## free-for-all. You play your team (ALPHA, the home side, +Z); every bot is on the other team (BRAVO, -Z), hunts only
+## you (hunt_player_only) and never eliminates another bot. First TEAM to kills_to_win eliminations wins: your own
+## eliminations vs the bots' combined eliminations on you.
+## Spawns (Tyler: "spawn them at the breakout for their team to avoid enemies spawning in behind me"): every bot spawn
+## and respawn is one of the bot team's own breakout spots (team_spawns(bot_team)); the player starts at the own
+## breakout gate and respawns only on the own team zones. No bot ever appears on your half / behind you.
+## The class keeps its SoloFfaMatch name and the start_ffa / ?solo=ffa entry points so the title screen, lobby browser
+## and old links keep working. Keeps the practice range / snap_target_bot untouched (switched off for this mode).
 
 const BotPlayerScript = preload("res://scripts/bots/bot_player.gd")
 const BotDifficultyScript = preload("res://scripts/bots/bot_difficulty.gd")
@@ -18,17 +21,37 @@ const KILLS_TO_WIN: int = 10
 const CALLSIGNS := ["Viper", "Ghost", "Rattler", "Blitz", "Hammer", "Nova", "Jinx", "Torque", "Fuse", "Mako", "Sly", "Rook"]
 const PAINT_COLORS := [Color(1.0, 0.55, 0.1), Color(0.75, 0.3, 1.0), Color(0.15, 0.95, 0.85), Color(1.0, 0.92, 0.2), Color(0.95, 0.3, 0.55), Color(0.4, 1.0, 0.35)]
 const ROLES := ["back", "front", "front", "mid", "mid", "back"]
-## Break spots (no sides in FFA): the far gate and corners first, then the near corners, so bots start away from the player.
-const SPAWNS := [
-	{"pos": Vector3(0.0, 0.0, -45.5), "yaw": PI},
-	{"pos": Vector3(-31.0, 0.0, -41.0), "yaw": PI},
-	{"pos": Vector3(31.0, 0.0, -41.0), "yaw": PI},
-	{"pos": Vector3(31.0, 0.0, 41.0), "yaw": 0.0},
-	{"pos": Vector3(-31.0, 0.0, 41.0), "yaw": 0.0},
-	{"pos": Vector3(0.0, 0.0, 45.5), "yaw": 0.0},
-	{"pos": Vector3(-44.0, 0.0, 0.0), "yaw": -PI / 2.0},
-	{"pos": Vector3(44.0, 0.0, 0.0), "yaw": PI / 2.0},
+## Breakout spots for the ALPHA side (+Z); BRAVO uses the mirror (z -> -z, yaw + PI). Gate first, then the gate wings,
+## the corner tapes and the back bricks - all inside the team's own start area (|z| >= 33).
+const SIDE_SPAWNS := [
+	{"pos": Vector3(0.0, 0.0, 45.5), "id": "gate"},
+	{"pos": Vector3(-6.0, 0.0, 44.5), "id": "gate_l"},
+	{"pos": Vector3(6.0, 0.0, 44.5), "id": "gate_r"},
+	{"pos": Vector3(-31.0, 0.0, 41.0), "id": "snake_corner"},
+	{"pos": Vector3(31.0, 0.0, 41.0), "id": "dorito_corner"},
+	{"pos": Vector3(-13.0, 0.0, 33.5), "id": "left_brick"},
+	{"pos": Vector3(13.0, 0.0, 33.5), "id": "right_brick"},
 ]
+## A spawn spot is "in the team's breakout" when it is at least this deep on its own half.
+const BREAKOUT_MIN_DEPTH := 30.0
+const PLAYER_TEAM := "ALPHA"
+const BOT_TEAM := "BRAVO"
+
+## The breakout spawn spots of a team: [{"pos", "yaw", "id"}], facing the other side.
+static func team_spawns(team: String) -> Array:
+	var side := 1.0 if team == "ALPHA" else -1.0
+	var out: Array = []
+	for sp in SIDE_SPAWNS:
+		var p: Vector3 = sp["pos"]
+		out.append({"pos": Vector3(p.x, p.y, p.z * side), "yaw": 0.0 if side > 0.0 else PI, "id": "%s_%s" % [team.to_lower(), sp["id"]]})
+	return out
+
+## True when pos is inside team's own breakout / start area (its half, at least BREAKOUT_MIN_DEPTH deep).
+static func in_team_breakout(team: String, pos: Vector3) -> bool:
+	return (pos.z if team == "ALPHA" else -pos.z) >= BREAKOUT_MIN_DEPTH
+
+static func other_team(team: String) -> String:
+	return "BRAVO" if team == "ALPHA" else "ALPHA"
 
 var arena: Node3D = null
 var player: Node3D = null
@@ -40,6 +63,8 @@ var scores := {} # name -> {"kills": int, "deaths": int, "is_player": bool}
 var winner: String = ""
 var active: bool = false
 var _player_name: String = "You"
+var player_team: String = PLAYER_TEAM
+var bot_team: String = BOT_TEAM
 ## Every credited elimination, oldest first: {"shooter", "victim", "zone", "feed"}. The kill feed line is built from
 ## the same shooter / victim names the standings credit, so the feed and the standings can never disagree.
 var kill_log: Array = []
@@ -60,6 +85,10 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 	tier = String(opts.get("tier", tier))
 	kills_to_win = int(opts.get("kills_to_win", KILLS_TO_WIN))
 	var count := clampi(int(opts.get("bots", DEFAULT_BOTS)), 1, 7)
+	player_team = String(opts.get("player_team", PLAYER_TEAM))
+	if not player_team in ["ALPHA", "BRAVO"]:
+		player_team = PLAYER_TEAM
+	bot_team = other_team(player_team)
 	graph = opts.get("graph", null)
 	if graph == null:
 		graph = BunkerGraphScript.build(arena, "speedball")
@@ -91,14 +120,15 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 		if cs.is_empty():
 			cs = "Bot%d" % (i + 1)
 		used[cs.to_lower()] = true
-		var sp: Dictionary = SPAWNS[i % SPAWNS.size()]
+		var spawns := team_spawns(bot_team)
+		var sp: Dictionary = spawns[i % spawns.size()]
 		var b := CharacterBody3D.new()
 		b.set_script(BotPlayerScript)
 		var role_i: String = ROLES[i % ROLES.size()]
 		b.call("configure", {
-			"callsign": cs, "bot_name": cs, "team": "FFA", "ffa": true, "hunt_player_only": true, "role": role_i, "index": i,
+			"callsign": cs, "bot_name": cs, "team": bot_team, "ffa": false, "hunt_player_only": true, "role": role_i, "index": i,
 			"difficulty": BotDifficultyScript.make(tier), "graph": graph, "match": self,
-			"paint_color": PAINT_COLORS[i % PAINT_COLORS.size()], "rig_team": "ALPHA" if i % 2 == 1 else "BRAVO",
+			"paint_color": PAINT_COLORS[i % PAINT_COLORS.size()], "rig_team": bot_team,
 			"spawn": sp["pos"], "spawn_yaw": sp["yaw"], "assigned_node": _break_bunker(role_i, sp["pos"]),
 			"seed": rng.randi(),
 		})
@@ -109,17 +139,28 @@ func start(p_arena: Node3D, p_player: Node3D, opts: Dictionary = {}) -> void:
 	GameManager.register_round_start(count)
 	_emit()
 
-## Closest plan-role bunker to the spawn that no other bot has taken (FFA has no Red / Blue sides).
+## Closest plan-role bunker on the bot team's side that no other bot has taken; else the closest free bunker on the
+## bot team's half (7 bots can outnumber a role's bunkers).
 func _break_bunker(role_id: String, spawn: Vector3) -> int:
 	var taken := {}
 	for b in bots:
 		taken[int(b.get("assigned_node"))] = true
 	var best := -1
 	var best_d := INF
-	for i in graph.role_nodes(role_id, ""):
+	for i in graph.role_nodes(role_id, bot_team):
 		if taken.has(i):
 			continue
 		var d: float = spawn.distance_to(graph.nodes[i]["pos"])
+		if d < best_d:
+			best_d = d
+			best = i
+	if best >= 0:
+		return best
+	for i in graph.nodes.size():
+		var p: Vector3 = graph.nodes[i]["pos"]
+		if taken.has(i) or (p.z if bot_team == "ALPHA" else -p.z) <= 0.5:
+			continue
+		var d: float = spawn.distance_to(p)
 		if d < best_d:
 			best_d = d
 			best = i
@@ -169,7 +210,7 @@ func on_bot_eliminated(bot: Node, shooter: Node, zone: String = "") -> void:
 	if not active:
 		return
 	if shooter != bot and is_bot(shooter):
-		return # all bots vs you: bots never score on each other (the bot already ignores these balls)
+		return # you vs the bot team: bots never score on each other (the bot already ignores these balls)
 	var victim := _name_of(bot)
 	if scores.has(victim):
 		scores[victim]["deaths"] += 1
@@ -210,15 +251,37 @@ func _bot_named(n: String) -> Node:
 			return b
 	return null
 
-func _check_win(killer: String) -> void:
-	if killer.is_empty() or not scores.has(killer) or not winner.is_empty():
+## Team totals: your eliminations, and the bot team's combined eliminations (= eliminations on you).
+func team_scores() -> Dictionary:
+	var you := 0
+	var bots_total := 0
+	for n in scores.keys():
+		if bool(scores[n]["is_player"]):
+			you += int(scores[n]["kills"])
+		else:
+			bots_total += int(scores[n]["kills"])
+	return {"you": you, "bots": bots_total}
+
+## Name the match reports as the winner when the bot team gets there.
+const BOTS_WINNER := "BOTS"
+
+## First team to kills_to_win: you, or the bot team's combined eliminations.
+func _check_win(_killer: String = "") -> void:
+	if not winner.is_empty():
 		return
-	if int(scores[killer]["kills"]) >= kills_to_win:
-		winner = killer
-		active = false
-		var label := "%s (%d eliminations)" % [winner, kills_to_win]
-		GameManager.end_match("FFA Deathmatch", label)
-		ffa_match_over.emit(winner)
+	var t := team_scores()
+	if int(t["you"]) >= kills_to_win:
+		winner = _player_name
+	elif int(t["bots"]) >= kills_to_win:
+		winner = BOTS_WINNER
+	else:
+		return
+	active = false
+	GameManager.end_match("Team Deathmatch", "%s (%d eliminations)" % ["YOU" if winner == _player_name else "BOTS", kills_to_win])
+	ffa_match_over.emit(winner)
+
+func player_won() -> bool:
+	return not winner.is_empty() and winner == _player_name
 
 func standings() -> Array:
 	var rows: Array = []
@@ -232,43 +295,49 @@ func _emit() -> void:
 	standings_changed.emit(standings())
 	_web_state_t = 0.0 # publish window.__ffaState on the next frame, so a browser check never pairs a new feed line with old standings
 
-## Respawn spot farthest from every live combatant.
+## Bot respawn: one of the bot team's own breakout spots - the one farthest from the player, skipping spots a live
+## bot is standing on. Never the player's half.
 func respawn_point_for(who: Node) -> Dictionary:
-	var best: Dictionary = SPAWNS[0]
+	var spawns := team_spawns(bot_team)
+	var best: Dictionary = spawns[0]
 	var best_score := -INF
-	for sp in SPAWNS:
-		var nearest := INF
-		for c in combatants():
-			if c == who or not is_instance_valid(c):
+	for sp in spawns:
+		var p: Vector3 = sp["pos"]
+		var score := 0.0
+		if player != null and is_instance_valid(player) and player.is_inside_tree():
+			score = player.global_position.distance_to(p)
+		for b in bots:
+			if b == who or not is_instance_valid(b) or bool(b.get("is_eliminated")):
 				continue
-			if "is_eliminated" in c and bool(c.get("is_eliminated")):
-				continue
-			nearest = minf(nearest, (c as Node3D).global_position.distance_to(sp["pos"]))
-		if nearest > best_score:
-			best_score = nearest
+			if (b as Node3D).global_position.distance_to(p) < 2.5:
+				score -= 100.0
+		if score > best_score:
+			best_score = score
 			best = sp
 	return best
 
-## Player respawn zones for the respawn screen in FFA: the same farthest-from-everyone logic, top 5.
+## Player respawn zones for the respawn screen: your own team's 5 standard breakout zones (the arena's team zones when
+## it has them, so ids / titles / map spots match every other mode), never a spot on the bots' side.
 func player_respawn_zones() -> Array[Dictionary]:
-	var scored: Array = []
-	for sp in SPAWNS:
-		var nearest := INF
-		for b in bots:
-			if is_instance_valid(b) and not bool(b.get("is_eliminated")):
-				nearest = minf(nearest, (b as Node3D).global_position.distance_to(sp["pos"]))
-		scored.append([nearest, sp])
-	scored.sort_custom(func(a, b): return a[0] > b[0])
 	var out: Array[Dictionary] = []
-	for k in mini(5, scored.size()):
-		var sp: Dictionary = scored[k][1]
+	if arena != null and is_instance_valid(arena) and arena.has_method("_get_team_respawn_zones"):
+		for z in arena.call("_get_team_respawn_zones", player_team):
+			out.append((z as Dictionary).duplicate())
+		return out
+	var k := 1
+	for sp in team_spawns(player_team):
 		var p: Vector3 = sp["pos"]
-		out.append({"title": "FFA Spawn %d" % (k + 1), "pos": Vector3(p.x, 0.1, p.z), "yaw": float(sp["yaw"]), "desc": "%.0fm from the nearest bot" % minf(scored[k][0], 999.0)})
+		out.append({"id": String(sp["id"]), "title": "[%d] %s BREAKOUT" % [k, player_team], "pos": Vector3(p.x, 0.1, p.z), "yaw": float(sp["yaw"]), "desc": "%s breakout" % player_team})
+		k += 1
+		if out.size() >= 5:
+			break
 	return out
 
 func scoreboard_lines() -> Array[String]:
 	var lines: Array[String] = []
-	lines.append("FREE-FOR-ALL DEATHMATCH  —  first to %d eliminations  (%s bots)" % [kills_to_win, BotDifficultyScript.make(tier).display_name])
+	var t := team_scores()
+	lines.append("YOU vs BOTS  —  TEAM DEATHMATCH  —  first team to %d eliminations  (%s bots)" % [kills_to_win, BotDifficultyScript.make(tier).display_name])
+	lines.append("YOU %d   —   BOTS %d" % [int(t["you"]), int(t["bots"])])
 	lines.append("----------------------------------------------------------------------")
 	lines.append("#   NAME                            KILLS     DEATHS")
 	var i := 1

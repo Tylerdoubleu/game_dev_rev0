@@ -447,19 +447,18 @@ func _on_round_updated(round_num: int, _remaining: int, time_left: float) -> voi
 func _on_round_won(round_num: int) -> void:
 	_on_status_banner("ROUND %d WON! All 5 OpFor Eliminated — Press [T] for Next Round" % round_num, Color(0.3, 1.0, 0.45))
 
-## v0.7 Solo FFA HUD line (no flag / death-limit text): your eliminations, the leader, first to N.
+## Solo vs bots HUD line (no flag / death-limit text). v0.6.5: team deathmatch - YOU vs the bot team's combined
+## eliminations, first team to N.
 static func ffa_round_text(rows: Array, kills_to_win: int, time_left: float) -> String:
 	var mine := 0
-	var leader := "-"
-	var lead_kills := 0
+	var bots := 0
 	for r in rows:
 		if bool(r.get("is_player", false)):
-			mine = int(r.get("kills", 0))
-	if not rows.is_empty():
-		lead_kills = int(rows[0].get("kills", 0))
-		leader = "YOU" if bool(rows[0].get("is_player", false)) else String(rows[0].get("name", "-"))
+			mine += int(r.get("kills", 0))
+		else:
+			bots += int(r.get("kills", 0))
 	return (
-		"SOLO FFA DEATHMATCH  |  YOUR ELIMS: %d  |  LEADER: %s (%d)  |  FIRST TO %d  |  %.0fs\n" % [mine, leader, lead_kills, kills_to_win, time_left] +
+		"YOU vs BOTS — TEAM DEATHMATCH  |  YOU: %d  |  BOTS: %d  |  FIRST TO %d  |  %.0fs\n" % [mine, bots, kills_to_win, time_left] +
 		"Move: WASD + Shift Break Out | E Peek (Active Hand, X Swap) | Q Crouch (Shift+Q Slide) | C Prone (Shift+C Dive)\n" +
 		"1 Speedball (Walk LMB/RMB) | 2 Woodsball (Hold LMB+RMB) | 3 Pump (LMB->RMB)\n" +
 		"R Pod Reload | F Callout Bunker | [M] Scoreboard | [TAB] Menu"
@@ -760,7 +759,7 @@ func _build_tournament_lobby_overlay() -> void:
 	vbox.add_child(row_ffa)
 	var ffa_btn := Button.new()
 	ffa_btn.name = "SoloFfaButton"
-	ffa_btn.text = "SOLO FFA DEATHMATCH (%d BOTS, FIRST TO %d)" % [SoloFfaMatchScript.DEFAULT_BOTS, SoloFfaMatchScript.KILLS_TO_WIN]
+	ffa_btn.text = "YOU vs BOTS — TEAM DEATHMATCH (%d BOTS, FIRST TO %d)" % [SoloFfaMatchScript.DEFAULT_BOTS, SoloFfaMatchScript.KILLS_TO_WIN]
 	ffa_btn.custom_minimum_size = Vector2(0, 40)
 	ffa_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	ffa_btn.add_theme_font_size_override("font_size", 16)
@@ -1005,7 +1004,7 @@ func _on_match_over(loser_name: String, winner_label: String) -> void:
 		scoreboard_canvas.visible = true
 	_refresh_scoreboard_text()
 	if ffa_match != null:
-		_on_status_banner("FFA OVER! %s WINS (first to %d) — Press [T] for Rematch" % [String(ffa_match.get("winner")), int(ffa_match.get("kills_to_win"))], Color(1.0, 0.88, 0.22))
+		_on_status_banner("MATCH OVER! %s (first to %d) — Press [T] for Rematch" % ["YOU WIN" if bool(ffa_match.call("player_won")) else "BOTS WIN", int(ffa_match.get("kills_to_win"))], Color(1.0, 0.88, 0.22))
 		return
 	_on_status_banner("MATCH OVER! %s hit 10 Deaths — %s WINS! Press [T] for Rematch" % [loser_name, winner_label], Color(1.0, 0.88, 0.22))
 
@@ -1017,7 +1016,7 @@ func _refresh_scoreboard_text() -> void:
 		lines.append_array(ffa_match.call("scoreboard_lines"))
 		lines.append("----------------------------------------------------------------------")
 		if GameManager.match_ended:
-			lines.append(">> FFA OVER — %s WINS — PRESS [T] FOR A REMATCH <<" % String(ffa_match.get("winner")))
+			lines.append(">> MATCH OVER — %s — PRESS [T] FOR A REMATCH <<" % ("YOU WIN" if bool(ffa_match.call("player_won")) else "BOTS WIN"))
 		else:
 			lines.append("Press [M] to Close Scoreboard   |   Press [TAB] for the Menu")
 		scoreboard_body_label.text = "\n".join(lines)
@@ -1527,21 +1526,15 @@ func _on_breakout_countdown_updated(seconds_left: float, horn_sounded: bool) -> 
 
 
 ## ===== v0.7 solo FFA deathmatch vs BotPlayers (Bluey) ===============================================================
-## Respawn choices: team zones normally; in FFA the 5 spawn spots farthest from the live bots (fixed when the map opens).
+## Respawn choices: your team's zones. v0.6.5 (Tyler): solo is you vs a team of bots, so the respawn map offers only your
+## own breakout zones (the match's player_respawn_zones = the same 5 team zones), never a spot on the bots' side.
 func _respawn_zones_for_local(refresh: bool) -> Array[Dictionary]:
 	if ffa_match == null:
 		return _get_team_respawn_zones(NetworkLobby.local_team)
 	if refresh or _ffa_zones.is_empty():
 		_ffa_zones = []
-		var i := 1
 		for z in ffa_match.call("player_respawn_zones"):
-			var d: Dictionary = z
-			var p: Vector3 = d["pos"]
-			d["id"] = "ffa_%d" % i
-			d["title"] = "[%d] %s" % [i, String(d["title"]).to_upper()]
-			d["map_uv"] = Vector2(clampf(0.5 + p.x / 84.7, 0.03, 0.97), clampf(0.5 + p.z / 100.0, 0.03, 0.97))
-			_ffa_zones.append(d)
-			i += 1
+			_ffa_zones.append(z)
 	return _ffa_zones
 
 func is_solo_ffa_active() -> bool:
@@ -1556,7 +1549,7 @@ func _cycle_ffa_tier(advance: bool = true) -> void:
 ## Offline only. opts: bots (default 4), tier ("rookie" / "amateur"), kills_to_win (default 10), seed.
 func start_solo_ffa(opts: Dictionary = {}) -> Node:
 	if NetworkLobby.is_online_client() or NetworkLobby.is_dedicated_server:
-		_on_status_banner("Solo FFA is offline only — leave the room first", Color(1.0, 0.5, 0.3))
+		_on_status_banner("YOU vs BOTS is offline only — leave the room first", Color(1.0, 0.5, 0.3))
 		return null
 	stop_solo_ffa()
 	ffa_rematch_opts = opts.duplicate()
@@ -1566,6 +1559,10 @@ func start_solo_ffa(opts: Dictionary = {}) -> Node:
 	if fill_bots_check != null:
 		fill_bots_check.button_pressed = false
 	_set_opfor_bots_enabled(false)
+	# v0.6.5: you are the home team (ALPHA, +Z) and the bots are the OpFor team (BRAVO, -Z), like the practice range.
+	NetworkLobby.local_team = SoloFfaMatchScript.PLAYER_TEAM
+	opts = opts.duplicate()
+	opts["player_team"] = SoloFfaMatchScript.PLAYER_TEAM
 	if player != null and player.has_method("respawn_at_team_gate"):
 		player.call("respawn_at_team_gate", NetworkLobby.local_team)
 	ffa_match = SoloFfaMatchScript.new()
@@ -1578,7 +1575,7 @@ func start_solo_ffa(opts: Dictionary = {}) -> Node:
 		_set_lobby_overlay_visible(false)
 	if has_method("clear_gameplay_input_blocks"):
 		call("clear_gameplay_input_blocks", "solo_ffa")
-	_on_status_banner("SOLO FFA DEATHMATCH — %d %s bots, first to %d eliminations. Break on the horn!" % [
+	_on_status_banner("YOU vs BOTS — TEAM DEATHMATCH — you vs %d %s bots, first team to %d eliminations. Break on the horn!" % [
 		int(opts.get("bots", SoloFfaMatchScript.DEFAULT_BOTS)), String(opts.get("tier", ffa_tier)).to_upper(), int(opts.get("kills_to_win", SoloFfaMatchScript.KILLS_TO_WIN))], Color(1.0, 0.62, 0.2))
 	return ffa_match
 

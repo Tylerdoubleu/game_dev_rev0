@@ -1,12 +1,13 @@
 extends Node
-## v0.6.4 (Bluey): autoload /root/SoloLauncher - one-line entry into the offline Solo FFA (all bots vs you, first to N
-## eliminations) for any button. Registered in project.godot as SoloLauncher (no class_name: it would clash).
+## v0.6.4 (Bluey): autoload /root/SoloLauncher - one-line entry into the offline single player match - YOU vs BOTS
+## team deathmatch (you on ALPHA vs a team of bots on BRAVO, each side spawns at its own breakout, first team to N
+## eliminations) for any button. The "ffa" names (start_ffa, ?solo=ffa) are kept for compatibility. Registered in project.godot as SoloLauncher (no class_name: it would clash).
 ##   SoloLauncher.start_ffa()                 # Amateur, 4 bots, first to 10
 ##   SoloLauncher.start_ffa("rookie")         # easier bots
 ##   get_node("/root/SoloLauncher").start_ffa("amateur", 4, 10)
 ## Call it from a click handler: the click is the user gesture the web build needs for pointer lock.
-## Does exactly what the ?solo=ffa link does: closes the lobby browser, leaves any online room (FFA is offline only),
-## then asks the arena (speedball_arena_builder.gd) to build the FFA - speedball map, bots spawned, FFA HUD. If the
+## Does exactly what the ?solo=ffa link does: closes the lobby browser, leaves any online room (solo is offline only),
+## then asks the arena (speedball_arena_builder.gd) to build the match - speedball map, bots spawned, YOU vs BOTS HUD. If the
 ## current scene isn't an arena with start_solo_ffa(), it loads the speedball arena first and starts once it's ready.
 
 signal ffa_started(ffa_match: Node)
